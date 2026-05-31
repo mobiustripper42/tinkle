@@ -1,0 +1,15 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Editors / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Sessions worktree (orphan `sessions` branch, DEC-014)
+.sessions-worktree/
+
+# Built SPA bundle (generated from web/ source)
+web/dist/

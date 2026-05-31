@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tinkle — Wiring &amp; Pin Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1a1c1a; --ink-soft:#5a5f59; --paper:#f4f1e9; --card:#fbf9f3;
+    --line:#d8d3c5; --water:#0e6b7a; --water-soft:#0e6b7a18;
+    --pwr:#b8761f; --safe:#3f7d4f; --sig:#3a4a6b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--ink);line-height:1.45;padding:0 0 80px;-webkit-font-smoothing:antialiased}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  header{border-bottom:2px solid var(--ink);background:var(--card);padding:26px 22px 20px}
+  .kicker{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--water);font-weight:600}
+  h1{font-size:32px;font-weight:700;letter-spacing:-.02em;margin:2px 0 4px}
+  .sub{color:var(--ink-soft);font-size:14px;max-width:64ch}
+  main{max-width:1000px;margin:0 auto;padding:24px 16px 0}
+  h2{font-size:19px;font-weight:700;border-bottom:2px solid var(--ink);padding-bottom:6px;margin:34px 0 16px;letter-spacing:-.01em}
+  h2 .n{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--water);margin-right:10px}
+
+  .diagram{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;box-shadow:0 2px 10px rgba(26,28,26,.05)}
+  svg{display:block;min-width:760px;width:100%;height:auto}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:12px 4px 0;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-soft)}
+  .legend i{display:inline-block;width:22px;height:0;border-top-width:3px;border-top-style:solid;vertical-align:middle;margin-right:6px}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--card);border:1px solid var(--line);box-shadow:0 2px 10px rgba(26,28,26,.05)}
+  caption{caption-side:top;text-align:left;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-soft);padding:0 0 8px;letter-spacing:.06em}
+  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);background:#efe9da}
+  tbody tr:last-child td{border-bottom:none}
+  .pin{font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--water);white-space:nowrap}
+  .grp td{background:#efe9da;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink);font-weight:600}
+  .io{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-soft);white-space:nowrap}
+  .warn{color:var(--pwr);font-weight:600}
+
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .cards.three{grid-template-columns:1fr 1fr 1fr}
+  .ncard{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--water);border-radius:6px;padding:13px 15px;font-size:13.5px}
+  .ncard h3{font-size:13px;font-family:'IBM Plex Mono',monospace;letter-spacing:.06em;margin-bottom:6px}
+  .ncard p{color:var(--ink-soft);margin-bottom:5px}
+  .ncard b{color:var(--ink)}
+  @media (max-width:680px){.cards,.cards.three{grid-template-columns:1fr}h1{font-size:26px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="kicker">Bay Branch Farm · Tinkle V1</div>
+  <h1>Wiring &amp; Pin Map</h1>
+  <p class="sub">ESP32 DevKitC (38-pin). Two-key safety: the ESP32 <em>commands</em> each actuator, the ATtiny85 <em>arms</em> the whole actuator rail. Both must agree for water to move. Lose either and the master springs closed — fail-dry.</p>
+</header>
+
+<main>
+
+<h2><span class="n">A</span>Signal-flow block diagram</h2>
+<div class="diagram">
+<svg viewBox="0 0 760 540" role="img" aria-label="Tinkle wiring block diagram">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#3a4a6b"/>
+    </marker>
+    <marker id="arP" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#b8761f"/>
+    </marker>
+    <marker id="arS" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#3f7d4f"/>
+    </marker>
+    <style>
+      .blk{fill:#fbf9f3;stroke:#1a1c1a;stroke-width:1.5}
+      .blk.esp{fill:#0e6b7a;}
+      .blk.arm{fill:#eaf3ea;stroke:#3f7d4f;stroke-width:2}
+      .blk.pwr{fill:#f7eede;stroke:#b8761f}
+      .t{font-family:'IBM Plex Sans',sans-serif;font-size:12px;fill:#1a1c1a}
+      .tb{font-family:'IBM Plex Sans',sans-serif;font-size:12.5px;font-weight:700;fill:#1a1c1a}
+      .tw{fill:#f4f1e9}
+      .tm{font-family:'IBM Plex Mono',monospace;font-size:10px;fill:#5a5f59}
+      .sig{fill:none;stroke:#3a4a6b;stroke-width:1.6}
+      .pw{fill:none;stroke:#b8761f;stroke-width:2.4}
+      .sf{fill:none;stroke:#3f7d4f;stroke-width:2}
+    </style>
+  </defs>
+
+  <!-- POWER top -->
+  <rect class="blk pwr" x="20" y="18" width="150" height="54" rx="5"/>
+  <text class="tb" x="95" y="40" text-anchor="middle">24V PSU</text>
+  <text class="tm" x="95" y="56" text-anchor="middle">LRS-150-24</text>
+  <rect class="blk pwr" x="200" y="18" width="170" height="54" rx="5"/>
+  <text class="t" x="285" y="38" text-anchor="middle">Bucks 12 / 5 / 3.3V</text>
+  <text class="tm" x="285" y="56" text-anchor="middle">logic + valve + LED rails</text>
+  <line class="pw" x1="170" y1="45" x2="198" y2="45" marker-end="url(#arP)"/>
+
+  <!-- ESP32 center -->
+  <rect class="blk esp" x="250" y="200" width="170" height="150" rx="7"/>
+  <text class="tb tw" x="335" y="232" text-anchor="middle">ESP32</text>
+  <text class="tm" x="335" y="250" text-anchor="middle" fill="#cfeaf0">DevKitC 38-pin</text>
+  <text class="t tw" x="335" y="284" text-anchor="middle" font-size="11">commands actuators</text>
+  <text class="t tw" x="335" y="300" text-anchor="middle" font-size="11">runs schedule + web</text>
+  <text class="t tw" x="335" y="316" text-anchor="middle" font-size="11">heartbeat → watchdog</text>
+  <!-- 3.3V feed to esp -->
+  <path class="pw" d="M285,72 L285,140 L240,140 L240,275 L248,275" marker-end="url(#arP)"/>
+  <text class="tm" x="210" y="135" fill="#b8761f">3.3V</text>
+
+  <!-- LEFT inputs: buttons, flow -->
+  <rect class="blk" x="20" y="200" width="150" height="48" rx="5"/>
+  <text class="tb" x="95" y="220" text-anchor="middle">3× Buttons</text>
+  <text class="tm" x="95" y="237" text-anchor="middle">momentary + LED ring</text>
+  <path class="sig" d="M170,224 L248,224" marker-end="url(#ar)"/>
+
+  <rect class="blk" x="20" y="300" width="150" height="48" rx="5"/>
+  <text class="tb" x="95" y="320" text-anchor="middle">Flow sensor</text>
+  <text class="tm" x="95" y="337" text-anchor="middle">hall pulse → level-shift</text>
+  <path class="sig" d="M170,324 L248,324" marker-end="url(#ar)"/>
+
+  <!-- TM1637 below esp-left -->
+  <rect class="blk" x="20" y="400" width="150" height="48" rx="5"/>
+  <text class="tb" x="95" y="420" text-anchor="middle">TM1637 display</text>
+  <text class="tm" x="95" y="437" text-anchor="middle">CLK / DIO · MM:SS</text>
+  <path class="sig" d="M248,330 L210,330 L210,424 L170,424" marker-end="url(#ar)"/>
+
+  <!-- RIGHT: drivers -->
+  <rect class="blk" x="480" y="120" width="120" height="40" rx="5"/>
+  <text class="t" x="540" y="138" text-anchor="middle" font-size="11">DRV8871 ·Z1</text>
+  <text class="tm" x="540" y="152" text-anchor="middle">IN1/IN2</text>
+  <rect class="blk" x="480" y="168" width="120" height="40" rx="5"/>
+  <text class="t" x="540" y="186" text-anchor="middle" font-size="11">DRV8871 ·Z2</text>
+  <text class="tm" x="540" y="200" text-anchor="middle">IN1/IN2</text>
+  <rect class="blk" x="480" y="216" width="120" height="40" rx="5"/>
+  <text class="t" x="540" y="232" text-anchor="middle" font-size="11">DRV8871 ·DIV</text>
+  <text class="tm" x="540" y="247" text-anchor="middle">3-way diverter</text>
+  <path class="sig" d="M420,250 L450,250 L450,140 L478,140" marker-end="url(#ar)"/>
+  <path class="sig" d="M420,258 L460,258 L460,188 L478,188" marker-end="url(#ar)"/>
+  <path class="sig" d="M420,266 L470,266 L470,236 L478,236" marker-end="url(#ar)"/>
+
+  <rect class="blk" x="480" y="276" width="120" height="40" rx="5"/>
+  <text class="t" x="540" y="294" text-anchor="middle" font-size="11">Master FET</text>
+  <text class="tm" x="540" y="308" text-anchor="middle">IRLZ44N</text>
+  <path class="sig" d="M420,290 L478,290" marker-end="url(#ar)"/>
+
+  <rect class="blk" x="480" y="324" width="120" height="40" rx="5"/>
+  <text class="t" x="540" y="342" text-anchor="middle" font-size="11">Pump relay</text>
+  <text class="tm" x="540" y="356" text-anchor="middle">24V, 10A</text>
+  <path class="sig" d="M420,305 L455,305 L455,344 L478,344" marker-end="url(#ar)"/>
+
+  <!-- loads -->
+  <rect class="blk" x="650" y="120" width="92" height="88" rx="5"/>
+  <text class="t" x="696" y="150" text-anchor="middle" font-size="11">Zone 1</text>
+  <text class="t" x="696" y="168" text-anchor="middle" font-size="11">Zone 2</text>
+  <text class="t" x="696" y="186" text-anchor="middle" font-size="11">valves</text>
+  <path class="sf" d="M600,140 L648,140"/><path class="sf" d="M600,188 L648,188"/>
+  <rect class="blk" x="650" y="216" width="92" height="40" rx="5"/>
+  <text class="t" x="696" y="240" text-anchor="middle" font-size="11">Diverter</text>
+  <path class="sf" d="M600,236 L648,236"/>
+  <rect class="blk" x="650" y="276" width="92" height="40" rx="5"/>
+  <text class="t" x="696" y="300" text-anchor="middle" font-size="11">Master NC</text>
+  <path class="sf" d="M600,296 L648,296"/>
+  <rect class="blk" x="650" y="324" width="92" height="40" rx="5"/>
+  <text class="t" x="696" y="348" text-anchor="middle" font-size="11">Pump</text>
+  <path class="sf" d="M600,344 L648,344"/>
+
+  <!-- ARMING relay + ATtiny bottom -->
+  <rect class="blk arm" x="430" y="430" width="180" height="56" rx="6"/>
+  <text class="tb" x="520" y="453" text-anchor="middle" fill="#2f6b3f">SAFETY / ARM RELAY</text>
+  <text class="tm" x="520" y="471" text-anchor="middle" fill="#3f7d4f">NO · energize-to-pass · feeds master + pump</text>
+
+  <rect class="blk" x="250" y="430" width="150" height="56" rx="6"/>
+  <text class="tb" x="325" y="453" text-anchor="middle">ATtiny85</text>
+  <text class="tm" x="325" y="471" text-anchor="middle">watchdog + max-runtime</text>
+
+  <!-- heartbeat esp->attiny -->
+  <path class="sig" d="M300,350 L300,428" marker-end="url(#ar)"/>
+  <text class="tm" x="306" y="392">heartbeat</text>
+  <!-- attiny tripped -> esp -->
+  <path class="sig" d="M360,428 L360,352" marker-end="url(#ar)"/>
+  <text class="tm" x="366" y="392">tripped</text>
+  <!-- attiny arms relay -->
+  <path class="sf" d="M400,458 L428,458" marker-end="url(#arS)"/>
+  <!-- 24V into arm relay -->
+  <path class="pw" d="M95,72 L95,500 L520,500 L520,488" marker-end="url(#arP)"/>
+  <text class="tm" x="105" y="495" fill="#b8761f">24V raw</text>
+  <!-- arm relay feeds master+pump rail (dashed up) -->
+  <path class="sf" d="M610,452 L690,452 L690,366" stroke-dasharray="5 4"/>
+  <text class="tm" x="624" y="445" fill="#3f7d4f">armed 24V → actuators</text>
+</svg>
+</div>
+<div class="legend">
+  <span><i style="border-color:#3a4a6b"></i>logic / signal (3.3V)</span>
+  <span><i style="border-color:#b8761f"></i>power (24V / rails)</span>
+  <span><i style="border-color:#3f7d4f"></i>armed actuator path</span>
+</div>
+
+<h2><span class="n">B</span>ESP32 GPIO assignment</h2>
+<table>
+  <caption>Avoids flash pins (6–11), TX/RX (1/3), and boot-sensitive use of strapping pins. 19 of ~24 usable GPIO used.</caption>
+  <thead><tr><th>GPIO</th><th>Dir</th><th>Connects to</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr class="grp"><td colspan="4">Zone &amp; diverter H-bridges (DRV8871)</td></tr>
+    <tr><td class="pin">13</td><td class="io">OUT</td><td>Zone 1 — DRV8871 IN1</td><td>open pulse = IN1 high</td></tr>
+    <tr><td class="pin">14</td><td class="io">OUT</td><td>Zone 1 — DRV8871 IN2</td><td>close pulse = IN2 high; never both high</td></tr>
+    <tr><td class="pin">16</td><td class="io">OUT</td><td>Zone 2 — DRV8871 IN1</td><td></td></tr>
+    <tr><td class="pin">17</td><td class="io">OUT</td><td>Zone 2 — DRV8871 IN2</td><td></td></tr>
+    <tr><td class="pin">18</td><td class="io">OUT</td><td>Diverter — DRV8871 IN1</td><td>THROUGH (fertigate)</td></tr>
+    <tr><td class="pin">19</td><td class="io">OUT</td><td>Diverter — DRV8871 IN2</td><td>AROUND (plain). ~6s travel, not 75ms</td></tr>
+    <tr class="grp"><td colspan="4">Master &amp; pump</td></tr>
+    <tr><td class="pin">21</td><td class="io">OUT</td><td>Master valve — IRLZ44N gate</td><td>logic-level FET; flyback diode on coil</td></tr>
+    <tr><td class="pin">22</td><td class="io">OUT</td><td>Pump relay — trigger</td><td>opto/ULN input; snubber on coil</td></tr>
+    <tr class="grp"><td colspan="4">Sensing</td></tr>
+    <tr><td class="pin">27</td><td class="io">IN ⚡</td><td>Flow sensor pulse</td><td>interrupt; <span class="warn">level-shift 5V→3.3V</span>; INPUT_PULLUP</td></tr>
+    <tr class="grp"><td colspan="4">Display (TM1637)</td></tr>
+    <tr><td class="pin">25</td><td class="io">OUT</td><td>TM1637 CLK</td><td></td></tr>
+    <tr><td class="pin">26</td><td class="io">OUT</td><td>TM1637 DIO</td><td>power module from 3.3V or 5V</td></tr>
+    <tr class="grp"><td colspan="4">Buttons — momentary, to GND</td></tr>
+    <tr><td class="pin">34</td><td class="io">IN</td><td>Button 1 → Zone 1 run</td><td><span class="warn">input-only: external 10k pull-up + 100nF</span></td></tr>
+    <tr><td class="pin">35</td><td class="io">IN</td><td>Button 2 → Zone 2 run</td><td>external pull-up + debounce cap</td></tr>
+    <tr><td class="pin">39</td><td class="io">IN</td><td>Button 3 → Stop / cancel all</td><td>external pull-up + debounce cap</td></tr>
+    <tr class="grp"><td colspan="4">Button LED rings — 12V, low-side via ULN2803</td></tr>
+    <tr><td class="pin">32</td><td class="io">OUT</td><td>LED ring 1 → ULN2803 in</td><td>ring+ to 12V, ULN sinks to GND</td></tr>
+    <tr><td class="pin">33</td><td class="io">OUT</td><td>LED ring 2 → ULN2803 in</td><td></td></tr>
+    <tr><td class="pin">23</td><td class="io">OUT</td><td>LED ring 3 → ULN2803 in</td><td></td></tr>
+    <tr class="grp"><td colspan="4">Watchdog handshake (ATtiny85)</td></tr>
+    <tr><td class="pin">4</td><td class="io">OUT</td><td>Heartbeat → ATtiny IN</td><td>square wave while firmware healthy</td></tr>
+    <tr><td class="pin">36</td><td class="io">IN</td><td>ATtiny "tripped" → ESP32</td><td>VP, input-only; for logging/fault display</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="n">C</span>The arming chain (fail-dry core)</h2>
+<div class="cards three">
+  <div class="ncard"><h3>ESP32 — the command key</h3>
+    <p>Opens/closes the specific zone, sets the diverter, opens the master FET, enables the pump relay per schedule. Emits a <b>heartbeat</b> square wave on GPIO4 whenever firmware is healthy.</p></div>
+  <div class="ncard"><h3>ATtiny85 — the arm key</h3>
+    <p>Independent MCU. Trips if the heartbeat stops (~2s) <b>or</b> any run exceeds its own hard max-runtime ceiling (~30 min), measured on its <b>own</b> clock — it never trusts the ESP32's sense of time.</p></div>
+  <div class="ncard"><h3>Safety relay — the gate</h3>
+    <p><b>Normally-open, energize-to-pass.</b> The ATtiny holds it closed only while armed. It feeds 24V to <b>both</b> the master and the pump. ATtiny trips → relay opens → master spring-closes, pump dies → no water.</p></div>
+</div>
+
+<h2><span class="n">D</span>Wiring notes that bite if skipped</h2>
+<div class="cards">
+  <div class="ncard"><h3>Flyback on every coil</h3><p>1N4007 (or Schottky) across the master solenoid, pump relay coil, and both relays. The DRV8871 has internal protection; the discrete FET and relays do not.</p></div>
+  <div class="ncard"><h3>Flow sensor level shift</h3><p>Power the sensor at 5V, but its pulse output swings to 5V — drop it to 3.3V (divider or the level-shifter module) before GPIO27, or you cook the input over time.</p></div>
+  <div class="ncard"><h3>Input-only button pins</h3><p>GPIO 34/35/39/36 have <b>no internal pull-ups</b>. Add 10k to 3.3V + a 100nF debounce cap on each button, even though firmware also debounces.</p></div>
+  <div class="ncard"><h3>Diverter ≠ solenoid timing</h3><p>The motorized ball valve travels ~5–6s and self-cuts at its limit switch. Drive its DRV8871 for the full travel window, not the 75ms latch pulse the Hunter solenoids use.</p></div>
+  <div class="ncard"><h3>Common ground</h3><p>Tie all buck grounds + 24V return + ESP32 GND together at one star point. Floating logic ground against a switching 24V rail is the classic intermittent-glitch source.</p></div>
+  <div class="ncard"><h3>Master FET gate</h3><p>IRLZ44N is logic-level and fine at 0.75A with a 3.3V gate. Add a 100&#8486; series gate resistor + 100k gate-to-GND pulldown so it sits off during ESP32 boot.</p></div>
+</div>
+
+</main>
+</body>
+</html>

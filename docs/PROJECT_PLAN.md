@@ -1,0 +1,163 @@
+# Tinkle — Project Plan
+
+**Start date:** 2026-05-30
+**V1 target:** Build target Winter 2026–27, running the 2027 season. Firmware has no
+hardware dependency (DEC-004) — software phases proceed now; wet validation is
+parts-gated.
+**Critical path:** Actuation core + fail-dry chain (Phases 1, 5) proven on the bench
+before any wet run.
+
+---
+
+## Estimation Method
+
+Fibonacci scale (2, 3, 5, 8, 13). See `VELOCITY_AND_POKER_GUIDE.md`.
+All estimates from planning poker between Eric and Claude.
+Tests are baked into every task estimate — no separate testing tasks.
+
+**Velocity baseline:** Not yet established. Update after first 5 sessions.
+
+---
+
+## Phase 0: Scaffold & contracts
+
+Everything needed to develop safely off-hardware. No watering behavior yet.
+
+| # | Task | Effort | Notes |
+|---|------|--------|-------|
+| 0.1 | Repo, git, GitHub remote, `.gitignore` | 2 | Done at scaffold |
+| 0.2 | Seeds workflow install (skills, agents, `project-type=tool`, `seeds-version`) | 2 | Done at scaffold; ui-reviewer gated out |
+| 0.3 | Docs: CLAUDE.md, SPEC, DECISIONS, PROJECT_PLAN; source specs vendored to `docs/` | 3 | Done at scaffold |
+| 0.4 | `platformio.ini` (esp32 / attiny85 / native) + `src/{esp32,attiny,core}` layout | 3 | Skeleton done; pin down lib_deps |
+| 0.5 | `pins.h` from `tinkle_wiring.html` §B | 2 | Done at scaffold |
+| 0.6 | Install PlatformIO; `pio run -e esp32` and `pio test -e native` green | 3 | Toolchain bring-up |
+| 0.7 | Wokwi sim config — boot the firmware in simulation | 3 | Tier-2 dev (DEC-004) |
+| 0.8 | Sessions branch + `.sessions-worktree/` | 1 | `/its-alive` Step 0.6 auto-creates |
+
+**Phase 0 total: 19 pts** (much already done at scaffold)
+
+**Ejection point:** A clean repo that builds for both MCUs, runs host tests, and
+boots in sim — every later phase is faster and safer.
+
+---
+
+## Phase 1: Actuation core
+
+The safety-critical heart. Bench-testable on LEDs/scope; no water.
+
+| # | Task | Effort | Notes |
+|---|------|--------|-------|
+| 1.1 | `ValveDriver` — latching pulse open/close, never-both-high invariant | 5 | §5 |
+| 1.2 | `ValveDriver` — diverter travel, master FET, pump relay, safe state | 3 | §5 |
+| 1.3 | `RunController` state machine (IDLE→…→SETTLE, fault unwind) | 8 | §4; src/core, fake clock/GPIO |
+| 1.4 | Non-blocking cooperative loop scaffold (tick ≤10ms, per-actuator timers) | 3 | §2 |
+| 1.5 | Buttons — debounce, edge events, single-active invariant | 3 | §11 |
+| 1.6 | TM1637 display — idle clock / MM:SS countdown / fault code | 3 | §12 |
+
+**Phase 1 total: 25 pts**
+
+**Ejection point:** A simulated/bench run sequences master→zone→pump and unwinds
+to safe state, driven by a button, with a live countdown.
+
+---
+
+## Phase 2: Persistence + Scheduler + Clock
+
+| # | Task | Effort | Notes |
+|---|------|--------|-------|
+| 2.1 | `Persistence` — NVS read/write of all stored state, write-on-change | 5 | §8 |
+| 2.2 | `Clock` — NTP sync + free-running fallback | 3 | §13 |
+| 2.3 | `Scheduler` — entry model, per-minute eval, queue, overlap guard | 5 | §13 |
+| 2.4 | Fertigation policy — one fert run/day + per-entry override | 3 | §6 |
+
+**Phase 2 total: 16 pts**
+
+---
+
+## Phase 3: Flow + Calibration
+
+| # | Task | Effort | Notes |
+|---|------|--------|-------|
+| 3.1 | `FlowMonitor` — ISR pulse count, rate window, gallons from K | 5 | §7 |
+| 3.2 | Fault detection — no-flow (grace) + unexpected idle flow | 3 | §7, §14 |
+| 3.3 | Calibration mode — start/finish endpoints, K to NVS, sanity bounds | 5 | §7 |
+
+**Phase 3 total: 13 pts**
+
+---
+
+## Phase 4: Web API + SPA
+
+| # | Task | Effort | Notes |
+|---|------|--------|-------|
+| 4.1 | ESPAsyncWebServer + STA-join/SoftAP fallback + mDNS | 5 | §10 |
+| 4.2 | REST endpoints (status, schedule, settings, run, stop, calibrate, fault) | 8 | §10; range-validate, FAULT-gate |
+| 4.3 | SPA — 6 screens, vanilla, mobile-first, graceful degrade | 8 | §10.1; dev vs mock API |
+| 4.4 | gzip-embed pipeline (`build-spa`) → PROGMEM, < 50 KB | 3 | DEC-002 |
+
+**Phase 4 total: 24 pts**
+
+---
+
+## Phase 5: Watchdog + integration
+
+| # | Task | Effort | Notes |
+|---|------|--------|-------|
+| 5.1 | ATtiny85 sketch — heartbeat edge-detect, two trip conditions, fail-dry default | 8 | §9; DEC-003 |
+| 5.2 | ESP32 `Watchdog` — heartbeat emit (active runs only), trip-line read, force safe | 5 | §9 |
+| 5.3 | Safety relay wiring + `FaultManager` integration | 3 | §14 |
+| 5.4 | §17 acceptance checklist — full pass on the bench | 5 | LED/pulse stand-ins |
+
+**Phase 5 total: 21 pts**
+
+---
+
+## Phase 6: Bench validation + wet confirm
+
+Parts-gated (Winter 2026–27). Does not block Phases 1–5.
+
+| # | Task | Effort | Notes |
+|---|------|--------|-------|
+| 6.1 | Breadboard bring-up — real ESP32 + ATtiny + DRV8871, LED/pulse stand-ins | 5 | |
+| 6.2 | Confirm `PULSE_MS` / `DIVERTER_TRAVEL_MS` against real parts | 3 | §15 |
+| 6.3 | Calibrate flow K empirically (bucket test) | 3 | §7 |
+| 6.4 | Wet confirm — full water run, all faults, fail-dry chain | 5 | §17 |
+
+**Phase 6 total: 16 pts**
+
+---
+
+## Velocity Table
+
+| Phase | Actual Hours | Effort Points | Hrs/Pt | Notes |
+|-------|-------------|---------------|--------|-------|
+| 0 | — | 19 | — | |
+| 1 | — | 25 | — | |
+
+**Lifetime velocity:** — hrs/pt
+
+---
+
+## Estimation Poker — Standing Disagreements
+
+| Task | Claude says | You say | Question |
+|------|------------|---------|----------|
+| — | — | — | — |
+
+---
+
+## Phase Boundary Checklist
+
+1. `pio test -e native` green; sim/bench checks for the phase pass.
+2. @pm phase retrospective — velocity check, timeline update.
+3. Write retrospective entry in `docs/RETROSPECTIVES.md`.
+4. Return to planning chat — review docs against intent.
+
+---
+
+## Cuttable Tasks (if behind)
+
+| Task | Why it's cuttable | Defer to |
+|------|------------------|---------|
+| 1.6 TM1637 display | Status nicety; web UI shows the same countdown | later in V1 |
+| 4.3 SPA polish | API + a minimal page is enough to operate; full 6-screen polish can trail | later in V1 |
