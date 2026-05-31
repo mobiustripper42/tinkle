@@ -25,14 +25,14 @@ Everything needed to develop safely off-hardware. No watering behavior yet.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 0.1 | Repo, git, GitHub remote, `.gitignore` | 2 | Done at scaffold |
-| 0.2 | Seeds workflow install (skills, agents, `project-type=tool`, `seeds-version`) | 2 | Done at scaffold; ui-reviewer gated out |
-| 0.3 | Docs: CLAUDE.md, SPEC, DECISIONS, PROJECT_PLAN; source specs vendored to `docs/` | 3 | Done at scaffold |
-| 0.4 | `platformio.ini` (esp32 / attiny85 / native) + `src/{esp32,attiny,core}` layout | 3 | Skeleton done; pin down lib_deps |
-| 0.5 | `pins.h` from `tinkle_wiring.html` §B | 2 | Done at scaffold |
-| 0.6 | Install PlatformIO; `pio run -e esp32` and `pio test -e native` green | 3 | Toolchain bring-up |
-| 0.7 | Wokwi sim config — boot the firmware in simulation | 3 | Tier-2 dev (DEC-004) |
-| 0.8 | Sessions branch + `.sessions-worktree/` | 1 | `/its-alive` Step 0.6 auto-creates |
+| 0.1 | Repo, git, GitHub remote, `.gitignore` | 2 | [#1](https://github.com/mobiustripper42/tinkle/issues/1) |
+| 0.2 | Seeds workflow install (skills, agents, `project-type=tool`, `seeds-version`) | 2 | [#2](https://github.com/mobiustripper42/tinkle/issues/2) |
+| 0.3 | Docs: CLAUDE.md, SPEC, DECISIONS, PROJECT_PLAN; source specs vendored to `docs/` | 3 | [#3](https://github.com/mobiustripper42/tinkle/issues/3) |
+| 0.4 | `platformio.ini` (esp32 / attiny85 / native) + `src/{esp32,attiny,core}` layout | 3 | [#4](https://github.com/mobiustripper42/tinkle/issues/4) |
+| 0.5 | `pins.h` from `tinkle_wiring.html` §B | 2 | [#5](https://github.com/mobiustripper42/tinkle/issues/5) |
+| 0.6 | Install PlatformIO; `pio run -e esp32` and `pio test -e native` green | 3 | [#6](https://github.com/mobiustripper42/tinkle/issues/6) |
+| 0.7 | Wokwi sim config — boot the firmware in simulation | 3 | [#7](https://github.com/mobiustripper42/tinkle/issues/7) |
+| 0.8 | Sessions branch + `.sessions-worktree/` | 1 | [#8](https://github.com/mobiustripper42/tinkle/issues/8) |
 
 **Phase 0 total: 19 pts** (much already done at scaffold)
 
