@@ -47,12 +47,12 @@ The safety-critical heart. Bench-testable on LEDs/scope; no water.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 1.1 | `ValveDriver` — latching pulse open/close, never-both-high invariant | 5 | §5 |
-| 1.2 | `ValveDriver` — diverter travel, master FET, pump relay, safe state | 3 | §5 |
-| 1.3 | `RunController` state machine (IDLE→…→SETTLE, fault unwind) | 8 | §4; src/core, fake clock/GPIO |
-| 1.4 | Non-blocking cooperative loop scaffold (tick ≤10ms, per-actuator timers) | 3 | §2 |
-| 1.5 | Buttons — debounce, edge events, single-active invariant | 3 | §11 |
-| 1.6 | TM1637 display — idle clock / MM:SS countdown / fault code | 3 | §12 |
+| 1.1 | `ValveDriver` — latching pulse open/close, never-both-high invariant | 5 | [#9](https://github.com/mobiustripper42/tinkle/issues/9) · §5 |
+| 1.2 | `ValveDriver` — diverter travel, master FET, pump relay, safe state | 3 | [#10](https://github.com/mobiustripper42/tinkle/issues/10) · §5 |
+| 1.3 | `RunController` state machine (IDLE→…→SETTLE, fault unwind) | 8 | [#11](https://github.com/mobiustripper42/tinkle/issues/11) · §4; src/core, fake clock/GPIO |
+| 1.4 | Non-blocking cooperative loop scaffold (tick ≤10ms, per-actuator timers) | 3 | [#12](https://github.com/mobiustripper42/tinkle/issues/12) · §2 |
+| 1.5 | Buttons — debounce, edge events, single-active invariant | 3 | [#13](https://github.com/mobiustripper42/tinkle/issues/13) · §11 |
+| 1.6 | TM1637 display — idle clock / MM:SS countdown / fault code | 3 | [#14](https://github.com/mobiustripper42/tinkle/issues/14) · §12 |
 
 **Phase 1 total: 25 pts**
 
