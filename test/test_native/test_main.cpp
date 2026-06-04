@@ -329,6 +329,14 @@ static void test_rc_begin_idle_safe() {
     TEST_ASSERT_FALSE(vd.masterIsOpen());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
     TEST_ASSERT_EQUAL_INT(-1, rc.activeZone());
+    // begin() must configure every actuator pin as an output — fail-dry depends on
+    // the master/pump/bridges being driven, not floating, from boot. Regression
+    // guard: RunController::begin() now calls ValveDriver::begin(), not just
+    // safeState() (which writes levels but configures nothing).
+    TEST_ASSERT_TRUE(g.configured[MASTER] && g.configured[PUMP]);
+    TEST_ASSERT_TRUE(g.configured[Z0.in1] && g.configured[Z0.in2]);
+    TEST_ASSERT_TRUE(g.configured[Z1.in1] && g.configured[Z1.in2]);
+    TEST_ASSERT_TRUE(g.configured[DIV.in1] && g.configured[DIV.in2]);
 }
 
 // Full happy-path run: PREP -> ... -> RUNNING for the duration -> back to IDLE,

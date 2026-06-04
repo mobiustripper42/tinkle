@@ -48,8 +48,8 @@ void setup() {
     Serial.begin(115200);
 
     // Safe state before anything can command water, then arm the core at IDLE.
-    // begin() drives the safe sequence through ValveDriver, which configures every
-    // actuator pin as an output along the way.
+    // begin() configures every actuator pin as an output and drives the fail-dry
+    // safe sequence through ValveDriver (pump off -> zones closed -> master closed).
     runController.begin(millis());
 
     // Watchdog handshake pins (§9). The heartbeat is emitted ONLY during active
