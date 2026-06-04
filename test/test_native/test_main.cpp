@@ -491,6 +491,76 @@ static void test_rc_sw_max_runtime_clamps() {
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
 }
 
+// §4 step 2: a watchdog trip asserted before OPEN_MASTER aborts to FAULT and the
+// master is NEVER energized.
+static void test_rc_watchdog_pre_open_gate() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    rc.setWatchdogTripped(true);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 5; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.isFaulted(); });
+    TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
+    TEST_ASSERT_EQUAL(Fault::Watchdog, rc.activeFault());
+    TEST_ASSERT_FALSE(vd.masterIsOpen());        // never opened water
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    (void)now;
+}
+
+// A fault landing while the diverter is mid-travel (before the master ever opens)
+// still slams the safe state, never opens the master, and holds the invariant.
+static void test_rc_fault_during_prep() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 5; req.fertigate = true;
+    rc.requestRun(req, 0);
+    rc.tick(0);
+    TEST_ASSERT_EQUAL(RunState::PrepDiverter, rc.state());
+    TEST_ASSERT_TRUE(vd.diverterBusy());
+
+    rc.raiseFault(Fault::NoFlow, 100);
+    TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
+    TEST_ASSERT_FALSE(vd.masterIsOpen());        // master never opened during prep
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_FALSE(g.bothHighViolation);
+}
+
+// stop() during PREP_DIVERTER unwinds to IDLE while the diverter coasts in the
+// background — no both-high, pump+master safe.
+static void test_rc_stop_during_prep() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 5; req.fertigate = true;
+    rc.requestRun(req, 0);
+    rc.tick(0);
+    TEST_ASSERT_EQUAL(RunState::PrepDiverter, rc.state());
+
+    rc.stop(100);
+    uint32_t now = pump(rc, 100, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_FALSE(vd.masterIsOpen());
+    TEST_ASSERT_FALSE(g.bothHighViolation);
+    (void)now;
+}
+
+// The queue holds at most MAX_QUEUE behind the active run; the overflow request
+// is rejected.
+static void test_rc_queue_full_rejected() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 5; req.fertigate = false;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));     // active
+    for (int i = 0; i < RunConfig::MAX_QUEUE; ++i)
+        TEST_ASSERT_TRUE(rc.requestRun(req, 0)); // fill the queue
+    TEST_ASSERT_EQUAL_UINT8(RunConfig::MAX_QUEUE, rc.queueDepth());
+    TEST_ASSERT_FALSE(rc.requestRun(req, 0));    // overflow rejected
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -515,5 +585,9 @@ int main() {
     RUN_TEST(test_rc_queue_runs_sequentially);
     RUN_TEST(test_rc_rejects_bad_requests);
     RUN_TEST(test_rc_sw_max_runtime_clamps);
+    RUN_TEST(test_rc_watchdog_pre_open_gate);
+    RUN_TEST(test_rc_fault_during_prep);
+    RUN_TEST(test_rc_stop_during_prep);
+    RUN_TEST(test_rc_queue_full_rejected);
     return UNITY_END();
 }

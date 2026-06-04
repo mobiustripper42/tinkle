@@ -78,6 +78,12 @@ public:
     // Returns false if not currently faulted.
     bool clearFault();
 
+    // Latest ATtiny trip-line state, pushed in by the Watchdog module (§9). Used
+    // as the §4 step-2 pre-open gate: if asserted when OPEN_MASTER is reached, the
+    // run aborts to FAULT(Watchdog) instead of energizing the master. (A trip that
+    // arrives mid-run still comes in via raiseFault().)
+    void setWatchdogTripped(bool tripped) { watchdogTripped_ = tripped; }
+
     // Cooperative, non-blocking. Ticks the ValveDriver and advances at most one
     // state transition (gated by actuator timers / durations). Call every loop.
     void tick(uint32_t nowMs);
@@ -106,6 +112,7 @@ private:
     uint32_t   stateStartMs_ = 0;
     uint32_t   runStartMs_   = 0;
     bool       stopping_     = false;     // this run was cancelled, not completed
+    bool       watchdogTripped_ = false;  // §4 step-2 pre-open gate
 
     RunRequest queue_[RunConfig::MAX_QUEUE] = {};
     uint8_t    qHead_  = 0;

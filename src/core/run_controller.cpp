@@ -15,9 +15,11 @@ void RunController::begin(uint32_t nowMs) {
 
 uint32_t RunController::effectiveDurationMs() const {
     // The software ceiling (§15) caps any single run, so a misconfigured or
-    // oversized duration can never outrun the firmware's own stop.
+    // oversized duration can never outrun the firmware's own stop. A zero ceiling
+    // is treated as "no software cap" (a 0 ms clamp would silently water for zero
+    // seconds); the ATtiny hard ceiling is still the backstop.
     uint32_t sec = current_.durationSec;
-    if (sec > cfg_.swMaxRuntimeSec) sec = cfg_.swMaxRuntimeSec;
+    if (cfg_.swMaxRuntimeSec > 0 && sec > cfg_.swMaxRuntimeSec) sec = cfg_.swMaxRuntimeSec;
     return sec * 1000u;
 }
 
@@ -59,9 +61,10 @@ void RunController::stop(uint32_t nowMs) {
 }
 
 void RunController::raiseFault(Fault code, uint32_t nowMs) {
+    if (code == Fault::None) return;                // "no fault" is a caller bug, not a latch
     if (state_ == RunState::Fault) return;          // first fault wins
     valve_.safeState(nowMs);                        // pump off -> zones closed -> master closed
-    fault_ = (code == Fault::None) ? Fault::NoFlow : code;
+    fault_ = code;
     qHead_ = qCount_ = 0;
     lastRun_ = RunSummary{ RunSummary::Result::Faulted,
                            current_.zoneIndex, current_.durationSec,
@@ -89,7 +92,15 @@ void RunController::enter(RunState s, uint32_t nowMs) {
                 valve_.setDiverter(current_.fertigate, nowMs);
             }
             break;
-        case RunState::OpenMaster:  valve_.masterOpen();                       break;
+        case RunState::OpenMaster:
+            // §4 step 2: never open water if the hardware backstop reports tripped.
+            if (watchdogTripped_) { raiseFault(Fault::Watchdog, nowMs); return; }
+            valve_.masterOpen();
+            // OpenMaster -> OpenZone -> StartPump are instantaneous (advance one
+            // tick each, ≤~30 ms total). Zero inter-state dwell is intentional for
+            // now; bench-confirm whether the NC master + latch want a settle beat
+            // before the pump loads (§15 — physical constants confirmed on parts).
+            break;
         case RunState::OpenZone:    valve_.pulseOpen(current_.zoneIndex, nowMs); break;
         case RunState::StartPump:   valve_.pumpOn();                           break;
         case RunState::Running:     runStartMs_ = nowMs;                       break;
