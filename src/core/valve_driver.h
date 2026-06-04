@@ -79,6 +79,7 @@ public:
     void tick(uint32_t nowMs);
 
     // Introspection for status/display/tests.
+    uint8_t zoneCount() const { return cfg_.zoneCount; }
     bool zoneBusy(uint8_t zone) const;
     bool diverterBusy() const;
     bool busy() const;                            // any actuator mid-travel
