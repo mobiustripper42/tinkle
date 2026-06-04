@@ -9,9 +9,13 @@ void Buttons::begin() {
         in_.configureInput(cfg_.pins[i]);
         // Adopt the boot state as the debounced baseline: a button already held at
         // power-on is not a fresh press, so boot never auto-starts a run (fail dry).
+        // longFired tracks stable too — otherwise a boot-held button (stable=true,
+        // pressedAtMs=0) would emit a phantom longPressEdge on the first tick past
+        // longPressMs (i.e. almost immediately), spuriously firing B3 fault-clear.
         const bool raw = in_.isDown(cfg_.pins[i]);
-        st_[i].lastRaw = raw;
-        st_[i].stable  = raw;
+        st_[i].lastRaw   = raw;
+        st_[i].stable    = raw;
+        st_[i].longFired = raw;
     }
 }
 

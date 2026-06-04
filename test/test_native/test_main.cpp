@@ -742,10 +742,14 @@ void test_button_held_at_boot_no_edge() {
     TEST_ASSERT_TRUE(b.isDown(0));        // seen as down...
     b.tick(45); b.tick(90);
     TEST_ASSERT_FALSE(b.pressEdge(0));    // ...but never a fresh press
+    // ...and never a phantom long-press once uptime passes the long-press threshold
+    // (a real boot's millis() is already well past 3 s when loop() first runs).
+    b.tick(5000);
+    TEST_ASSERT_FALSE(b.longPressEdge(0));
     // A genuine release then press after boot is a clean edge.
-    in.down[B0] = false; b.tick(100); b.tick(140);
+    in.down[B0] = false; b.tick(5100); b.tick(5140);
     TEST_ASSERT_TRUE(b.releaseEdge(0));
-    in.down[B0] = true;  b.tick(150); b.tick(190);
+    in.down[B0] = true;  b.tick(5150); b.tick(5190);
     TEST_ASSERT_TRUE(b.pressEdge(0));
 }
 
