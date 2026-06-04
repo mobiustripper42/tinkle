@@ -3,6 +3,7 @@
 #include <vector>
 #include <utility>
 #include "valve_driver.h"
+#include "run_controller.h"
 
 // Native unit tests for ValveDriver (firmware spec §5). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -275,6 +276,221 @@ static void test_millis_rollover() {
     TEST_ASSERT_FALSE(g.level[Z0.in1]);
 }
 
+// ----------------------------------------------------------------------------
+// RunController (firmware spec §4). Same FakeGpio (so the never-both-high
+// invariant is policed across whole runs), a real ValveDriver, and an explicit
+// clock. Faults are injected via raiseFault(), matching how FlowMonitor/Watchdog
+// will notify it later.
+// ----------------------------------------------------------------------------
+
+using tinkle::Fault;
+using tinkle::RunConfig;
+using tinkle::RunController;
+using tinkle::RunRequest;
+using tinkle::RunState;
+using tinkle::RunSummary;
+
+namespace {
+
+RunConfig makeRunCfg() {
+    RunConfig rc;
+    rc.settleMs = 100;          // keep the dwell short for tests
+    rc.swMaxRuntimeSec = 1200;
+    return rc;
+}
+
+// Pump the cooperative loop: tick, advancing the clock by stepMs each time, until
+// pred() holds or the budget is spent. Returns the final clock value. Mirrors the
+// real main loop driving runController.tick() — instantaneous states advance one
+// tick at a time, timed states resolve as the clock moves.
+template <class Pred>
+uint32_t pump(RunController& rc, uint32_t now, uint32_t stepMs, uint32_t budgetMs, Pred pred) {
+    uint32_t spent = 0;
+    while (true) {
+        if (pred()) break;
+        rc.tick(now);
+        if (spent >= budgetMs) break;
+        now += stepMs;
+        spent += stepMs;
+    }
+    return now;
+}
+
+} // namespace
+
+// begin() drives the safe state and lands in IDLE.
+static void test_rc_begin_idle_safe() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_FALSE(rc.isFaulted());
+    TEST_ASSERT_FALSE(vd.masterIsOpen());
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_EQUAL_INT(-1, rc.activeZone());
+}
+
+// Full happy-path run: PREP -> ... -> RUNNING for the duration -> back to IDLE,
+// pump and master off, logged Completed, invariant never violated.
+static void test_rc_full_sequence_completes() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 2; req.fertigate = false;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
+
+    // Reach RUNNING (first run travels the diverter — position unknown).
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL(RunState::Running, rc.state());
+    TEST_ASSERT_TRUE(vd.masterIsOpen());
+    TEST_ASSERT_TRUE(vd.pumpIsOn());
+    TEST_ASSERT_EQUAL_INT(0, rc.activeZone());
+    TEST_ASSERT_TRUE(rc.remainingSec(now) >= 1 && rc.remainingSec(now) <= 2);
+
+    // Run out the 2 s duration + settle -> IDLE.
+    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_FALSE(vd.masterIsOpen());
+    TEST_ASSERT_EQUAL(RunSummary::Result::Completed, rc.lastRun().result);
+    TEST_ASSERT_EQUAL_UINT8(0, rc.lastRun().zone);
+    TEST_ASSERT_FALSE(g.bothHighViolation);
+}
+
+// The diverter only travels when the position must change (§6). A first fert run
+// establishes THROUGH; a second fert run must NOT re-drive the diverter.
+static void test_rc_diverter_skip_when_unchanged() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 1; req.fertigate = true;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_TRUE(vd.diverterThrough());
+    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
+
+    int divWritesBefore = g.writesTo(DIV.in1) + g.writesTo(DIV.in2);
+    rc.requestRun(req, now);    // same fert state -> no travel
+    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL_INT(divWritesBefore, g.writesTo(DIV.in1) + g.writesTo(DIV.in2));
+    TEST_ASSERT_TRUE(vd.diverterThrough());
+}
+
+// Graceful stop() mid-run unwinds to IDLE with pump+master off; logged Stopped.
+static void test_rc_stop_unwinds() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 1; req.durationSec = 30; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+
+    rc.stop(now);
+    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_FALSE(vd.masterIsOpen());
+    TEST_ASSERT_EQUAL(RunSummary::Result::Stopped, rc.lastRun().result);
+    TEST_ASSERT_FALSE(g.bothHighViolation);
+}
+
+// A fault mid-run slams the safe state and latches (§14). Further runs are
+// refused until clearFault(), after which a normal run is possible again.
+static void test_rc_fault_latches_and_clears() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 30; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+
+    rc.raiseFault(Fault::NoFlow, now);
+    TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
+    TEST_ASSERT_TRUE(rc.isFaulted());
+    TEST_ASSERT_EQUAL(Fault::NoFlow, rc.activeFault());
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_FALSE(vd.masterIsOpen());
+    TEST_ASSERT_EQUAL(RunSummary::Result::Faulted, rc.lastRun().result);
+
+    // Refused while latched.
+    TEST_ASSERT_FALSE(rc.requestRun(req, now));
+
+    // Clear, then a fresh run reaches RUNNING.
+    TEST_ASSERT_TRUE(rc.clearFault());
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_TRUE(rc.requestRun(req, now));
+    now = pump(rc, now, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL(RunState::Running, rc.state());
+    TEST_ASSERT_FALSE(g.bothHighViolation);
+}
+
+// Unexpected flow during IDLE faults straight to safe state (§14 idle case).
+static void test_rc_fault_from_idle() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    rc.raiseFault(Fault::UnexpectedFlow, 500);
+    TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow, rc.activeFault());
+    TEST_ASSERT_FALSE(vd.masterIsOpen());
+}
+
+// Queued requests run sequentially: zone 0 then zone 1.
+static void test_rc_queue_runs_sequentially() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest a; a.zoneIndex = 0; a.durationSec = 1; a.fertigate = false;
+    RunRequest b; b.zoneIndex = 1; b.durationSec = 1; b.fertigate = false;
+    TEST_ASSERT_TRUE(rc.requestRun(a, 0));
+    TEST_ASSERT_TRUE(rc.requestRun(b, 0));      // queued behind a
+    TEST_ASSERT_EQUAL_UINT8(1, rc.queueDepth());
+
+    // a runs first.
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL_INT(0, rc.activeZone());
+
+    // b becomes the active run on zone 1.
+    now = pump(rc, now, 5, 8000, [&]{ return rc.state() == RunState::Running && rc.activeZone() == 1; });
+    TEST_ASSERT_EQUAL_INT(1, rc.activeZone());
+    TEST_ASSERT_EQUAL_UINT8(0, rc.queueDepth());
+
+    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_FALSE(g.bothHighViolation);
+}
+
+// Bad requests are rejected: out-of-range zone, zero duration.
+static void test_rc_rejects_bad_requests() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest badZone; badZone.zoneIndex = 9; badZone.durationSec = 5;
+    RunRequest zeroDur; zeroDur.zoneIndex = 0; zeroDur.durationSec = 0;
+    TEST_ASSERT_FALSE(rc.requestRun(badZone, 0));
+    TEST_ASSERT_FALSE(rc.requestRun(zeroDur, 0));
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+}
+
+// The software ceiling caps an oversized run: a 1000 s request with swMax=1 s
+// stops after ~1 s, not 1000.
+static void test_rc_sw_max_runtime_clamps() {
+    ValveDriver vd(g, cfg);
+    RunConfig rc_cfg = makeRunCfg();
+    rc_cfg.swMaxRuntimeSec = 1;          // 1 s ceiling
+    RunController rc(vd, rc_cfg);
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 1000; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_TRUE(rc.remainingSec(now) <= 1);
+    // Within a couple seconds of ticking it must have stopped — far short of 1000 s.
+    now = pump(rc, now, 5, 3000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -289,5 +505,15 @@ int main() {
     RUN_TEST(test_safe_state);
     RUN_TEST(test_zone_bounds);
     RUN_TEST(test_millis_rollover);
+
+    RUN_TEST(test_rc_begin_idle_safe);
+    RUN_TEST(test_rc_full_sequence_completes);
+    RUN_TEST(test_rc_diverter_skip_when_unchanged);
+    RUN_TEST(test_rc_stop_unwinds);
+    RUN_TEST(test_rc_fault_latches_and_clears);
+    RUN_TEST(test_rc_fault_from_idle);
+    RUN_TEST(test_rc_queue_runs_sequentially);
+    RUN_TEST(test_rc_rejects_bad_requests);
+    RUN_TEST(test_rc_sw_max_runtime_clamps);
     return UNITY_END();
 }
