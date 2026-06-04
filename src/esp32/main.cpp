@@ -5,6 +5,8 @@
 #include "../core/run_controller.h"
 #include "../core/loop_monitor.h"
 #include "../core/buttons.h"
+#include "../core/display.h"
+#include "display_tm1637.h"
 
 // Tinkle ESP32 firmware — entry point and the cooperative non-blocking loop
 // (firmware spec §2). On boot RunController::begin forces the fail-dry safe state
@@ -15,9 +17,9 @@
 //
 // RunController is the sole actuator commander; the loop ticks it (which ticks the
 // ValveDriver in turn) and ticks Buttons (§11), mapping debounced edges onto run
-// requests. Display (§12, #14) and the scheduler / flow / web / watchdog modules
-// (Phase 2+) hang off this same loop as they land — each is one more non-blocking
-// tick().
+// requests, then renders the TM1637 panel + LED rings (§12). The scheduler / flow /
+// web / watchdog modules (Phase 2+) hang off this same loop as they land — each is
+// one more non-blocking tick().
 
 using namespace tinkle;
 
@@ -62,6 +64,13 @@ static constexpr uint8_t  STOP_BTN_IDX   = ZONE_COUNT;   // B3 sits just past th
 // uses this.
 static constexpr uint32_t BUTTON_RUN_SEC = 600;
 
+static DisplayTM1637 display;            // §12 panel; pushes only on content change
+
+// LED ring level (§11/§237): Solid -> on; Blink -> on during the blink phase; Off.
+static bool ledLevel(LedMode m, bool blinkOn) {
+    return m == LedMode::Solid || (m == LedMode::Blink && blinkOn);
+}
+
 // §2 tick budget. micros() resolution so sub-millisecond ticks still register.
 static constexpr uint32_t TICK_BUDGET_US     = 10000;   // 10 ms
 static constexpr uint32_t REPORT_INTERVAL_MS = 5000;
@@ -76,6 +85,11 @@ void setup() {
     // safe sequence through ValveDriver (pump off -> zones closed -> master closed).
     runController.begin(millis());
     buttons.begin();              // configure the panel pins as inputs (§11)
+    display.begin();              // TM1637 init + clear (§12)
+
+    // Button LED rings (§11/§237) are outputs (active-high via ULN2803); off at boot.
+    for (uint8_t z = 0; z < ZONE_COUNT; ++z) { pinMode(ZONES[z].ledPin, OUTPUT); digitalWrite(ZONES[z].ledPin, LOW); }
+    pinMode(LED3, OUTPUT); digitalWrite(LED3, LOW);
 
     // Watchdog handshake pins (§9). The heartbeat is emitted ONLY during active
     // runs (DEC-004) and the trip line is consumed by the Watchdog module — both
@@ -113,7 +127,25 @@ void loop() {
     if (buttons.pressEdge(STOP_BTN_IDX))     runController.stop(now);
     if (buttons.longPressEdge(STOP_BTN_IDX)) runController.clearFault();
 
-    // (display / scheduler / flow / web / watchdog tick here as they land)
+    // §12 panel. Render the frame from controller state; the shim pushes to the
+    // TM1637 only when it changes (bit-bang cost vs the tick budget). Clock isn't
+    // wired yet (#2.2), so idle shows "--:--".
+    DisplayInputs di;
+    di.state        = runController.state();
+    di.fault        = runController.activeFault();
+    di.remainingSec = runController.remainingSec(now);
+    di.clockValid   = false;
+    display.show(renderDisplay(di, now));
+
+    // LED rings: active zone solid; stop ring blinks on fault. digitalWrite is cheap,
+    // so drive every loop (no change-gate needed).
+    const bool blinkOn = (now / 500u) % 2u == 0u;
+    const int  az      = runController.activeZone();
+    for (uint8_t z = 0; z < ZONE_COUNT; ++z)
+        digitalWrite(ZONES[z].ledPin, ledLevel(zoneLedMode(az, z), blinkOn) ? HIGH : LOW);
+    digitalWrite(LED3, ledLevel(stopLedMode(runController.isFaulted()), blinkOn) ? HIGH : LOW);
+
+    // (scheduler / flow / web / watchdog tick here as they land)
 
     // micros() subtraction wraps cleanly across the ~71 min rollover.
     if (loopMon.record(micros() - t0))

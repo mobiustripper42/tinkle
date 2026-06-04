@@ -6,6 +6,7 @@
 #include "run_controller.h"
 #include "loop_monitor.h"
 #include "buttons.h"
+#include "display.h"
 
 // Native unit tests for ValveDriver (firmware spec §5). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -753,6 +754,96 @@ void test_button_held_at_boot_no_edge() {
     TEST_ASSERT_TRUE(b.pressEdge(0));
 }
 
+// --- Display (firmware spec §12 + §11 LED rings) --------------------------------
+
+using tinkle::DisplayInputs;
+using tinkle::DisplayFrame;
+using tinkle::renderDisplay;
+using tinkle::LedMode;
+using tinkle::RunState;
+using tinkle::Fault;
+
+static void assertGlyphs(const DisplayFrame& f, const char* want) {
+    for (int i = 0; i < 4; ++i) TEST_ASSERT_EQUAL_CHAR(want[i], f.glyphs[i]);
+}
+
+// Idle, clock synced: HH:MM with the colon steady on.
+void test_display_idle_clock() {
+    DisplayInputs in;
+    in.state = RunState::Idle; in.clockValid = true; in.hours = 8; in.minutes = 34;
+    DisplayFrame f = renderDisplay(in, 0);
+    assertGlyphs(f, "0834");
+    TEST_ASSERT_TRUE(f.colon);
+}
+
+// Idle, clock not yet synced: dashes, colon on (§12).
+void test_display_idle_unsynced() {
+    DisplayInputs in;
+    in.state = RunState::Idle; in.clockValid = false;
+    DisplayFrame f = renderDisplay(in, 0);
+    assertGlyphs(f, "----");
+    TEST_ASSERT_TRUE(f.colon);
+}
+
+// Running: MM:SS countdown, zero-padded, colon blinks at 1 Hz.
+void test_display_running_countdown_and_blink() {
+    DisplayInputs in;
+    in.state = RunState::Running; in.remainingSec = 125;   // 02:05
+    DisplayFrame on  = renderDisplay(in, 0);               // colon-on half
+    assertGlyphs(on, "0205");
+    TEST_ASSERT_TRUE(on.colon);
+    DisplayFrame off = renderDisplay(in, 500);             // colon-off half
+    assertGlyphs(off, "0205");
+    TEST_ASSERT_FALSE(off.colon);
+    DisplayFrame on2 = renderDisplay(in, 1000);            // back on at 1 s
+    TEST_ASSERT_TRUE(on2.colon);
+
+    in.remainingSec = 5;   assertGlyphs(renderDisplay(in, 0), "0005");
+    in.remainingSec = 599; assertGlyphs(renderDisplay(in, 0), "0959");
+}
+
+// Fault: "E" + code, flashing — blank on the off phase.
+void test_display_fault_flash() {
+    DisplayInputs in;
+    in.state = RunState::Fault; in.fault = Fault::NoFlow;
+    assertGlyphs(renderDisplay(in, 0),   "E1  ");          // on phase
+    assertGlyphs(renderDisplay(in, 500), "    ");          // off phase -> blank
+    in.fault = Fault::Watchdog;
+    assertGlyphs(renderDisplay(in, 0),   "E3  ");
+}
+
+// Transitional states show a steady dash row (§12 implementer's choice).
+void test_display_transitional() {
+    DisplayInputs in;
+    in.state = RunState::PrepDiverter;
+    DisplayFrame f = renderDisplay(in, 0);
+    assertGlyphs(f, "----");
+    TEST_ASSERT_FALSE(f.colon);
+}
+
+// Frame equality drives the change-gate (push to TM1637 only when the frame moves).
+void test_display_frame_equality() {
+    DisplayInputs run;
+    run.state = RunState::Running; run.remainingSec = 125;
+    DisplayFrame a = renderDisplay(run, 0);      // 02:05, colon on
+    DisplayFrame b = renderDisplay(run, 100);    // same second, same colon phase
+    TEST_ASSERT_TRUE(a == b);                    // no change -> no push
+    DisplayFrame c = renderDisplay(run, 500);    // colon blinked off
+    TEST_ASSERT_TRUE(a != c);                    // change -> push
+    run.remainingSec = 124;
+    DisplayFrame d = renderDisplay(run, 0);      // countdown ticked
+    TEST_ASSERT_TRUE(a != d);
+}
+
+// LED rings (§11/§237): solid for the running zone, off otherwise; stop blinks on fault.
+void test_display_led_modes() {
+    TEST_ASSERT_EQUAL(LedMode::Solid, tinkle::zoneLedMode(1, 1));
+    TEST_ASSERT_EQUAL(LedMode::Off,   tinkle::zoneLedMode(1, 0));
+    TEST_ASSERT_EQUAL(LedMode::Off,   tinkle::zoneLedMode(-1, 0));   // nothing running
+    TEST_ASSERT_EQUAL(LedMode::Blink, tinkle::stopLedMode(true));
+    TEST_ASSERT_EQUAL(LedMode::Off,   tinkle::stopLedMode(false));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -793,5 +884,13 @@ int main() {
     RUN_TEST(test_buttons_independent);
     RUN_TEST(test_button_debounce_rollover);
     RUN_TEST(test_button_held_at_boot_no_edge);
+
+    RUN_TEST(test_display_idle_clock);
+    RUN_TEST(test_display_idle_unsynced);
+    RUN_TEST(test_display_running_countdown_and_blink);
+    RUN_TEST(test_display_fault_flash);
+    RUN_TEST(test_display_transitional);
+    RUN_TEST(test_display_frame_equality);
+    RUN_TEST(test_display_led_modes);
     return UNITY_END();
 }
