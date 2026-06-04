@@ -6,7 +6,8 @@ RunController::RunController(ValveDriver& valve, const RunConfig& cfg)
     : valve_(valve), cfg_(cfg) {}
 
 void RunController::begin(uint32_t nowMs) {
-    valve_.safeState(nowMs);
+    valve_.begin();             // configure every actuator pin as an output + safe levels
+    valve_.safeState(nowMs);    // then close-pulse zones to a known-closed boot state
     state_  = RunState::Idle;
     fault_  = Fault::None;
     qHead_ = qCount_ = 0;

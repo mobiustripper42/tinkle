@@ -57,7 +57,9 @@ class RunController {
 public:
     RunController(ValveDriver& valve, const RunConfig& cfg);
 
-    // Force the safe state via ValveDriver and reset to IDLE. Call once at boot.
+    // Boot entry: configure every actuator pin as an output, force the fail-dry
+    // safe state via ValveDriver, and reset to IDLE. Call once at boot — nothing
+    // else need touch ValveDriver::begin().
     void begin(uint32_t nowMs);
 
     // Request a run. Starts immediately if IDLE, else queues (up to MAX_QUEUE).

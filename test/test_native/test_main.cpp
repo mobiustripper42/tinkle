@@ -4,6 +4,7 @@
 #include <utility>
 #include "valve_driver.h"
 #include "run_controller.h"
+#include "loop_monitor.h"
 
 // Native unit tests for ValveDriver (firmware spec §5). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -328,6 +329,14 @@ static void test_rc_begin_idle_safe() {
     TEST_ASSERT_FALSE(vd.masterIsOpen());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
     TEST_ASSERT_EQUAL_INT(-1, rc.activeZone());
+    // begin() must configure every actuator pin as an output — fail-dry depends on
+    // the master/pump/bridges being driven, not floating, from boot. Regression
+    // guard: RunController::begin() now calls ValveDriver::begin(), not just
+    // safeState() (which writes levels but configures nothing).
+    TEST_ASSERT_TRUE(g.configured[MASTER] && g.configured[PUMP]);
+    TEST_ASSERT_TRUE(g.configured[Z0.in1] && g.configured[Z0.in2]);
+    TEST_ASSERT_TRUE(g.configured[Z1.in1] && g.configured[Z1.in2]);
+    TEST_ASSERT_TRUE(g.configured[DIV.in1] && g.configured[DIV.in2]);
 }
 
 // Full happy-path run: PREP -> ... -> RUNNING for the duration -> back to IDLE,
@@ -561,6 +570,49 @@ static void test_rc_queue_full_rejected() {
     TEST_ASSERT_FALSE(rc.requestRun(req, 0));    // overflow rejected
 }
 
+// --- LoopMonitor (firmware spec §2 tick budget) ---------------------------------
+
+using tinkle::LoopMonitor;
+using tinkle::LoopStats;
+
+void test_loop_monitor_within_budget() {
+    LoopMonitor m(10000);   // 10 ms budget
+    TEST_ASSERT_FALSE(m.record(120));
+    TEST_ASSERT_FALSE(m.record(9999));   // boundary: equal-or-under is not an overrun
+    TEST_ASSERT_FALSE(m.record(10000));
+    const LoopStats& s = m.stats();
+    TEST_ASSERT_EQUAL_UINT32(3, s.ticks);
+    TEST_ASSERT_EQUAL_UINT32(0, s.overruns);
+    TEST_ASSERT_EQUAL_UINT32(10000, s.maxUs);
+    TEST_ASSERT_EQUAL_UINT32(10000, s.lastUs);
+    TEST_ASSERT_FALSE(m.lastOverran());
+}
+
+void test_loop_monitor_counts_overruns() {
+    LoopMonitor m(10000);
+    TEST_ASSERT_FALSE(m.record(500));
+    TEST_ASSERT_TRUE(m.record(10001));    // one over the budget => overrun
+    TEST_ASSERT_TRUE(m.lastOverran());
+    TEST_ASSERT_FALSE(m.record(800));     // a fast tick after does not clear the tally
+    TEST_ASSERT_TRUE(m.record(25000));
+    const LoopStats& s = m.stats();
+    TEST_ASSERT_EQUAL_UINT32(4, s.ticks);
+    TEST_ASSERT_EQUAL_UINT32(2, s.overruns);
+    TEST_ASSERT_EQUAL_UINT32(25000, s.maxUs);  // tracks worst, not last
+    TEST_ASSERT_EQUAL_UINT32(25000, s.lastUs);
+}
+
+void test_loop_monitor_reset() {
+    LoopMonitor m(10000);
+    m.record(50000);
+    m.reset();
+    const LoopStats& s = m.stats();
+    TEST_ASSERT_EQUAL_UINT32(0, s.ticks);
+    TEST_ASSERT_EQUAL_UINT32(0, s.overruns);
+    TEST_ASSERT_EQUAL_UINT32(0, s.maxUs);
+    TEST_ASSERT_EQUAL_UINT32(0, s.lastUs);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -589,5 +641,9 @@ int main() {
     RUN_TEST(test_rc_fault_during_prep);
     RUN_TEST(test_rc_stop_during_prep);
     RUN_TEST(test_rc_queue_full_rejected);
+
+    RUN_TEST(test_loop_monitor_within_budget);
+    RUN_TEST(test_loop_monitor_counts_overruns);
+    RUN_TEST(test_loop_monitor_reset);
     return UNITY_END();
 }
