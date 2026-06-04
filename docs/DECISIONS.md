@@ -83,7 +83,7 @@ frames ourselves) and git-pinning dead `avishorp` (reintroduces the supply fragi
 #20 removed).
 **Tradeoff / guard:** Every software TM1637 driver bit-bangs the 2-wire protocol with
 `delayMicroseconds` (verified: no `delay()` in the write path; default bit delay 10 µs
-→ a 4-digit frame is roughly sub-millisecond). To stay under the ≤10 ms tick (§2), the
+→ a 4-digit frame is ~low single-digit ms, bench-confirm). To stay under the ≤10 ms tick (§2), the
 shim pushes to the display **only when the rendered frame changes** (minute rollover,
 second tick, colon/fault-flash edges — all ≤2 Hz), never every loop. Brightness, the
 exact per-frame cost, and the colon cell position are bench-confirmable (Phase 6).

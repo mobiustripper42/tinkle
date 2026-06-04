@@ -5,13 +5,14 @@
 #include "../core/display.h"
 
 // ESP32 binding for the TM1637 4-digit panel (firmware spec §12; library choice
-// DEC-015). renderDisplay() in src/core produces ASCII glyphs + a colon flag; this
+// DEC-005). renderDisplay() in src/core produces ASCII glyphs + a colon flag; this
 // shim hands the glyphs straight to TM1637_RT::displayPChar (whose encoder maps
-// '0'-'9'/'E'/'-'/' ' 1:1) and rides the colon on the high bit of cell 1. DEC-005.
+// '0'-'9'/'E'/'-'/' ' 1:1) and rides the colon on the high bit of cell 1.
 //
-// Bit-banged TM1637 writes cost real microseconds, so show() pushes ONLY when the
-// frame changes — never every loop tick (the ≤10 ms budget, §2). LED rings are
-// plain digitalWrite and are driven separately in the loop (negligible cost).
+// Bit-banged TM1637 writes cost low single-digit milliseconds per frame (bench-
+// confirm, DEC-005), so show() pushes ONLY when the frame changes — never every
+// loop tick (the ≤10 ms budget, §2). LED rings are plain digitalWrite and are
+// driven separately in the loop (negligible cost).
 
 namespace tinkle {
 

@@ -6,8 +6,8 @@ namespace {
 
 constexpr uint32_t BLINK_HALF_MS = 500;   // 1 Hz colon blink / fault flash (§12)
 
-// True for the "on" half of the 1 Hz square wave. Unsigned division is rollover-safe
-// in the sense that matters here — the phase just continues across the wrap.
+// True for the "on" half of the 1 Hz square wave. The only wart at the millis() wrap
+// (~49.7 days) is a single stretched on-phase — purely cosmetic on a display.
 bool phaseOn(uint32_t nowMs) { return (nowMs / BLINK_HALF_MS) % 2u == 0u; }
 
 // §12 fault codes: E1 no-flow, E2 unexpected flow, E3 watchdog. CalRange/Clock get

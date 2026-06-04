@@ -138,7 +138,8 @@ void loop() {
     display.show(renderDisplay(di, now));
 
     // LED rings: active zone solid; stop ring blinks on fault. digitalWrite is cheap,
-    // so drive every loop (no change-gate needed).
+    // so drive every loop (no change-gate needed). Same 1 Hz phase as the display
+    // colon (one stretched blink at the ~49.7-day millis wrap — cosmetic).
     const bool blinkOn = (now / 500u) % 2u == 0u;
     const int  az      = runController.activeZone();
     for (uint8_t z = 0; z < ZONE_COUNT; ++z)
