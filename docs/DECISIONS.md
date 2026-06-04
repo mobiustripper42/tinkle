@@ -68,6 +68,28 @@ K-factor) stay at seeded defaults until tiers 3–4 confirm them.
 
 ---
 
+## DEC-005: TM1637 display driver — `robtillaart/TM1637_RT`
+**Decision:** Use `robtillaart/TM1637_RT` for the 4-digit panel (§12), replacing the
+delisted `avishorp/TM1637` (commented out in #20). Glyph *logic* (countdown format,
+fault codes, blink/flash phases, dashes) lives in host-tested `src/core/display`
+producing ASCII glyphs + a colon flag; the esp32 shim (`display_tm1637.h`) hands those
+to `displayPChar`, whose encoder maps `0-9`/`E`/`-`/space 1:1, and rides the colon on
+the high bit of cell 1.
+**Why:** Flat, dependency-free C++ class — builds clean under `-std=gnu++11` (the
+PR #18 lockstep). Thin char + `setBrightness` surface keeps the testable logic in core
+and the lib isolated. Maintained (0.4.3, 2026). Rejected `akj7/TM1637` (templated →
+higher gnu++11 audit cost; its non-blocking-animation feature is moot when we render
+frames ourselves) and git-pinning dead `avishorp` (reintroduces the supply fragility
+#20 removed).
+**Tradeoff / guard:** Every software TM1637 driver bit-bangs the 2-wire protocol with
+`delayMicroseconds` (verified: no `delay()` in the write path; default bit delay 10 µs
+→ a 4-digit frame is ~low single-digit ms, bench-confirm). To stay under the ≤10 ms tick (§2), the
+shim pushes to the display **only when the rendered frame changes** (minute rollover,
+second tick, colon/fault-flash edges — all ≤2 Hz), never every loop. Brightness, the
+exact per-frame cost, and the colon cell position are bench-confirmable (Phase 6).
+
+---
+
 ## DEC-TBD: [next decision placeholder]
 **Question:** [What needs to be decided]
 **Consult @architect before building.**
