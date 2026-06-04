@@ -15,7 +15,14 @@ Fibonacci scale (2, 3, 5, 8, 13). See `VELOCITY_AND_POKER_GUIDE.md`.
 All estimates from planning poker between Eric and Claude.
 Tests are baked into every task estimate — no separate testing tasks.
 
-**Velocity baseline:** Not yet established. Update after first 5 sessions.
+**Velocity** (per `/retro`, DEC-013 — `dev_time` is the forecast number; wall clock is break-inflated):
+
+| Phase | Sessions | Points | Wall (h) | Dev (h) | Review (h) | hrs/pt (dev) |
+|-------|----------|--------|----------|---------|------------|--------------|
+| 0 | — | ~19 | — | — | — | scaffold — done pre-session-tracking, no time data |
+| 1 | 2 | 31\* | 15.75 | 3.58 | 1.75 | 0.12 |
+
+\* 31 = 25 Phase-1-labeled (#9–#14) + 6 spillover (Wokwi #7 [3, Phase 0], C++11 build-standard fix [2], TM1637 lib unblock [1]). Wall clock was ~66% breaks (toolchain download, a connection-drop gap), so treat Phase 1 as a **noisy baseline** — Phase 2 is the first clean read. Full detail in `RETROSPECTIVES.md`.
 
 ---
 
@@ -25,16 +32,16 @@ Everything needed to develop safely off-hardware. No watering behavior yet.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 0.1 | Repo, git, GitHub remote, `.gitignore` | 2 | [#1](https://github.com/mobiustripper42/tinkle/issues/1) |
-| 0.2 | Seeds workflow install (skills, agents, `project-type=tool`, `seeds-version`) | 2 | [#2](https://github.com/mobiustripper42/tinkle/issues/2) |
-| 0.3 | Docs: CLAUDE.md, SPEC, DECISIONS, PROJECT_PLAN; source specs vendored to `docs/` | 3 | [#3](https://github.com/mobiustripper42/tinkle/issues/3) |
-| 0.4 | `platformio.ini` (esp32 / attiny85 / native) + `src/{esp32,attiny,core}` layout | 3 | [#4](https://github.com/mobiustripper42/tinkle/issues/4) |
-| 0.5 | `pins.h` from `tinkle_wiring.html` §B | 2 | [#5](https://github.com/mobiustripper42/tinkle/issues/5) |
-| 0.6 | Install PlatformIO; `pio run -e esp32` and `pio test -e native` green | 3 | [#6](https://github.com/mobiustripper42/tinkle/issues/6) |
-| 0.7 | Wokwi sim config — boot the firmware in simulation | 3 | [#7](https://github.com/mobiustripper42/tinkle/issues/7) |
-| 0.8 | Sessions branch + `.sessions-worktree/` | 1 | [#8](https://github.com/mobiustripper42/tinkle/issues/8) |
+| 0.1 | Repo, git, GitHub remote, `.gitignore` | 2 | [x] [#1](https://github.com/mobiustripper42/tinkle/issues/1) |
+| 0.2 | Seeds workflow install (skills, agents, `project-type=tool`, `seeds-version`) | 2 | [x] [#2](https://github.com/mobiustripper42/tinkle/issues/2) |
+| 0.3 | Docs: CLAUDE.md, SPEC, DECISIONS, PROJECT_PLAN; source specs vendored to `docs/` | 3 | [x] [#3](https://github.com/mobiustripper42/tinkle/issues/3) |
+| 0.4 | `platformio.ini` (esp32 / attiny85 / native) + `src/{esp32,attiny,core}` layout | 3 | [x] [#4](https://github.com/mobiustripper42/tinkle/issues/4) |
+| 0.5 | `pins.h` from `tinkle_wiring.html` §B | 2 | [x] [#5](https://github.com/mobiustripper42/tinkle/issues/5) |
+| 0.6 | Install PlatformIO; `pio run -e esp32` and `pio test -e native` green | 3 | [x] [#6](https://github.com/mobiustripper42/tinkle/issues/6) |
+| 0.7 | Wokwi sim config — boot the firmware in simulation | 3 | [x] [#7](https://github.com/mobiustripper42/tinkle/issues/7) |
+| 0.8 | Sessions branch + `.sessions-worktree/` | 1 | [x] [#8](https://github.com/mobiustripper42/tinkle/issues/8) |
 
-**Phase 0 total: 19 pts** (much already done at scaffold)
+**Phase 0 total: 19 pts** — complete (most done at scaffold; #6 toolchain + #7 Wokwi completed in Session 2; all closed at the Phase 1 retro)
 
 **Ejection point:** A clean repo that builds for both MCUs, runs host tests, and
 boots in sim — every later phase is faster and safer.
@@ -47,14 +54,21 @@ The safety-critical heart. Bench-testable on LEDs/scope; no water.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 1.1 | `ValveDriver` — latching pulse open/close, never-both-high invariant | 5 | [#9](https://github.com/mobiustripper42/tinkle/issues/9) · §5 |
-| 1.2 | `ValveDriver` — diverter travel, master FET, pump relay, safe state | 3 | [#10](https://github.com/mobiustripper42/tinkle/issues/10) · §5 |
-| 1.3 | `RunController` state machine (IDLE→…→SETTLE, fault unwind) | 8 | [#11](https://github.com/mobiustripper42/tinkle/issues/11) · §4; src/core, fake clock/GPIO |
-| 1.4 | Non-blocking cooperative loop scaffold (tick ≤10ms, per-actuator timers) | 3 | [#12](https://github.com/mobiustripper42/tinkle/issues/12) · §2 |
-| 1.5 | Buttons — debounce, edge events, single-active invariant | 3 | [#13](https://github.com/mobiustripper42/tinkle/issues/13) · §11 |
-| 1.6 | TM1637 display — idle clock / MM:SS countdown / fault code | 3 | [#14](https://github.com/mobiustripper42/tinkle/issues/14) · §12 |
+| 1.1 | `ValveDriver` — latching pulse open/close, never-both-high invariant | 5 | [x] [#9](https://github.com/mobiustripper42/tinkle/issues/9) · §5 |
+| 1.2 | `ValveDriver` — diverter travel, master FET, pump relay, safe state | 3 | [x] [#10](https://github.com/mobiustripper42/tinkle/issues/10) · §5 |
+| 1.3 | `RunController` state machine (IDLE→…→SETTLE, fault unwind) | 8 | [x] [#11](https://github.com/mobiustripper42/tinkle/issues/11) · §4; src/core, fake clock/GPIO |
+| 1.4 | Non-blocking cooperative loop scaffold (tick ≤10ms, per-actuator timers) | 3 | [x] [#12](https://github.com/mobiustripper42/tinkle/issues/12) · §2 |
+| 1.5 | Buttons — debounce, edge events, single-active invariant | 3 | [x] [#13](https://github.com/mobiustripper42/tinkle/issues/13) · §11 |
+| 1.6 | TM1637 display — idle clock / MM:SS countdown / fault code | 3 | [x] [#14](https://github.com/mobiustripper42/tinkle/issues/14) · §12 |
 
-**Phase 1 total: 25 pts**
+**Phase 1 total: 25 pts** — complete (all closed). Ejection point met: full master→zone→pump→countdown→unwind sequence runs button-driven in the Wokwi sim (#7).
+
+**Unplanned work absorbed in the Phase 1 window** (not in the original plan):
+- C++11 build-standard fix + native/esp32 `-std=gnu++11` lockstep — [PR #18](https://github.com/mobiustripper42/tinkle/pull/18) (2 pts) · *Added during P1 retro*
+- TM1637 lib unblock (delisted `avishorp/TM1637`) — [PR #20](https://github.com/mobiustripper42/tinkle/pull/20) (1 pt) · *Added during P1 retro*
+- Wokwi diagram pin-fix re-land (#22 merge race) — [PR #24](https://github.com/mobiustripper42/tinkle/pull/24) · *Added during P1 retro*
+
+**Deferred design item:** [#23](https://github.com/mobiustripper42/tinkle/issues/23) — 3-zone button model (each button runs its own zone, any-button-cancels, long-press fault-clear; DEC-006). Needs @architect + resolve **before** Phase 2 Persistence locks an NVS schema around zone count.
 
 **Ejection point:** A simulated/bench run sequences master→zone→pump and unwinds
 to safe state, driven by a button, with a live countdown.
