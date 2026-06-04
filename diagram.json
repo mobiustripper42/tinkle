@@ -25,19 +25,19 @@
     { "type": "wokwi-led", "id": "led_z2", "top": 280, "left": 200, "attrs": { "color": "green", "label": "ZONE2" } }
   ],
   "connections": [
-    [ "tm:CLK", "esp:D25", "yellow", [] ],
-    [ "tm:DIO", "esp:D26", "green", [] ],
+    [ "tm:CLK", "esp:25", "yellow", [] ],
+    [ "tm:DIO", "esp:26", "green", [] ],
     [ "tm:VCC", "esp:3V3", "red", [] ],
     [ "tm:GND", "esp:GND.1", "black", [] ],
 
-    [ "btn1:2.l", "esp:D34", "green", [] ],
+    [ "btn1:2.l", "esp:34", "green", [] ],
     [ "btn1:1.l", "esp:GND.2", "black", [] ],
-    [ "rp1:1", "esp:D34", "gray", [] ],
+    [ "rp1:1", "esp:34", "gray", [] ],
     [ "rp1:2", "esp:3V3", "red", [] ],
 
-    [ "btn2:2.l", "esp:D35", "green", [] ],
+    [ "btn2:2.l", "esp:35", "green", [] ],
     [ "btn2:1.l", "esp:GND.2", "black", [] ],
-    [ "rp2:1", "esp:D35", "gray", [] ],
+    [ "rp2:1", "esp:35", "gray", [] ],
     [ "rp2:2", "esp:3V3", "red", [] ],
 
     [ "btn3:2.l", "esp:VN", "orange", [] ],
@@ -45,13 +45,13 @@
     [ "rp3:1", "esp:VN", "gray", [] ],
     [ "rp3:2", "esp:3V3", "red", [] ],
 
-    [ "led_m:A", "esp:D21", "red", [] ],
+    [ "led_m:A", "esp:21", "red", [] ],
     [ "led_m:C", "esp:GND.3", "black", [] ],
-    [ "led_p:A", "esp:D22", "blue", [] ],
+    [ "led_p:A", "esp:22", "blue", [] ],
     [ "led_p:C", "esp:GND.3", "black", [] ],
-    [ "led_z1:A", "esp:D32", "green", [] ],
+    [ "led_z1:A", "esp:32", "green", [] ],
     [ "led_z1:C", "esp:GND.3", "black", [] ],
-    [ "led_z2:A", "esp:D33", "green", [] ],
+    [ "led_z2:A", "esp:33", "green", [] ],
     [ "led_z2:C", "esp:GND.3", "black", [] ]
   ],
   "dependencies": {}
