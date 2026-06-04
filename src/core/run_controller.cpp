@@ -2,6 +2,20 @@
 
 namespace tinkle {
 
+// Field assignment, not brace-aggregate-init: RunSummary carries default member
+// initializers, so it's only an aggregate under C++14+. The firmware builds at
+// -std=gnu++11 (arduino-esp32 2.0.x), where `RunSummary{a, b, ...}` is ill-formed.
+// One helper keeps the two summary sites in sync and C++11-clean.
+static RunSummary makeSummary(RunSummary::Result result, const RunRequest& req, Fault fault) {
+    RunSummary s;
+    s.result      = result;
+    s.zone        = req.zoneIndex;
+    s.durationSec = req.durationSec;
+    s.fertigate   = req.fertigate;
+    s.fault       = fault;
+    return s;
+}
+
 RunController::RunController(ValveDriver& valve, const RunConfig& cfg)
     : valve_(valve), cfg_(cfg) {}
 
@@ -67,9 +81,7 @@ void RunController::raiseFault(Fault code, uint32_t nowMs) {
     valve_.safeState(nowMs);                        // pump off -> zones closed -> master closed
     fault_ = code;
     qHead_ = qCount_ = 0;
-    lastRun_ = RunSummary{ RunSummary::Result::Faulted,
-                           current_.zoneIndex, current_.durationSec,
-                           current_.fertigate, fault_ };
+    lastRun_ = makeSummary(RunSummary::Result::Faulted, current_, fault_);
     state_ = RunState::Fault;
     stateStartMs_ = nowMs;
 }
@@ -110,9 +122,9 @@ void RunController::enter(RunState s, uint32_t nowMs) {
         case RunState::CloseMaster: valve_.masterClose();                      break;
         case RunState::Settle:
             // Log the run outcome (§4 step 9). Diverter left as-is.
-            lastRun_ = RunSummary{
+            lastRun_ = makeSummary(
                 stopping_ ? RunSummary::Result::Stopped : RunSummary::Result::Completed,
-                current_.zoneIndex, current_.durationSec, current_.fertigate, Fault::None };
+                current_, Fault::None);
             break;
         default: break;
     }
