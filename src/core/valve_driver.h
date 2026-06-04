@@ -51,7 +51,9 @@ public:
     void begin();
 
     // Latching zone valves. Start a pulse now; tick() releases to coast after
-    // pulseMs. Out-of-range zone is a no-op.
+    // pulseMs. Out-of-range zone is a no-op. Re-issuing before the pulse expires
+    // re-drives the bridge and restarts the timer (one pulse per intent — the
+    // caller, RunController, owns de-duplication).
     void pulseOpen(uint8_t zone, uint32_t nowMs);
     void pulseClose(uint8_t zone, uint32_t nowMs);
 

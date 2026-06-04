@@ -175,6 +175,37 @@ static void test_independent_timers() {
     TEST_ASSERT_FALSE(vd.busy());
 }
 
+// Reversing the diverter mid-travel must never drive its bridge both-HIGH. (The
+// electrical dead-time question for a motor reversed mid-travel is separate and
+// flagged to @architect — this guards only the logical invariant.)
+static void test_diverter_reversal_never_both_high() {
+    ValveDriver vd(g, cfg);
+    vd.begin();
+    vd.setDiverter(true, 0);            // THROUGH, IN1 high
+    vd.setDiverter(false, 100);         // reverse to AROUND mid-travel
+    TEST_ASSERT_FALSE(g.level[DIV.in1]);
+    TEST_ASSERT_TRUE(g.level[DIV.in2]);
+    TEST_ASSERT_FALSE(vd.diverterThrough());
+    TEST_ASSERT_FALSE(g.bothHighViolation);
+}
+
+// safeState landing while a zone is mid-open-pulse (the §14 fault case): the open
+// is overridden by a close pulse, with no transient both-high.
+static void test_safe_state_during_open_pulse() {
+    ValveDriver vd(g, cfg);
+    vd.begin();
+    vd.pulseOpen(0, 0);                 // zone 0 mid-open
+    TEST_ASSERT_TRUE(g.level[Z0.in1]);
+    vd.safeState(30);                  // fault unwind before the open pulse expires
+    TEST_ASSERT_FALSE(g.level[Z0.in1]);
+    TEST_ASSERT_TRUE(g.level[Z0.in2]);  // now driving closed
+    TEST_ASSERT_TRUE(vd.zoneBusy(0));
+    TEST_ASSERT_FALSE(g.bothHighViolation);
+    vd.tick(30 + 75);                   // close pulse completes -> coast
+    TEST_ASSERT_FALSE(g.level[Z0.in2]);
+    TEST_ASSERT_FALSE(vd.busy());
+}
+
 // Diverter direction mapping: through => IN1 (THROUGH), !through => IN2 (AROUND).
 static void test_diverter_direction() {
     ValveDriver vd(g, cfg);
@@ -251,6 +282,8 @@ int main() {
     RUN_TEST(test_pulse_close_then_coast);
     RUN_TEST(test_never_both_high_on_reversal);
     RUN_TEST(test_independent_timers);
+    RUN_TEST(test_diverter_reversal_never_both_high);
+    RUN_TEST(test_safe_state_during_open_pulse);
     RUN_TEST(test_diverter_direction);
     RUN_TEST(test_master_and_pump);
     RUN_TEST(test_safe_state);

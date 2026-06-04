@@ -18,6 +18,12 @@ void ValveDriver::applyBridge(const Bridge& b, Cmd cmd) {
     if (h2)  g_.write(b.in2, true);
 }
 
+// Safety contract for this routine: LOW must be the safe/de-asserted level for
+// every output pin. `configureOutput` (pinMode OUTPUT) drives a pin to its
+// default before the explicit write lands, so any pin whose safe state is HIGH
+// would glitch unsafe during boot. Today every actuator is LOW=safe — master FET
+// LOW = NC master closed, pump relay LOW = off, bridge inputs LOW = coast. A pin
+// remap that breaks this must change begin(), not just pins.h.
 void ValveDriver::begin() {
     for (uint8_t z = 0; z < cfg_.zoneCount; ++z) {
         g_.configureOutput(cfg_.zones[z].in1);
