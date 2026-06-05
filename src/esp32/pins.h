@@ -14,6 +14,13 @@ constexpr uint8_t Z1_IN1   = 13;
 constexpr uint8_t Z1_IN2   = 14;
 constexpr uint8_t Z2_IN1   = 16;
 constexpr uint8_t Z2_IN2   = 17;
+// Zone 3 (general-purpose hose outlet, separate from the Red Tunnel's Z1/Z2 — DEC-006).
+// On strapping pins because all non-strapping output GPIO are spent (DEC-007): safe only
+// because the DRV8871's internal input pulldowns hold both LOW through the boot strap
+// window — GPIO12 low selects 3.3V flash (a HIGH here bricks boot; nothing may pull it
+// up), GPIO15 low is cosmetic (boot log), and both-low means no spurious pulse at boot.
+constexpr uint8_t Z3_IN1   = 15;   // MTDO strapping pin — see DEC-007 / wiring doc §D
+constexpr uint8_t Z3_IN2   = 12;   // MTDI strapping pin — MUST sit LOW at boot (flash VDD)
 constexpr uint8_t DIV_IN1  = 18;   // diverter THROUGH (fertigate)
 constexpr uint8_t DIV_IN2  = 19;   // diverter AROUND (plain). ~6s travel, not a 75ms latch.
 
@@ -29,9 +36,12 @@ constexpr uint8_t TM_CLK = 25;
 constexpr uint8_t TM_DIO = 26;
 
 // Buttons — momentary to GND, input-only pins, external pull-up + debounce cap.
-constexpr uint8_t BTN1 = 34;  // Zone 1 run
-constexpr uint8_t BTN2 = 35;  // Zone 2 run
-constexpr uint8_t BTN3 = 39;  // Stop / cancel all (long-press = fault clear)
+// One button per zone (DEC-006): idle press starts that zone; a press while any zone
+// runs stops it; a ≥3 s long-press of any button clears a latched fault. No dedicated
+// stop button — "any press stops" makes one unnecessary.
+constexpr uint8_t BTN1 = 34;  // Zone 1 run / stop / long-press fault-clear
+constexpr uint8_t BTN2 = 35;  // Zone 2 run / stop / long-press fault-clear
+constexpr uint8_t BTN3 = 39;  // Zone 3 run / stop / long-press fault-clear
 
 // Button LED rings — 12V, low-side via ULN2803 (active-high to ULN input).
 constexpr uint8_t LED1 = 32;
@@ -50,5 +60,6 @@ struct Zone { uint8_t in1, in2, ledPin, btnPin; const char* name; };
 constexpr Zone ZONES[] = {
     { Z1_IN1, Z1_IN2, LED1, BTN1, "Zone 1" },
     { Z2_IN1, Z2_IN2, LED2, BTN2, "Zone 2" },
+    { Z3_IN1, Z3_IN2, LED3, BTN3, "Zone 3" },   // hose outlet — wired now, plumbed later
 };
 constexpr uint8_t ZONE_COUNT = sizeof(ZONES) / sizeof(ZONES[0]);

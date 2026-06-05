@@ -4,8 +4,11 @@
 Tinkle is an automated drip-irrigation controller for Bay Branch Farm's high
 tunnels. It replaces a single 110V smart-plug-on-the-pump (pump on/off, no zone
 control) with scheduled, per-zone watering and reliable manual override. V1 wires
-and runs only the **Red Tunnel** (2 zones + a Dosatron fertigation diverter) on a
-controller, driver board, and enclosure **sized for three tunnels**.
+and runs the **Red Tunnel** (2 zones) plus a **general-purpose hose-outlet zone**
+(Zone 3, separate from the tunnel) and a Dosatron fertigation diverter — three zone
+channels in all — on a controller, driver board, and enclosure **sized for three
+tunnels**. Z1/Z2 are plumbed now; Z3's valve is wired now, plumbed when that line
+goes in (build-for-three).
 
 The detailed hardware and firmware contracts live in `docs/tinkle_v1_spec.md`,
 `docs/tinkle_firmware_spec.md`, and `docs/tinkle_wiring.html`. This file is the
@@ -36,8 +39,10 @@ scope guardrail.
 ## Roles / interfaces
 - **Operator (phone):** sets schedules, default durations, fert policy, max-runtime,
   runs calibration, starts/stops manual runs — via the local web UI.
-- **Operator (at the box):** 3 momentary buttons (Red live, two spare) — timed run
-  per zone, any-press cancel; LED rings show "watering now"; TM1637 shows MM:SS.
+- **Operator (at the box):** 3 momentary buttons, one per zone (Z1/Z2 Red Tunnel +
+  Z3 hose outlet) — idle press starts that zone; any press stops a running zone (no
+  switch); ≥3 s long-press of any button clears a latched fault (DEC-006). LED rings
+  show "watering now"; TM1637 shows MM:SS.
 - **Headless:** the schedule runs from flash with no phone, no network present.
 
 ## V1 Scope

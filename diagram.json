@@ -13,7 +13,7 @@
     { "type": "wokwi-pushbutton", "id": "btn2", "top": 180, "left": -260,
       "attrs": { "color": "green", "label": "B2 Zone2" } },
     { "type": "wokwi-pushbutton", "id": "btn3", "top": 260, "left": -260,
-      "attrs": { "color": "red", "label": "B3 Stop" } },
+      "attrs": { "color": "green", "label": "B3 Zone3" } },
 
     { "type": "wokwi-resistor", "id": "rp1", "top": 100, "left": -130, "attrs": { "value": "10000" } },
     { "type": "wokwi-resistor", "id": "rp2", "top": 180, "left": -130, "attrs": { "value": "10000" } },
@@ -22,7 +22,8 @@
     { "type": "wokwi-led", "id": "led_m", "top": 100, "left": 200, "attrs": { "color": "red",   "label": "MASTER" } },
     { "type": "wokwi-led", "id": "led_p", "top": 160, "left": 200, "attrs": { "color": "blue",  "label": "PUMP" } },
     { "type": "wokwi-led", "id": "led_z1", "top": 220, "left": 200, "attrs": { "color": "green", "label": "ZONE1" } },
-    { "type": "wokwi-led", "id": "led_z2", "top": 280, "left": 200, "attrs": { "color": "green", "label": "ZONE2" } }
+    { "type": "wokwi-led", "id": "led_z2", "top": 280, "left": 200, "attrs": { "color": "green", "label": "ZONE2" } },
+    { "type": "wokwi-led", "id": "led_z3", "top": 340, "left": 200, "attrs": { "color": "green", "label": "ZONE3" } }
   ],
   "connections": [
     [ "tm:CLK", "esp:25", "yellow", [] ],
@@ -52,7 +53,9 @@
     [ "led_z1:A", "esp:32", "green", [] ],
     [ "led_z1:C", "esp:GND.3", "black", [] ],
     [ "led_z2:A", "esp:33", "green", [] ],
-    [ "led_z2:C", "esp:GND.3", "black", [] ]
+    [ "led_z2:C", "esp:GND.3", "black", [] ],
+    [ "led_z3:A", "esp:23", "green", [] ],
+    [ "led_z3:C", "esp:GND.3", "black", [] ]
   ],
   "dependencies": {}
 }

@@ -4,8 +4,10 @@
 
 Tinkle is an automated drip-irrigation controller for Bay Branch Farm's high
 tunnels — scheduled, per-zone watering with reliable manual override, replacing a
-dumb smart-plug-on-the-pump. V1 runs the **Red Tunnel** (2 zones + a Dosatron
-fertigation diverter) on a controller/board/enclosure **sized for three tunnels**.
+dumb smart-plug-on-the-pump. V1 runs the **Red Tunnel** (2 zones) plus a
+general-purpose **hose-outlet zone** (Zone 3) and a Dosatron fertigation diverter —
+three zone channels, one button each (DEC-006) — on a controller/board/enclosure
+**sized for three tunnels**.
 
 It is an embedded project: **ESP32 firmware** + an **ATtiny85 hardware watchdog** +
 a **vanilla-JS phone UI** served from flash. Guiding philosophy — **fail dry**
