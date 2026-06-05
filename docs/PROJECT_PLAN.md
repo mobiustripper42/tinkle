@@ -79,10 +79,10 @@ to safe state, driven by a button, with a live countdown.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 2.1 | `Persistence` — NVS read/write of all stored state, write-on-change | 5 | §8 |
-| 2.2 | `Clock` — NTP sync + free-running fallback | 3 | §13 |
-| 2.3 | `Scheduler` — entry model, per-minute eval, queue, overlap guard | 5 | §13 |
-| 2.4 | Fertigation policy — one fert run/day + per-entry override | 3 | §6 |
+| 2.1 | `Persistence` — NVS read/write of all stored state, write-on-change | 5 | [#25](https://github.com/mobiustripper42/tinkle/issues/25) · §8 |
+| 2.2 | `Clock` — NTP sync + free-running fallback | 3 | [#26](https://github.com/mobiustripper42/tinkle/issues/26) · §13 |
+| 2.3 | `Scheduler` — entry model, per-minute eval, queue, overlap guard | 5 | [#27](https://github.com/mobiustripper42/tinkle/issues/27) · §13 |
+| 2.4 | Fertigation policy — one fert run/day + per-entry override | 3 | [#28](https://github.com/mobiustripper42/tinkle/issues/28) · §6 |
 
 **Phase 2 total: 16 pts**
 
