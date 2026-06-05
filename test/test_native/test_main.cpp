@@ -835,13 +835,19 @@ void test_display_frame_equality() {
     TEST_ASSERT_TRUE(a != d);
 }
 
-// LED rings (§11/§237): solid for the running zone, off otherwise; stop blinks on fault.
+// LED rings (§11/§12 / DEC-006): solid for the running zone, off otherwise; with no
+// dedicated stop ring, a latched fault blinks EVERY zone ring (panel-wide attention),
+// overriding the per-zone running/idle level.
 void test_display_led_modes() {
-    TEST_ASSERT_EQUAL(LedMode::Solid, tinkle::zoneLedMode(1, 1));
-    TEST_ASSERT_EQUAL(LedMode::Off,   tinkle::zoneLedMode(1, 0));
-    TEST_ASSERT_EQUAL(LedMode::Off,   tinkle::zoneLedMode(-1, 0));   // nothing running
-    TEST_ASSERT_EQUAL(LedMode::Blink, tinkle::stopLedMode(true));
-    TEST_ASSERT_EQUAL(LedMode::Off,   tinkle::stopLedMode(false));
+    // Not faulted: running zone solid, others off.
+    TEST_ASSERT_EQUAL(LedMode::Solid, tinkle::zoneLedMode(1, 1, false));
+    TEST_ASSERT_EQUAL(LedMode::Off,   tinkle::zoneLedMode(1, 0, false));
+    TEST_ASSERT_EQUAL(LedMode::Off,   tinkle::zoneLedMode(-1, 0, false));  // nothing running
+    TEST_ASSERT_EQUAL(LedMode::Solid, tinkle::zoneLedMode(2, 2, false));   // Zone 3 (index 2)
+    // Faulted: every ring blinks, regardless of the active zone.
+    TEST_ASSERT_EQUAL(LedMode::Blink, tinkle::zoneLedMode(-1, 0, true));
+    TEST_ASSERT_EQUAL(LedMode::Blink, tinkle::zoneLedMode(1, 1, true));    // overrides Solid
+    TEST_ASSERT_EQUAL(LedMode::Blink, tinkle::zoneLedMode(1, 2, true));
 }
 
 int main() {

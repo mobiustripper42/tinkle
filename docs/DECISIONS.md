@@ -90,6 +90,54 @@ exact per-frame cost, and the colon cell position are bench-confirmable (Phase 6
 
 ---
 
-## DEC-TBD: [next decision placeholder]
-**Question:** [What needs to be decided]
-**Consult @architect before building.**
+## DEC-006: Button/zone model — 3 buttons = 3 zones, any-press-stops, long-press-clears
+**Decision:** The panel is **three buttons, one per zone**, with no dedicated stop
+button (resolves #23). Behavior (§11):
+- **IDLE** → press button N starts Zone N at its stored default duration, `fertigate=false`.
+- **Any zone running** → a press of *any* button **stops** it (graceful unwind to safe
+  state). It does **not** switch or auto-start — to change zones, one press stops, the
+  next starts. This trivially enforces the single-active invariant (you must stop before
+  you can start).
+- **FAULT** → a short press is a no-op; a **≥3 s long-press of any button** requests a
+  fault-clear, still gated on "condition resolved" (§14) — a premature clear simply
+  re-faults on the next run, harmless. The hold must give **explicit feedback** (§12): a
+  ring/display ack on a successful clear, and a *visible* no-op (not silence) when held
+  while latched-but-unresolved, so a held button never reads as a dead panel.
+- Zone 3 is a real third zone — a **general-purpose hose outlet** separate from the Red
+  Tunnel's Z1/Z2 — under build-for-three: wired now (3rd latching valve + H-bridge, see
+  DEC-007), plumbed when that line goes in.
+**Why:** This is Eric's literal directive ("each button runs its own zone, any button
+cancels"). The earlier §11 design (B1/B2 = zones, B3 = dedicated Stop/cancel-all +
+long-press clear) was a spec error, not the intent. The any-press-stops rule is
+fail-dry-friendly: an explicit stop, never a surprise switch that starts water you
+didn't ask for. The press-overload (start / stop / clear, keyed on {state, hold
+duration}) resolves with no ambiguity — in FAULT only the long-press acts.
+**Tradeoff / guard:** Fault-clear spreads across three buttons (was one), multiplying
+the *surface* for an accidental hold but not its *probability* (a 3 s hold is
+deliberate), and §14's re-fault-on-next-run makes a premature clear harmless. The button
+only *requests* a guarded state transition — it can never command water — so the
+fail-dry chain (sw ceiling → ATtiny → NC master) is untouched. The web `/api/fault/clear`
+(§10) stays as the parallel path; the button preserves local autonomy at the enclosure.
+**Status:** Implemented Phase 1.7 (#23). The "unresolved-hold visible no-op" feedback
+branch is **gated on the FaultManager resolved-condition signal (Phase 3/5)** — until
+then `clearFault()` clears unconditionally when faulted and only the success ack fires.
+
+---
+
+## DEC-007: Zone 3 H-bridge on strapping pins GPIO15/GPIO12
+**Decision:** Build-for-three needs a third zone H-bridge, but every non-strapping
+output GPIO is already spent (wiring doc §B). Assign **Z3_IN1 = GPIO15 (MTDO)** and
+**Z3_IN2 = GPIO12 (MTDI)**.
+**Why:** Safe *only* because the DRV8871's ~100 kΩ internal input pulldowns hold both
+ESP32 pins **LOW** through the boot strapping window while the pins are still hi-Z:
+GPIO12 sampling low selects the correct **3.3 V flash VDD** (a HIGH here bricks boot —
+the pulldown is doing real work), GPIO15 low is cosmetic (suppresses the U0TXD boot
+log), and both-low means **no spurious valve pulse at boot** (fail-dry). This mirrors
+the existing master-FET gate-pulldown boot note — an established pattern here.
+**Rejected:** GPIO0 (pulldown → download mode at boot), GPIO5 (must be HIGH at boot,
+pulldown fights it), GPIO2 (works, but its onboard LED flickers on every Z3 actuation),
+and an I/O expander (adds an I2C/SPI dependency, a part, and a failure mode to dodge a
+cosmetic boot-log — against build-for-three/populate-one).
+**Constraint:** **Nothing may pull GPIO12 high** — no external pull-up, no scope probe
+with a pull, nothing. Documented in the wiring doc §D so the next person doesn't brick
+boot without knowing why. (Supersedes the wiring doc's prior "no Z3 pins allocated.")

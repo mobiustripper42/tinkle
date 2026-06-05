@@ -21,7 +21,7 @@ In scope for V1:
 - Maintain a cooperative heartbeat with the ATtiny watchdog and honor its trips.
 - Fail dry on every fault and on power loss.
 
-Explicitly **out of scope** for V1: MQTT/cloud, sensor-driven (closed-loop) irrigation, multi-tunnel logic (the board has headroom; the firmware targets Red's 2 zones + 1 diverter). Keep the zone/tunnel model data-driven so adding zones later is config, not a rewrite.
+Explicitly **out of scope** for V1: MQTT/cloud, sensor-driven (closed-loop) irrigation, multi-tunnel logic (the board has headroom; the firmware targets 3 zones — Red's 2 + the Zone 3 hose outlet — plus 1 diverter). Keep the zone/tunnel model data-driven so adding zones later is config, not a rewrite.
 
 ---
 
@@ -55,6 +55,7 @@ Mirror the wiring doc. Define once in `pins.h`:
 // H-bridges (DRV8871 IN1/IN2)
 Z1_IN1=13  Z1_IN2=14
 Z2_IN1=16  Z2_IN2=17
+Z3_IN1=15  Z3_IN2=12   // hose-outlet zone on strapping pins — DEC-007 (DRV8871 pulldowns boot-safe)
 DIV_IN1=18 DIV_IN2=19
 // Actuators
 MASTER_FET=21
@@ -63,7 +64,7 @@ PUMP_RELAY=22
 FLOW_PIN=27            // interrupt, level-shifted to 3.3V
 // Display
 TM_CLK=25  TM_DIO=26
-// Buttons (external pull-up, active-low)
+// Buttons (external pull-up, active-low) — one per zone, no dedicated stop (DEC-006)
 BTN1=34  BTN2=35  BTN3=39
 // Button LED rings (via ULN2803, active-high)
 LED1=32  LED2=33  LED3=23
@@ -77,8 +78,9 @@ Model zones as a table so the count is data-driven:
 ```
 struct Zone { uint8_t in1, in2, ledPin, btnPin; const char* name; };
 Zone zones[] = {
-  {Z1_IN1, Z1_IN2, LED1, BTN1, "Zone 1"},
-  {Z2_IN1, Z2_IN2, LED2, BTN2, "Zone 2"},
+  {Z1_IN1, Z1_IN2, LED1, BTN1, "Zone 1"},   // Red Tunnel beds 1–3
+  {Z2_IN1, Z2_IN2, LED2, BTN2, "Zone 2"},   // Red Tunnel beds 4–6
+  {Z3_IN1, Z3_IN2, LED3, BTN3, "Zone 3"},   // general-purpose hose outlet (build-for-three)
 };
 ```
 
@@ -219,10 +221,27 @@ The firmware **serves a single-page app** that is the phone UI; it is a first-cl
 
 ## 11. Manual buttons
 
-- **B1 / B2** (GPIO34/35): short press → start a timed run on Zone 1 / Zone 2 at that zone's stored default duration, `fertigate=false`. Press while that zone is running → no-op (or extend, TBD — default no-op).
-- **B3** (GPIO39): **Stop / cancel all** — unwind any active run to safe state. Also used as **fault-clear** on a long press (≥3s) when a fault is latched and resolved.
-- Firmware debounces (~30 ms) on top of the RC hardware debounce. Act on the press edge.
-- A button press during another zone's run cancels that run first, then starts the requested one (single-active invariant).
+**Three buttons, one per zone, no dedicated stop button** (DEC-006). B1/B2/B3
+(GPIO34/35/39) map to Zone 1 / Zone 2 / Zone 3. One uniform policy keyed on
+`{run state, hold duration}`:
+
+- **IDLE → press button N:** start a timed run on Zone N at that zone's stored default
+  duration, `fertigate=false`.
+- **Any zone running → press *any* button:** **stop** — unwind the active run to safe
+  state. It does **not** switch or auto-start; to change zones, one press stops, the next
+  starts. This is what enforces the single-active invariant (you must stop before you can
+  start) and is fail-dry-friendly — an explicit stop, never a surprise switch.
+- **FAULT → short press:** no-op. **FAULT → ≥3 s long-press of any button:** request a
+  fault-clear, still gated on "condition resolved" (§14); a premature clear simply
+  re-faults on the next run (harmless). The hold **must give explicit feedback** — see
+  §12 (a held button must never read as a dead panel).
+- Firmware debounces (~30 ms) on top of the RC hardware debounce. Act on the press edge;
+  the long-press fires once per hold at the 3 s threshold.
+
+> **Zone 3** is a real third zone — a general-purpose hose outlet, separate from the Red
+> Tunnel's Z1/Z2 — wired now under build-for-three (DEC-007), plumbed when that line goes
+> in. B3 was previously (and wrongly) specced as a dedicated Stop button; that was a spec
+> error corrected by DEC-006.
 
 ---
 
@@ -234,7 +253,20 @@ The firmware **serves a single-page app** that is the phone UI; it is a first-cl
 - **FAULT:** `E` + code, e.g. `E1` no-flow, `E2` unexpected flow, `E3` watchdog. Flash.
 - Display is **read-only status** — it never gates actuation and has no input role.
 
-Button LED rings: off = idle/that zone not running; solid = that zone running; slow blink = fault/attention.
+Button LED rings: off = idle/that zone not running; solid = that zone running. With no
+dedicated stop ring (DEC-006), **fault/attention blinks every ring** (the panel as a
+whole says "attention"), overriding the per-zone level.
+
+**Fault-clear hold feedback** (DEC-006): the ≥3 s fault-clear long-press must produce
+explicit feedback so a held button never reads as a dead panel —
+
+- **Successful clear** (latched → cleared) → a brief ring/display **ack** (all rings
+  flash solid). *Today this ack means "was faulted, now cleared," not "the fault
+  condition is gone"* — `clearFault()` currently clears unconditionally when faulted.
+- **Held while latched-but-unresolved** → a *visible* no-op (a brief flash), not silence.
+  This branch is **gated on the FaultManager resolved-condition signal (Phase 3/5)** —
+  there is no "resolved" signal until FlowMonitor/Watchdog land, so it is speced here but
+  not yet implemented.
 
 ---
 

@@ -69,12 +69,11 @@ DisplayFrame renderDisplay(const DisplayInputs& in, uint32_t nowMs) {
     return f;
 }
 
-LedMode zoneLedMode(int activeZone, uint8_t zoneIndex) {
+LedMode zoneLedMode(int activeZone, uint8_t zoneIndex, bool faulted) {
+    // No dedicated stop ring (DEC-006): a latched fault blinks every zone ring as the
+    // panel-wide "attention" cue, overriding the per-zone running/idle level.
+    if (faulted) return LedMode::Blink;
     return ((int)zoneIndex == activeZone) ? LedMode::Solid : LedMode::Off;
-}
-
-LedMode stopLedMode(bool faulted) {
-    return faulted ? LedMode::Blink : LedMode::Off;
 }
 
 } // namespace tinkle

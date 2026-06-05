@@ -42,15 +42,15 @@ static ValveDriver       valve(gpio, valveCfg);
 static const RunConfig   runCfg;                  // firmware spec §15 defaults
 static RunController      runController(valve, runCfg);
 
-// Button panel (§11): one button per zone (B1/B2) plus B3 stop/cancel + fault-clear.
-// Pins come from the pins.h zone table (data-driven) and BTN3.
+// Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
+// come straight from the pins.h zone table (data-driven). The press policy lives in
+// loop(); the panel module only produces clean debounced edges.
 static Buttons::Config makeButtonConfig() {
-    static_assert(ZONE_COUNT + 1 <= Buttons::MAX_BUTTONS,
-                  "button panel: one button per zone + one stop must fit MAX_BUTTONS");
+    static_assert(ZONE_COUNT <= Buttons::MAX_BUTTONS,
+                  "button panel: one button per zone must fit MAX_BUTTONS");
     Buttons::Config cfg;
-    for (uint8_t i = 0; i < ZONE_COUNT; ++i) cfg.pins[i] = ZONES[i].btnPin;  // B1/B2 -> zones
-    cfg.pins[ZONE_COUNT] = BTN3;                                             // B3  -> stop/clear
-    cfg.count            = ZONE_COUNT + 1;
+    for (uint8_t i = 0; i < ZONE_COUNT; ++i) cfg.pins[i] = ZONES[i].btnPin;  // one per zone
+    cfg.count = ZONE_COUNT;
     return cfg;
 }
 
@@ -58,15 +58,23 @@ static ArduinoButtonInput   btnInput;
 static const Buttons::Config btnCfg = makeButtonConfig();
 static Buttons              buttons(btnInput, btnCfg);
 
-static constexpr uint8_t  STOP_BTN_IDX   = ZONE_COUNT;   // B3 sits just past the zone buttons
 // Placeholder default run length for a manual press. The per-zone stored default
 // (§11) comes from Persistence (§8) once #2.1 lands; until then every button run
 // uses this.
 static constexpr uint32_t BUTTON_RUN_SEC = 600;
 
+// Fault-clear success ack (DEC-006 / §12): when a long-press clearFault() takes, flash
+// every ring solid for this long so a held button never reads as a dead panel. The
+// complementary "held while latched-but-UNRESOLVED -> visible no-op" cue is gated on
+// the FaultManager resolved-condition signal (Phase 3/5); clearFault() today clears
+// unconditionally when faulted, so only the success ack ("was faulted, now cleared")
+// can fire now — it does NOT mean "the fault condition is gone".
+static constexpr uint32_t FAULT_ACK_MS  = 750;
+static uint32_t           faultAckUntilMs = 0;
+
 static DisplayTM1637 display;            // §12 panel; pushes only on content change
 
-// LED ring level (§11/§237): Solid -> on; Blink -> on during the blink phase; Off.
+// LED ring level (§11/§12): Solid -> on; Blink -> on during the blink phase; Off.
 static bool ledLevel(LedMode m, bool blinkOn) {
     return m == LedMode::Solid || (m == LedMode::Blink && blinkOn);
 }
@@ -87,9 +95,9 @@ void setup() {
     buttons.begin();              // configure the panel pins as inputs (§11)
     display.begin();              // TM1637 init + clear (§12)
 
-    // Button LED rings (§11/§237) are outputs (active-high via ULN2803); off at boot.
+    // Button LED rings (§11/§12) are outputs (active-high via ULN2803); off at boot.
+    // ZONE_COUNT now covers all three rings (LED3 is Zone 3's), so no separate handling.
     for (uint8_t z = 0; z < ZONE_COUNT; ++z) { pinMode(ZONES[z].ledPin, OUTPUT); digitalWrite(ZONES[z].ledPin, LOW); }
-    pinMode(LED3, OUTPUT); digitalWrite(LED3, LOW);
 
     // Watchdog handshake pins (§9). The heartbeat is emitted ONLY during active
     // runs (DEC-004) and the trip line is consumed by the Watchdog module — both
@@ -108,24 +116,32 @@ void loop() {
     runController.tick(now);   // sole actuator commander; ticks the ValveDriver too
     buttons.tick(now);         // debounce + edge detect (§11)
 
-    // §11 manual buttons. RunController owns the single-active invariant; we only map
-    // debounced edges onto it. B1/B2 press: start that zone if idle, else cancel the
-    // other run and start it (queued behind the unwind). Same-zone press is a no-op.
+    // §11 manual buttons (DEC-006). RunController owns the single-active invariant; we
+    // only map debounced edges onto it. One uniform policy for every zone button:
+    //   FAULT      -> short press is a no-op (only the long-press clears);
+    //   any run on -> any press STOPS it (no switching, no auto-start);
+    //   IDLE       -> press starts that button's own zone.
+    // A >=3 s long-press of any button clears a latched fault. A long hold fires
+    // pressEdge first, but in FAULT that press is a no-op, so it harmlessly precedes
+    // the clear 3 s later. clearFault() returns false unless actually faulted, so the
+    // ack (and the clear) only fire from a genuine latched fault.
     for (uint8_t z = 0; z < ZONE_COUNT; ++z) {
-        if (buttons.pressEdge(z) && runController.activeZone() != (int)z) {
-            runController.stop(now);
-            RunRequest req;
-            req.zoneIndex   = z;
-            req.durationSec = BUTTON_RUN_SEC;
-            req.fertigate   = false;
-            runController.requestRun(req, now);
+        if (buttons.pressEdge(z)) {
+            if (runController.isFaulted()) {
+                /* short press in FAULT: no-op (§11 / DEC-006) */
+            } else if (!runController.isIdle()) {
+                runController.stop(now);                  // any zone running -> stop
+            } else {
+                RunRequest req;
+                req.zoneIndex   = z;
+                req.durationSec = BUTTON_RUN_SEC;
+                req.fertigate   = false;
+                runController.requestRun(req, now);       // idle -> start this zone
+            }
         }
+        if (buttons.longPressEdge(z) && runController.clearFault())
+            faultAckUntilMs = now + FAULT_ACK_MS;         // §12 success ack
     }
-    // B3: short press = stop/cancel-all (no-op when idle/faulted); long press (≥3 s)
-    // = fault-clear. A long hold fires pressEdge first too, but stop() is a no-op in
-    // FAULT, so the harmless stop simply precedes the clear.
-    if (buttons.pressEdge(STOP_BTN_IDX))     runController.stop(now);
-    if (buttons.longPressEdge(STOP_BTN_IDX)) runController.clearFault();
 
     // §12 panel. Render the frame from controller state; the shim pushes to the
     // TM1637 only when it changes (bit-bang cost vs the tick budget). Clock isn't
@@ -137,14 +153,19 @@ void loop() {
     di.clockValid   = false;
     display.show(renderDisplay(di, now));
 
-    // LED rings: active zone solid; stop ring blinks on fault. digitalWrite is cheap,
-    // so drive every loop (no change-gate needed). Same 1 Hz phase as the display
-    // colon (one stretched blink at the ~49.7-day millis wrap — cosmetic).
+    // LED rings (DEC-006): active zone solid; ALL rings blink on fault (no dedicated
+    // stop ring); ALL rings flash solid briefly after a successful fault-clear (§12
+    // ack). digitalWrite is cheap, so drive every loop. Same 1 Hz phase as the display
+    // colon (one stretched blink at the ~49.7-day millis wrap — cosmetic). The ack
+    // window comparison is millis()-rollover safe via the signed difference.
     const bool blinkOn = (now / 500u) % 2u == 0u;
+    const bool ackOn   = (int32_t)(faultAckUntilMs - now) > 0;
     const int  az      = runController.activeZone();
-    for (uint8_t z = 0; z < ZONE_COUNT; ++z)
-        digitalWrite(ZONES[z].ledPin, ledLevel(zoneLedMode(az, z), blinkOn) ? HIGH : LOW);
-    digitalWrite(LED3, ledLevel(stopLedMode(runController.isFaulted()), blinkOn) ? HIGH : LOW);
+    const bool faulted = runController.isFaulted();
+    for (uint8_t z = 0; z < ZONE_COUNT; ++z) {
+        const LedMode m = ackOn ? LedMode::Solid : zoneLedMode(az, z, faulted);
+        digitalWrite(ZONES[z].ledPin, ledLevel(m, blinkOn) ? HIGH : LOW);
+    }
 
     // (scheduler / flow / web / watchdog tick here as they land)
 

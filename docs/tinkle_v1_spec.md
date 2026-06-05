@@ -140,10 +140,11 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - Holding draw ~18W while watering only (pump running anyway). Modest, intermittent, fine on solar.
 - **Continuous-duty coil required.** Reject the U.S. Solid general-purpose units here — they're rated under 8 hours energized and warn of coil burnout on continuous duty.
 
-**Zone valves** — Hunter PGV diaphragm body + **Hunter 458200 DC-latching solenoid**, ×2 (Red). **Selected.**
+**Zone valves** — Hunter PGV diaphragm body + **Hunter 458200 DC-latching solenoid**, ×2 (Red Tunnel) + ×1 (Zone 3 hose outlet, wired-now/plumbed-later). **Selected.**
 - Cheapest, most repairable, most locally-available irrigation valves; any supply house stocks them.
 - Latching: reversing pulse opens/closes; holds state with no power (correct for solar).
 - Pulse spec: ~9–12V reversing, ~50–100 ms → sets the zone-valve rail at **12V** and an H-bridge drive.
+- **Zone 3** is a general-purpose hose outlet, *separate* from the Red Tunnel's two zones (DEC-006): a third latching valve on its own H-bridge (Z3_IN1/IN2 = GPIO15/12, DEC-007). The board drives it now; the valve is installed when that hose line is plumbed.
 - Pilot-operated diaphragm → needs ~20+ psi to seal, which is why they live on the pump-pressure side, upstream of the regulator.
 - Fail *as-is* on power loss — but cannot pass water unless the master is also open and the pump live. Master + watchdog backstop this.
 
@@ -162,7 +163,7 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - Mounted at the east end of Red in a weatherproof enclosure.
 
 **Valve driver:** built for the three-tunnel future, populated for Red.
-- **Latching zone-valve channels:** **dedicated H-bridge per valve** — one DRV8871 (3.6A) wired straight to each valve, no multiplexing. Valves only pulse 50–100 ms and never together, so a shared+mux bridge would work, but at populate-3 dedicated is simpler to wire and reason about, and the chips are cheap. Build ~16 channels of headroom; populate **2** (Red zones).
+- **Latching zone-valve channels:** **dedicated H-bridge per valve** — one DRV8871 (3.6A) wired straight to each valve, no multiplexing. Valves only pulse 50–100 ms and never together, so a shared+mux bridge would work, but at populate-3 dedicated is simpler to wire and reason about, and the chips are cheap. Build ~16 channels of headroom; **3 channels wired now** — Z1/Z2 (Red, GPIO13/14, 16/17) + Z3 (hose outlet, GPIO15/12 strapping pins per DEC-007). Valves plumbed: 2 (Red) now, Z3 when its line goes in.
 - **Dosatron diverter channel:** one more latching/H-bridge channel for the 24VDC 3-way motorized valve. Populate **1** (shared across tunnels at full build, or one per tunnel — TBD).
 - **Master-valve channels:** low-side MOSFET switch (logic-level N-FET, e.g. IRLZ44N) for the NC solenoid. Build **3** (one per tunnel); populate **1**.
 - **Pump-enable channels:** relay (clean isolation for the ~5A pump) or MOSFET on pump power. Build **3**; populate **1**.
@@ -172,10 +173,10 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - This is the automated stand-in for the human who used to watch the hose.
 
 **Manual interface:**
-- **3× IP67 momentary buttons with LED rings** (Red live; two wired-and-waiting for future tunnels).
+- **3× IP67 momentary buttons with LED rings** — one per zone, all three live: Z1/Z2 (Red Tunnel) + Z3 (hose outlet). No dedicated stop button (DEC-006).
 - Button is an **input to the ESP32**, never wired across a valve — all watering paths stay under master + watchdog control.
-- Press = trigger a **timed run** of that tunnel for a stored default duration; the run auto-stops itself.
-- **Any** button press during an active run = cancel all.
+- Press while idle = trigger a **timed run** of that button's zone for a stored default duration; the run auto-stops itself.
+- **Any** button press during an active run = **stop** (cancel the run; no switch, no auto-start). A **≥3 s long-press of any button** clears a latched fault (DEC-006).
 - LED ring = "this tunnel is watering right now." That is the only status needed at the box.
 - **LED countdown display:** TM1637 4-digit module (~$3, 2-wire, drives off 2 GPIO). Shows **MM:SS countdown** of the active run via the colon. Read-only status only — config stays on the web page; cannot affect any watering path. 7-segment reads better in sun than LCD behind the clear lid.
   - *Hard line: countdown only. Do not let it grow into an on-box menu/UI.*

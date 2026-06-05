@@ -46,11 +46,15 @@ struct DisplayInputs {
 // TM1637_RT::displayPChar, whose encoder maps them 1:1; the colon rides the high bit.
 DisplayFrame renderDisplay(const DisplayInputs& in, uint32_t nowMs);
 
-// Button LED rings (§11 tail / §237): off = idle / that zone not running; solid =
+// Button LED rings (§11 tail / §12): off = idle / that zone not running; solid =
 // that zone running; slow blink = fault/attention. Mode only — the esp32 layer turns
 // Blink into an on/off level from millis().
+//
+// With the 3-button = 3-zone model (DEC-006) there is no dedicated stop ring, so the
+// fault/attention blink lives on the zone rings: while a fault is latched, every ring
+// blinks (the panel as a whole says "attention"), overriding the running/idle level.
 enum class LedMode : uint8_t { Off, Solid, Blink };
-LedMode zoneLedMode(int activeZone, uint8_t zoneIndex);   // Solid iff this zone is running
-LedMode stopLedMode(bool faulted);                        // Blink iff a fault is latched
+LedMode zoneLedMode(int activeZone, uint8_t zoneIndex, bool faulted);
+// Solid iff this zone is running; Blink (all rings) while faulted; else Off.
 
 } // namespace tinkle
