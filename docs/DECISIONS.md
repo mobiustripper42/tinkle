@@ -141,3 +141,27 @@ cosmetic boot-log — against build-for-three/populate-one).
 **Constraint:** **Nothing may pull GPIO12 high** — no external pull-up, no scope probe
 with a pull, nothing. Documented in the wiring doc §D so the next person doesn't brick
 boot without knowing why. (Supersedes the wiring doc's prior "no Z3 pins allocated.")
+
+## DEC-008: NVS persistence — per-zone-indexed keys, read-with-default, single schema_ver
+**Decision:** `Persistence` (§8) stores state as flat, prefixed keys in one `tinkle`
+Preferences namespace (`z<N>_dur`, `sw_max_sec`, `div_pos`), iterated over the runtime
+`zoneCount` (single source: `ValveConfig::MAX_ZONES` for capacity, the injected count for
+iteration — never a second constant), each read with a default. A single `schema_ver` int
+(=1) gates migrations.
+**Why:** Zones will be added after V1 (the controller is sized for three tunnels and grows
+from there). A fixed-width 3-zone struct blob would force a migration the moment a 4th zone
+lands; per-zone-indexed keys make a new zone "iterate further, default the missing key" —
+zero migration. `schema_ver` is what read-with-default *can't* give you: it distinguishes
+"key absent, fresh install" from "key absent, a transforming migration must run." Rule:
+additive changes (a new zone, a new defaulted scalar) are absorbed by read-with-default and
+**do not** bump `schema_ver`; only a field whose meaning/encoding changes does. NVS keys cap
+at 15 chars (Preferences silently truncates longer) — the `z<N>_dur` formatter is bounded at
+the source so a two-digit zone can never alias a sibling.
+**Scope (Phase 2.1 / #25):** ships the `IKeyValueStore` abstraction + `PreferencesStore`
+shim + `FakeKeyValueStore`, persisting the three scalars that exist today — per-zone default
+durations (retires the `BUTTON_RUN_SEC=600` placeholder in `main.cpp`), `swMaxRuntimeSec`,
+and cached diverter position — with write-on-change (a set to the current value touches no
+flash). Schedule entries (#27), Wi-Fi creds (Phase 4), the fault-log ring (#3/5), and
+`pulsesPerGallon` (Phase 3) are deferred hooks: each owning module persists through the same
+store with its own keys, deliberately not pre-carved here.
+**Supersedes:** the Session 3 note to "lock the NVS schema around `ZONE_COUNT=3`."

@@ -6,7 +6,9 @@
 #include "../core/loop_monitor.h"
 #include "../core/buttons.h"
 #include "../core/display.h"
+#include "../core/persistence.h"
 #include "display_tm1637.h"
+#include "preferences_store.h"
 
 // Tinkle ESP32 firmware — entry point and the cooperative non-blocking loop
 // (firmware spec §2). On boot RunController::begin forces the fail-dry safe state
@@ -42,6 +44,12 @@ static ValveDriver       valve(gpio, valveCfg);
 static const RunConfig   runCfg;                  // firmware spec §15 defaults
 static RunController      runController(valve, runCfg);
 
+// Persistence (§8 / DEC-008). Owns the per-zone manual default durations, swMaxRuntimeSec,
+// and cached diverter position in NVS, keyed for forward-compat as zones grow. begin()
+// runs in setup() after the store opens; reads fall back to defaults on empty NVS.
+static PreferencesStore  prefsStore;
+static Persistence       persistence(prefsStore, ZONE_COUNT);
+
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
 // loop(); the panel module only produces clean debounced edges.
@@ -57,11 +65,6 @@ static Buttons::Config makeButtonConfig() {
 static ArduinoButtonInput   btnInput;
 static const Buttons::Config btnCfg = makeButtonConfig();
 static Buttons              buttons(btnInput, btnCfg);
-
-// Placeholder default run length for a manual press. The per-zone stored default
-// (§11) comes from Persistence (§8) once #2.1 lands; until then every button run
-// uses this.
-static constexpr uint32_t BUTTON_RUN_SEC = 600;
 
 // Fault-clear success ack (DEC-006 / §12): when a long-press clearFault() takes, flash
 // every ring solid for this long so a held button never reads as a dead panel. The
@@ -92,6 +95,12 @@ void setup() {
     // begin() configures every actuator pin as an output and drives the fail-dry
     // safe sequence through ValveDriver (pump off -> zones closed -> master closed).
     runController.begin(millis());
+
+    // Open NVS and load stored config (§8 / DEC-008) before the loop can act on it:
+    // per-zone default durations feed manual-button runs; empty NVS falls back to defaults.
+    prefsStore.begin();
+    persistence.begin();
+
     buttons.begin();              // configure the panel pins as inputs (§11)
     display.begin();              // TM1637 init + clear (§12)
 
@@ -134,7 +143,7 @@ void loop() {
             } else {
                 RunRequest req;
                 req.zoneIndex   = z;
-                req.durationSec = BUTTON_RUN_SEC;
+                req.durationSec = persistence.zoneDefaultSec(z);   // stored per-zone default (§8)
                 req.fertigate   = false;
                 runController.requestRun(req, now);       // idle -> start this zone
             }

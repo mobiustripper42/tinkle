@@ -160,6 +160,15 @@ Survives reboot and power loss:
 
 Write-on-change, not per-loop. Debounce writes.
 
+**Schema (DEC-008):** flat prefixed keys in one `tinkle` namespace, **not** a packed blob —
+per-zone state uses zone-indexed keys (`z<N>_dur`) iterated over the runtime `zoneCount` and
+read-with-default, so adding a zone post-V1 needs no migration. A single `schema_ver` int
+gates *transforming* migrations only; additive fields (new zone, new defaulted scalar) do
+not bump it. NVS keys cap at 15 chars (silent truncation) — key names are bounded at the
+source. Phase 2.1 (#25) persists the scalars that exist today (per-zone default durations,
+`swMaxRuntimeSec`, cached diverter position); the rest of this list is filled by its owning
+module through the same store as that module lands.
+
 ---
 
 ## 9. Watchdog handshake (`Watchdog` + ATtiny85)
