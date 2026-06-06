@@ -170,13 +170,16 @@ source. Phase 2.1 (#25) persists the scalars that exist today (per-zone default 
 `swMaxRuntimeSec`, cached diverter position); the rest of this list is filled by its owning
 module through the same store as that module lands.
 
-**Cached diverter position wired (#28):** the stored position is now restored into
-`ValveDriver` at boot (`assumeDiverter()`, no motor travel) and written back on change via a
-write-on-change poll in `main.cpp`'s loop. A motorized ball valve holds position with no
-power, so the cache is physically true across a clean reboot — the first run skips the 6 s
-travel when the position already matches. A stale cache only mis-routes one run; the master
-FET, not the diverter, gates water, so this never holds water on. (`swMaxRuntimeSec` is still
-stored-not-read-back until RunController gains runtime config in Phase 4.)
+**Cached diverter position wired (#28):** the stored position is restored into `ValveDriver`
+at boot (`assumeDiverter()`, no motor travel) and written back **once travel completes**
+(`!diverterBusy()` poll in `main.cpp`) so NVS records the position actually reached, not one
+merely commanded. A motorized ball valve holds position with no power, so the cache is
+physically true across a clean reboot — the first run skips the 6 s travel when the position
+already matches. Residual edge: a power loss *during* the 6 s travel strands the valve
+mid-stroke regardless of NVS, so the next matching run may skip travel and mis-route once;
+this never holds water on (the master FET, not the diverter, gates water) — accepted for V1.
+(`swMaxRuntimeSec` is still stored-not-read-back until RunController gains runtime config in
+Phase 4.)
 
 ---
 

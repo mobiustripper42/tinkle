@@ -208,11 +208,15 @@ void loop() {
         digitalWrite(ZONES[z].ledPin, ledLevel(m, blinkOn) ? HIGH : LOW);
     }
 
-    // Persist the diverter position on change (§6/§8). RunController is the sole commander,
-    // so observing the cached position here and pushing it to NVS keeps the run path free of
-    // a Persistence dependency. Write-on-change makes this a no-op every tick the position
-    // hasn't moved — no flash churn.
-    if (valve.diverterKnown())
+    // Persist the diverter position once travel COMPLETES (§6/§8). Observing it here keeps
+    // the run path free of a Persistence dependency (RunController is the sole commander).
+    // Gating on !diverterBusy() records the position the valve actually *reached*, not the
+    // one merely commanded — so a power loss mid-travel doesn't leave NVS claiming a
+    // destination the valve never made. Write-on-change down in Persistence guards flash, so
+    // this is a no-op write every settled tick. (Residual edge: a power loss mid-travel
+    // strands the valve mid-stroke regardless of NVS; the next matching run may skip travel
+    // and mis-route once. Never holds water on — the master FET gates water. Accepted, V1.)
+    if (valve.diverterKnown() && !valve.diverterBusy())
         persistence.setDiverterPosition(valve.diverterThrough());
 
     // (flow / web / watchdog tick here as they land)
