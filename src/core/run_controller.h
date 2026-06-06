@@ -36,6 +36,16 @@ struct RunRequest {
     bool     fertigate   = false;
 };
 
+// The enqueue seam. RunController implements it; callers that only *request* runs
+// (Scheduler §13, the web API §10) depend on this narrow interface, not the whole state
+// machine — and host tests drive a fake sink that records requests and can simulate a
+// full-queue rejection. requestRun returns false when the run is refused (bad request,
+// full queue, or a latched fault).
+struct IRunSink {
+    virtual bool requestRun(const RunRequest& req, uint32_t nowMs) = 0;
+    virtual ~IRunSink() = default;
+};
+
 // Outcome of the most recent run, for logging / status (§4 step 9). Gallons are
 // filled by FlowMonitor later (§7); 0 until then.
 struct RunSummary {
@@ -53,7 +63,7 @@ struct RunConfig {
     uint32_t swMaxRuntimeSec = 1200;   // §15 software ceiling; caps any single run
 };
 
-class RunController {
+class RunController : public IRunSink {
 public:
     RunController(ValveDriver& valve, const RunConfig& cfg);
 
@@ -65,7 +75,7 @@ public:
     // Request a run. Starts immediately if IDLE, else queues (up to MAX_QUEUE).
     // Rejects (returns false) on a bad zone/duration, a full queue, or while a
     // fault is latched.
-    bool requestRun(const RunRequest& req, uint32_t nowMs);
+    bool requestRun(const RunRequest& req, uint32_t nowMs) override;
 
     // Graceful cancel of the active run + queue: unwind STOP_PUMP -> CLOSE_ZONE
     // -> CLOSE_MASTER -> SETTLE -> IDLE from any active step (§4). No-op if idle.

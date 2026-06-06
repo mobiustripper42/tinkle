@@ -195,3 +195,34 @@ to the display's `clockValid`/HH:MM in `main.cpp` (retires the hardcoded `false`
 `wall()`/`epoch()` and a `minuteRolled()` per-minute edge for the Scheduler's per-minute
 eval (#27). `configTzTime` is called in `setup()` for now; Phase 4 relocates/​re-invokes it
 on the WiFi-join event per §13.
+
+---
+
+## DEC-010: Scheduler — IRunSink seam, minute-keyed idempotent eval, entries not yet persisted
+**Decision:** `Scheduler` (§13) is in-memory core that evaluates entries on each new **local
+minute** from the `Clock`. Three calls:
+- **`IRunSink` seam:** callers that only *request* runs (Scheduler, and the Phase 4 web API)
+  depend on a narrow `IRunSink { requestRun() }` interface; `RunController` implements it.
+  Overlap is **not** the scheduler's problem — `RunController` already queues sequential runs
+  and rejects when full (§4); a due run that can't enqueue is dropped and counted (§13).
+- **Idempotent eval:** evaluation is keyed on the absolute local minute (`epoch/60`) and is
+  **forward-only** (`curMin <= lastEvalMin_` skips) — each minute is evaluated at most once,
+  ever. This drops the DEC-009 hourly-resync backward nudge even when it steps across a minute
+  boundary into an already-run minute (an `==` guard would miss that). `evalNow()` re-arms the
+  key to cover "on edit" (§13).
+- **Fert policy (§6):** the first `Auto` run of each calendar day fertigates; the daily slot
+  is consumed **only on a successful enqueue** (a queue-full rejection doesn't burn the day's
+  fert). `On`/`Off` overrides force the diverter state and bypass the slot.
+**Why:** The `IRunSink` seam matches the project's injection idiom (`IGpio`/`IKeyValueStore`/
+`IWallClock`) and lets the scheduler's eval + fert + overlap logic be host-tested against a
+fake sink, in isolation from the run state machine. Keeping overlap in `RunController` avoids
+a second queue with its own bugs.
+**Deferred — entry persistence:** schedule entries are held in RAM only. There is no editor
+until the Phase 4 web config API, so there is nothing to persist; that API will own
+save-on-edit and mirror entries to NVS through the Persistence store's own keys (DEC-008).
+The §13 entry model + engine land now (`add`/`clear`/`count`/`entry`); the NVS keys land with
+the thing that edits them.
+**Scope (Phase 2.3 / #27):** `Scheduler` core + a `FakeRunSink`, `MAX_ENTRIES=16`, wired into
+the loop in `main.cpp` (no-op until the schedule is populated and the clock is valid). Fert
+**actuation** still flows through `RunController`'s existing diverter handling; #28 layers any
+remaining fert-policy nuance on top.

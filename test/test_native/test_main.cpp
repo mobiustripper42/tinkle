@@ -10,6 +10,7 @@
 #include "display.h"
 #include "persistence.h"
 #include "clock.h"
+#include "scheduler.h"
 
 // Native unit tests for ValveDriver (firmware spec §5). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -1088,6 +1089,168 @@ void test_clock_minute_rolled_edge() {
     TEST_ASSERT_FALSE(c.minuteRolled(50000));// 46:something, same minute
 }
 
+// --- Scheduler (firmware spec §13 + §6 / DEC-009) --------------------------------
+// Fake run sink: records every accepted request and can simulate a full-queue rejection,
+// so the scheduler's eval / fert / overlap logic is tested in isolation from the run state
+// machine.
+struct FakeRunSink : tinkle::IRunSink {
+    std::vector<tinkle::RunRequest> reqs;
+    bool accept = true;
+    bool requestRun(const tinkle::RunRequest& r, uint32_t) override {
+        if (!accept) return false;
+        reqs.push_back(r);
+        return true;
+    }
+};
+
+using tinkle::Scheduler;
+using tinkle::ScheduleEntry;
+using tinkle::FertOverride;
+using tinkle::epochFromCivil;
+
+// A clock pinned to a given local epoch (anchored at ms=0, so epoch advances with nowMs).
+// Returned by value into a holder the tests keep alive.
+static ScheduleEntry mkEntry(uint8_t zone, uint8_t hh, uint8_t mm, uint8_t daysMask,
+                             uint16_t dur = 300, FertOverride f = FertOverride::Auto) {
+    ScheduleEntry e;
+    e.zoneIndex = zone; e.hour = hh; e.minute = mm; e.daysMask = daysMask;
+    e.durationSec = dur; e.fertOverride = f; e.enabled = true;
+    return e;
+}
+
+// 2026-06-08 is a Monday (2026-06-06 was Saturday). Mon weekday = 1, bit 0x02.
+static constexpr uint8_t MON_BIT = 1u << 1;
+static constexpr uint8_t DAILY   = 0x7F;
+
+void test_sched_fires_due_entry() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 6, 0, 0);   // Monday 06:00
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c);
+    s.add(mkEntry(2, 6, 0, MON_BIT, 420));
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(1, (int)sink.reqs.size());
+    TEST_ASSERT_EQUAL_UINT8(2, sink.reqs[0].zoneIndex);
+    TEST_ASSERT_EQUAL_UINT32(420, sink.reqs[0].durationSec);
+}
+
+void test_sched_skips_wrong_minute_day_disabled() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 6, 1, 0);   // Monday 06:01
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c);
+    s.add(mkEntry(0, 6, 0, MON_BIT));                     // wrong minute (06:00 vs 06:01)
+    s.add(mkEntry(1, 6, 1, 1u << 2));                     // right time, Tuesday-only -> wrong day
+    ScheduleEntry off = mkEntry(2, 6, 1, MON_BIT); off.enabled = false;
+    s.add(off);                                           // right time/day but disabled
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(0, (int)sink.reqs.size());
+}
+
+void test_sched_invalid_clock_no_fire() {
+    FakeWallClock src;                                    // unavailable -> clock invalid
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c);
+    s.add(mkEntry(0, 6, 0, DAILY));
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(0, (int)sink.reqs.size());
+}
+
+void test_sched_idempotent_within_minute() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 6, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c);
+    s.add(mkEntry(0, 6, 0, MON_BIT));
+    s.tick(0);
+    s.tick(100);        // same minute, 0.1 s later
+    s.tick(59000);      // still 06:00
+    TEST_ASSERT_EQUAL_INT(1, (int)sink.reqs.size());   // evaluated once for the minute
+    // Advance into 06:01, then a DEC-009 sub-second backward nudge to 06:00:59. Forward-only
+    // eval must NOT re-fire 06:00 (the previous minute), which a == guard would have missed.
+    s.add(mkEntry(1, 6, 1, MON_BIT));
+    s.tick(60000);      // 06:01 -> zone 1 fires
+    TEST_ASSERT_EQUAL_INT(2, (int)sink.reqs.size());
+    s.tick(59900);      // nudged back to 06:00:59 -> must be a no-op
+    TEST_ASSERT_EQUAL_INT(2, (int)sink.reqs.size());
+}
+
+void test_sched_fert_first_run_of_day() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 6, 0, 0);   // Monday 06:00
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c);
+    s.add(mkEntry(0, 6, 0, DAILY));                      // first auto run of the day
+    s.add(mkEntry(1, 6, 5, DAILY));                      // second auto run, +5 min
+    s.tick(0);                                           // 06:00 -> zone 0
+    s.tick(5u * 60u * 1000u);                            // 06:05 -> zone 1
+    TEST_ASSERT_EQUAL_INT(2, (int)sink.reqs.size());
+    TEST_ASSERT_TRUE(sink.reqs[0].fertigate);            // first auto run fertigates
+    TEST_ASSERT_FALSE(sink.reqs[1].fertigate);           // the rest don't
+    // Next calendar day: the auto-fert slot resets.
+    s.tick(86400u * 1000u);                              // Tuesday 06:00 -> zone 0 again
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());
+    TEST_ASSERT_TRUE(sink.reqs[2].fertigate);
+}
+
+void test_sched_fert_overrides() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 6, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c);
+    s.add(mkEntry(0, 6, 0, DAILY, 300, FertOverride::Off));   // first run, but forced off
+    s.add(mkEntry(1, 6, 0, DAILY, 300, FertOverride::On));    // forced on
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(2, (int)sink.reqs.size());
+    TEST_ASSERT_FALSE(sink.reqs[0].fertigate);   // Off forces no fert despite being first
+    TEST_ASSERT_TRUE(sink.reqs[1].fertigate);    // On forces fert
+}
+
+void test_sched_dropped_on_full_queue() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 6, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink; sink.accept = false;       // sink refuses every run (queue full / fault)
+    Scheduler s(sink, c);
+    s.add(mkEntry(0, 6, 0, DAILY));
+    s.add(mkEntry(1, 6, 0, DAILY));
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(0, (int)sink.reqs.size());
+    TEST_ASSERT_EQUAL_UINT32(2, s.dropped());
+}
+
+void test_sched_eval_now_on_edit() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 6, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c);
+    s.tick(0);                                   // empty schedule -> nothing
+    TEST_ASSERT_EQUAL_INT(0, (int)sink.reqs.size());
+    s.add(mkEntry(0, 6, 0, MON_BIT));            // edit mid-minute
+    s.evalNow(0);                                // §13 "checks ... on edit" -> fires immediately
+    TEST_ASSERT_EQUAL_INT(1, (int)sink.reqs.size());
+}
+
+void test_sched_add_capacity() {
+    FakeWallClock src;
+    Clock c(src);
+    FakeRunSink sink;
+    Scheduler s(sink, c);
+    for (uint8_t i = 0; i < Scheduler::MAX_ENTRIES; ++i)
+        TEST_ASSERT_TRUE(s.add(mkEntry(0, 6, 0, DAILY)));
+    TEST_ASSERT_FALSE(s.add(mkEntry(0, 6, 0, DAILY)));        // full -> rejected
+    TEST_ASSERT_EQUAL_UINT8(Scheduler::MAX_ENTRIES, s.count());
+    s.clear();
+    TEST_ASSERT_EQUAL_UINT8(0, s.count());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -1151,5 +1314,15 @@ int main() {
     RUN_TEST(test_clock_locks_on_when_source_appears);
     RUN_TEST(test_clock_epoch_from_civil);
     RUN_TEST(test_clock_minute_rolled_edge);
+
+    RUN_TEST(test_sched_fires_due_entry);
+    RUN_TEST(test_sched_skips_wrong_minute_day_disabled);
+    RUN_TEST(test_sched_invalid_clock_no_fire);
+    RUN_TEST(test_sched_idempotent_within_minute);
+    RUN_TEST(test_sched_fert_first_run_of_day);
+    RUN_TEST(test_sched_fert_overrides);
+    RUN_TEST(test_sched_dropped_on_full_queue);
+    RUN_TEST(test_sched_eval_now_on_edit);
+    RUN_TEST(test_sched_add_capacity);
     return UNITY_END();
 }

@@ -298,6 +298,7 @@ struct ScheduleEntry {
 ```
 
 - `Scheduler` checks once per minute (and on edit) for due entries, enqueues runs, applies the fert policy (§6), and prevents overlap by queueing. A run that would collide with an active run waits, with a max queue depth; drop + log if exceeded.
+- **Implemented (#27 / DEC-010):** in-memory `Scheduler` (core) evaluates entries on each new local minute via the `Clock`, keyed on the absolute minute so it runs at most once per minute (idempotent against the DEC-009 resync nudge); `evalNow()` covers "on edit." Due runs are enqueued through the narrow `IRunSink` seam (`RunController` implements it) and dropped+counted when refused — overlap is the `RunController` queue's job, not the scheduler's. Fert policy (§6): the first **auto** run of each calendar day fertigates, the slot consumed only on a successful enqueue; `On`/`Off` overrides bypass the slot. Schedule entries are **not persisted yet** — deferred to the Phase 4 web editor that will own save-on-edit and mirror them to NVS (DEC-008).
 
 ---
 
