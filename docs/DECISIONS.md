@@ -165,3 +165,33 @@ flash). Schedule entries (#27), Wi-Fi creds (Phase 4), the fault-log ring (#3/5)
 `pulsesPerGallon` (Phase 3) are deferred hooks: each owning module persists through the same
 store with its own keys, deliberately not pre-carved here.
 **Supersedes:** the Session 3 note to "lock the NVS schema around `ZONE_COUNT=3`."
+
+---
+
+## DEC-009: Clock — local-epoch seam, timezone/DST in the ESP32 shim, hourly resync
+**Decision:** `Clock` (§13) is platform-independent core over an injected `IWallClock`
+seam whose contract is **local epoch seconds** — UTC already offset for the farm's
+timezone and DST. The ESP32 binding (`SystemClock`, `src/esp32/system_clock.h`) owns all
+of that: `configTzTime` installs a POSIX TZ rule (`EST5EDT,M3.2.0/2,M11.1.0/2`) + the
+SNTP servers, `localtime_r` applies it, and the local broken-down fields are re-packed
+into a local epoch via the pure, host-tested `epochFromCivil` (ESP32 newlib omits
+`tm_gmtoff`, so adding an offset isn't an option). Core's only jobs: anchor an
+authoritative reading to a `millis()` instant and **free-run** between reads
+(`epoch = anchor + (millis()-anchorMs)`), track `valid()` (synced ≥ once since boot) for
+the display's `clockValid`, and derive local HH:MM + weekday. Polling is throttled — brisk
+(1 s) until lock-on so the clock snaps valid soon after WiFi appears, then a 1 h re-anchor
+so the free-run path is genuinely exercised and NTP corrects its drift.
+**Why:** Keeping timezone/DST in the shim leaves the core a pure epoch→fields derivation
+with no timezone database — fully host-testable with a fake source and explicit epochs,
+and the future DS3231 RTC drops in as just another `IWallClock` with no core change (§13
+"clean seam"). `configTzTime` handles DST transitions automatically, avoiding a fixed
+offset that would be an hour wrong half the year.
+**Limitation (accepted):** a DST flip while the network is **down** is not reflected until
+the next resync re-anchors — sub-hour, on a clock whose drift §13 already calls
+"acceptable for irrigation." Before the first NTP sync the wall clock is unknown:
+`valid()` is false and the display holds "--:--" (matching boot behavior).
+**Scope (Phase 2.2 / #26):** `Clock` core + `SystemClock` shim + a `FakeWallClock`, wired
+to the display's `clockValid`/HH:MM in `main.cpp` (retires the hardcoded `false`). Exposes
+`wall()`/`epoch()` and a `minuteRolled()` per-minute edge for the Scheduler's per-minute
+eval (#27). `configTzTime` is called in `setup()` for now; Phase 4 relocates/​re-invokes it
+on the WiFi-join event per §13.

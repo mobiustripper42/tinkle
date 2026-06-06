@@ -7,8 +7,10 @@
 #include "../core/buttons.h"
 #include "../core/display.h"
 #include "../core/persistence.h"
+#include "../core/clock.h"
 #include "display_tm1637.h"
 #include "preferences_store.h"
+#include "system_clock.h"
 
 // Tinkle ESP32 firmware — entry point and the cooperative non-blocking loop
 // (firmware spec §2). On boot RunController::begin forces the fail-dry safe state
@@ -49,6 +51,12 @@ static RunController      runController(valve, runCfg);
 // runs in setup() after the store opens; reads fall back to defaults on empty NVS.
 static PreferencesStore  prefsStore;
 static Persistence       persistence(prefsStore, ZONE_COUNT);
+
+// Clock (§13 / DEC-009). NTP sync + free-running millis() fallback behind the SystemClock
+// shim (the only SNTP/timezone code). valid() drives the display's clockValid; until NTP
+// lands (no WiFi before Phase 4) it stays false and the panel holds "--:--".
+static SystemClock       systemClock;
+static Clock             wallClock(systemClock);
 
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
@@ -101,6 +109,11 @@ void setup() {
     prefsStore.begin();
     persistence.begin();
 
+    // Configure TZ + SNTP and take the first sync attempt (§13). No network yet, so this
+    // stays invalid until Phase 4 brings up WiFi; the call is harmless until then.
+    systemClock.begin();
+    wallClock.begin(millis());
+
     buttons.begin();              // configure the panel pins as inputs (§11)
     display.begin();              // TM1637 init + clear (§12)
 
@@ -124,6 +137,7 @@ void loop() {
 
     runController.tick(now);   // sole actuator commander; ticks the ValveDriver too
     buttons.tick(now);         // debounce + edge detect (§11)
+    wallClock.tick(now);       // poll NTP / free-run the wall clock (§13)
 
     // §11 manual buttons (DEC-006). RunController owns the single-active invariant; we
     // only map debounced edges onto it. One uniform policy for every zone button:
@@ -153,13 +167,16 @@ void loop() {
     }
 
     // §12 panel. Render the frame from controller state; the shim pushes to the
-    // TM1637 only when it changes (bit-bang cost vs the tick budget). Clock isn't
-    // wired yet (#2.2), so idle shows "--:--".
+    // TM1637 only when it changes (bit-bang cost vs the tick budget). The idle clock
+    // shows HH:MM once NTP syncs, "--:--" until then (§13).
+    const WallTime wt = wallClock.wall(now);
     DisplayInputs di;
     di.state        = runController.state();
     di.fault        = runController.activeFault();
     di.remainingSec = runController.remainingSec(now);
-    di.clockValid   = false;
+    di.clockValid   = wallClock.valid();
+    di.hours        = wt.hour;
+    di.minutes      = wt.minute;
     display.show(renderDisplay(di, now));
 
     // LED rings (DEC-006): active zone solid; ALL rings blink on fault (no dedicated

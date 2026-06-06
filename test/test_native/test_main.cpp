@@ -9,6 +9,7 @@
 #include "buttons.h"
 #include "display.h"
 #include "persistence.h"
+#include "clock.h"
 
 // Native unit tests for ValveDriver (firmware spec §5). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -958,6 +959,131 @@ void test_persist_zone_bounds() {
     TEST_ASSERT_EQUAL_INT(0, s.writesTo("z7_dur"));
 }
 
+// --- Clock (firmware spec §13 / DEC-009) -----------------------------------------
+// Fake wall-clock source: availability + the LOCAL epoch it reports are driven by the
+// test. Counts polls so the resync throttle is a tested property. The core never sees
+// real time — every value is explicit.
+struct FakeWallClock : tinkle::IWallClock {
+    bool     available = false;
+    uint32_t epochVal  = 0;
+    int      polls     = 0;
+    bool localEpoch(uint32_t& out) override {
+        ++polls;
+        if (!available) return false;
+        out = epochVal;
+        return true;
+    }
+};
+
+using tinkle::Clock;
+using tinkle::WallTime;
+
+// A known local epoch: day 1 (1970-01-02, a Friday) at 13:45:30.
+//   day 0 = 1970-01-01 = Thursday -> weekday (1+4)%7 = 5 = Friday.
+static constexpr uint32_t EPOCH_FRI_1345 = 1u*86400u + 13u*3600u + 45u*60u + 30u;
+
+void test_clock_invalid_until_sync() {
+    FakeWallClock src;                       // unavailable
+    Clock c(src);
+    c.begin(0);
+    TEST_ASSERT_FALSE(c.valid());
+    TEST_ASSERT_EQUAL_UINT32(0, c.epoch(0));
+    WallTime w = c.wall(0);
+    TEST_ASSERT_EQUAL_UINT8(0, w.hour);      // zeroed while invalid
+    TEST_ASSERT_FALSE(c.minuteRolled(0));    // no per-minute edge until synced
+}
+
+void test_clock_syncs_and_derives_fields() {
+    FakeWallClock src;
+    src.available = true;
+    src.epochVal  = EPOCH_FRI_1345;
+    Clock c(src);
+    c.begin(5000);
+    TEST_ASSERT_TRUE(c.valid());
+    WallTime w = c.wall(5000);
+    TEST_ASSERT_EQUAL_UINT8(13, w.hour);
+    TEST_ASSERT_EQUAL_UINT8(45, w.minute);
+    TEST_ASSERT_EQUAL_UINT8(30, w.second);
+    TEST_ASSERT_EQUAL_UINT8(5,  w.weekday);  // Friday
+}
+
+void test_clock_freeruns_between_syncs() {
+    FakeWallClock src;
+    src.available = true;
+    src.epochVal  = EPOCH_FRI_1345;
+    Clock c(src);
+    c.begin(1000);                           // anchor {EPOCH, ms=1000}
+    src.available = false;                   // network drops; only free-run remains
+    // 90 s of millis later, wall time has advanced 90 s purely from millis().
+    TEST_ASSERT_EQUAL_UINT32(EPOCH_FRI_1345 + 90, c.epoch(1000 + 90000));
+    WallTime w = c.wall(1000 + 90000);
+    TEST_ASSERT_EQUAL_UINT8(13, w.hour);
+    TEST_ASSERT_EQUAL_UINT8(47, w.minute);   // 45:30 + 90 s = 47:00
+}
+
+void test_clock_resync_throttled_then_corrects() {
+    FakeWallClock src;
+    src.available = true;
+    src.epochVal  = EPOCH_FRI_1345;
+    Clock c(src);
+    c.begin(0);                              // synced, anchor at ms=0
+    // Source jumps (an NTP correction). Within the resync interval, free-run ignores it.
+    src.epochVal = EPOCH_FRI_1345 + 100;
+    c.tick(1000);
+    TEST_ASSERT_EQUAL_UINT32(EPOCH_FRI_1345 + 1, c.epoch(1000));   // free-run, not the jump
+    // At the hourly boundary the clock re-anchors to the source, correcting drift.
+    c.tick(Clock::RESYNC_INTERVAL_MS);
+    TEST_ASSERT_EQUAL_UINT32(EPOCH_FRI_1345 + 100, c.epoch(Clock::RESYNC_INTERVAL_MS));
+}
+
+void test_clock_locks_on_when_source_appears() {
+    FakeWallClock src;                       // unavailable at boot
+    Clock c(src);
+    c.begin(0);
+    TEST_ASSERT_FALSE(c.valid());
+    int pollsAfterBegin = src.polls;
+    // Source comes up (WiFi/NTP lands). A poll before the retry interval is throttled out.
+    src.available = true;
+    src.epochVal  = EPOCH_FRI_1345;
+    c.tick(Clock::ATTEMPT_INTERVAL_MS - 1);
+    TEST_ASSERT_EQUAL_INT(pollsAfterBegin, src.polls);   // no extra poll yet
+    TEST_ASSERT_FALSE(c.valid());
+    // At the retry interval it polls again and locks on.
+    c.tick(Clock::ATTEMPT_INTERVAL_MS);
+    TEST_ASSERT_TRUE(c.valid());
+}
+
+void test_clock_epoch_from_civil() {
+    // The packing the ESP32 shim leans on (localtime_r fields -> local epoch). Round-trips
+    // the known fixture and a present-day date, and stays consistent with wall()'s inverse.
+    using tinkle::epochFromCivil;
+    TEST_ASSERT_EQUAL_UINT32(EPOCH_FRI_1345, epochFromCivil(1970, 1, 2, 13, 45, 30));
+    TEST_ASSERT_EQUAL_UINT32(0u,             epochFromCivil(1970, 1, 1, 0, 0, 0));
+    // 2026-06-06 12:37:06 -> feed it back through a Clock and read the fields out.
+    FakeWallClock src;
+    src.available = true;
+    src.epochVal  = epochFromCivil(2026, 6, 6, 12, 37, 6);
+    Clock c(src);
+    c.begin(0);
+    WallTime w = c.wall(0);
+    TEST_ASSERT_EQUAL_UINT8(12, w.hour);
+    TEST_ASSERT_EQUAL_UINT8(37, w.minute);
+    TEST_ASSERT_EQUAL_UINT8(6,  w.weekday);   // 2026-06-06 is a Saturday
+}
+
+void test_clock_minute_rolled_edge() {
+    FakeWallClock src;
+    src.available = true;
+    src.epochVal  = EPOCH_FRI_1345;          // ...:45:30
+    Clock c(src);
+    c.begin(0);
+    TEST_ASSERT_TRUE(c.minuteRolled(0));     // first call after sync fires (eval at startup)
+    TEST_ASSERT_FALSE(c.minuteRolled(20000));// same minute, 20 s later -> no edge
+    // 30 s more crosses the minute boundary (45:30 -> 46:00).
+    TEST_ASSERT_TRUE(c.minuteRolled(35000));
+    TEST_ASSERT_FALSE(c.minuteRolled(50000));// 46:something, same minute
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -1013,5 +1139,13 @@ int main() {
     RUN_TEST(test_persist_write_on_change);
     RUN_TEST(test_persist_diverter_tristate);
     RUN_TEST(test_persist_zone_bounds);
+
+    RUN_TEST(test_clock_invalid_until_sync);
+    RUN_TEST(test_clock_syncs_and_derives_fields);
+    RUN_TEST(test_clock_freeruns_between_syncs);
+    RUN_TEST(test_clock_resync_throttled_then_corrects);
+    RUN_TEST(test_clock_locks_on_when_source_appears);
+    RUN_TEST(test_clock_epoch_from_civil);
+    RUN_TEST(test_clock_minute_rolled_edge);
     return UNITY_END();
 }
