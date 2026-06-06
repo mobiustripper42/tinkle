@@ -9,10 +9,13 @@ uint32_t epochFromCivil(int y, unsigned m, unsigned d,
     y -= (m <= 2);
     const int      era = (y >= 0 ? y : y - 399) / 400;
     const unsigned yoe = static_cast<unsigned>(y - era * 400);              // [0, 399]
-    const unsigned doy = (153u * (m + (m > 2 ? -3u : 9u)) + 2u) / 5u + d - 1u;
+    const unsigned doy = (153u * (m + (m > 2 ? -3u : 9u)) + 2u) / 5u + d - 1u;   // unsigned wrap is intentional (Hinnant)
     const unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;          // [0, 146096]
     const long     days = static_cast<long>(era) * 146097 + static_cast<long>(doe) - 719468;
-    return static_cast<uint32_t>(days * 86400 + hh * 3600 + mm * 60 + ss);
+    // Cast days to uint32_t before scaling: on the ESP32 `long` is 32-bit, so `days*86400`
+    // would overflow the SIGNED intermediate (UB) by ~2038 even though the uint32_t result
+    // only wraps in 2106. Days is non-negative for the supported 1970..2105 range.
+    return static_cast<uint32_t>(days) * 86400u + hh * 3600u + mm * 60u + ss;
 }
 
 Clock::Clock(IWallClock& src) : src_(src) {}

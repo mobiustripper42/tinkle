@@ -72,8 +72,13 @@ public:
     WallTime wall(uint32_t nowMs)  const;             // zeroed if !valid — gate on valid()
 
     // True once per local-minute boundary — the scheduler's per-minute eval edge (§13, #27).
-    // Fires on the first call after sync (eval at startup) and once each time the minute
-    // changes. Always false until valid(). Stateful: mutates the last-seen minute.
+    // Fires on the first call after sync (eval at startup) and whenever the minute differs
+    // from the last seen. Always false until valid(). Stateful: mutates the last-seen minute.
+    //
+    // CONTRACT (#27): an hourly NTP resync can step the epoch backward by a sub-second
+    // drift correction, so this can fire an extra time around a minute boundary. We do NOT
+    // clamp the clock forward — tracking truth matters more — so the scheduler must be
+    // idempotent per (entry, minute): a re-eval of an already-started run must be a no-op.
     bool minuteRolled(uint32_t nowMs);
 
 private:

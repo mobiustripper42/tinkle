@@ -1059,6 +1059,10 @@ void test_clock_epoch_from_civil() {
     using tinkle::epochFromCivil;
     TEST_ASSERT_EQUAL_UINT32(EPOCH_FRI_1345, epochFromCivil(1970, 1, 2, 13, 45, 30));
     TEST_ASSERT_EQUAL_UINT32(0u,             epochFromCivil(1970, 1, 1, 0, 0, 0));
+    // Leap-day boundary — the civil-arithmetic edge most likely to be wrong. 2024 is a leap
+    // year, so 2024-02-29 is a real date; the day after is 2024-03-01, exactly 86400 s later.
+    TEST_ASSERT_EQUAL_UINT32(epochFromCivil(2024, 2, 29, 0, 0, 0) + 86400u,
+                             epochFromCivil(2024, 3, 1, 0, 0, 0));
     // 2026-06-06 12:37:06 -> feed it back through a Clock and read the fields out.
     FakeWallClock src;
     src.available = true;
