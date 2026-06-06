@@ -165,6 +165,10 @@ flash). Schedule entries (#27), Wi-Fi creds (Phase 4), the fault-log ring (#3/5)
 `pulsesPerGallon` (Phase 3) are deferred hooks: each owning module persists through the same
 store with its own keys, deliberately not pre-carved here.
 **Supersedes:** the Session 3 note to "lock the NVS schema around `ZONE_COUNT=3`."
+**Update (#28):** the deferred *cached diverter position* wiring landed — boot-seeded into
+`ValveDriver` (`assumeDiverter()`, no travel) and written back via a write-on-change poll in
+`main.cpp`. The `swMaxRuntimeSec` mirror remains stored-not-read-back until RunController
+gains runtime config (Phase 4).
 
 ---
 
