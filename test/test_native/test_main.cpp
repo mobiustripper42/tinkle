@@ -2,11 +2,13 @@
 #include <map>
 #include <vector>
 #include <utility>
+#include <string>
 #include "valve_driver.h"
 #include "run_controller.h"
 #include "loop_monitor.h"
 #include "buttons.h"
 #include "display.h"
+#include "persistence.h"
 
 // Native unit tests for ValveDriver (firmware spec §5). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -850,6 +852,112 @@ void test_display_led_modes() {
     TEST_ASSERT_EQUAL(LedMode::Blink, tinkle::zoneLedMode(1, 2, true));
 }
 
+// --- Persistence (firmware spec §8 / DEC-008) ------------------------------------
+// In-memory IKeyValueStore standing in for NVS. Counts writes per key so write-on-change
+// is a tested property, not an assumption.
+struct FakeKvStore : tinkle::IKeyValueStore {
+    std::map<std::string, uint32_t> u32;
+    std::map<std::string, uint8_t>  u8;
+    std::map<std::string, int>      writes;
+
+    uint32_t getU32(const char* k, uint32_t def) override {
+        auto it = u32.find(k); return it == u32.end() ? def : it->second;
+    }
+    void putU32(const char* k, uint32_t v) override { u32[k] = v; writes[k]++; }
+    uint8_t getU8(const char* k, uint8_t def) override {
+        auto it = u8.find(k); return it == u8.end() ? def : it->second;
+    }
+    void putU8(const char* k, uint8_t v) override { u8[k] = v; writes[k]++; }
+
+    int writesTo(const char* k) const {
+        auto it = writes.find(k); return it == writes.end() ? 0 : it->second;
+    }
+};
+
+using tinkle::Persistence;
+
+void test_persist_defaults_on_empty_nvs() {
+    FakeKvStore s;
+    Persistence p(s, 3);
+    p.begin();
+    // Empty NVS -> every key falls back to its default, no fault.
+    TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, p.zoneDefaultSec(0));
+    TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, p.zoneDefaultSec(2));
+    TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_SW_MAX_SEC, p.swMaxRuntimeSec());
+    TEST_ASSERT_FALSE(p.diverterKnown());
+}
+
+void test_persist_schema_stamped_once() {
+    FakeKvStore s;
+    TEST_ASSERT_EQUAL_UINT32(0, s.getU32("schema_ver", 0));  // absent before first begin
+    Persistence p(s, 3);
+    p.begin();
+    TEST_ASSERT_EQUAL_UINT32(Persistence::SCHEMA_VER, s.getU32("schema_ver", 0));
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("schema_ver"));
+    // A reboot against an already-stamped store must not rewrite the version.
+    Persistence p2(s, 3);
+    p2.begin();
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("schema_ver"));
+}
+
+void test_persist_roundtrip_across_reboot() {
+    FakeKvStore s;
+    Persistence p(s, 3);
+    p.begin();
+    p.setZoneDefaultSec(1, 450);
+    p.setSwMaxRuntimeSec(900);
+    p.setDiverterPosition(true);
+
+    // New instance on the same backing store == reboot: values survive.
+    Persistence p2(s, 3);
+    p2.begin();
+    TEST_ASSERT_EQUAL_UINT32(450, p2.zoneDefaultSec(1));
+    TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, p2.zoneDefaultSec(0));  // untouched
+    TEST_ASSERT_EQUAL_UINT32(900, p2.swMaxRuntimeSec());
+    TEST_ASSERT_TRUE(p2.diverterKnown());
+    TEST_ASSERT_TRUE(p2.diverterThrough());
+}
+
+void test_persist_write_on_change() {
+    FakeKvStore s;
+    Persistence p(s, 3);
+    p.begin();
+    // Setting a value equal to the current one touches no flash.
+    p.setZoneDefaultSec(0, Persistence::DEFAULT_RUN_SEC);
+    TEST_ASSERT_EQUAL_INT(0, s.writesTo("z0_dur"));
+    // A real change writes exactly once; a redundant repeat does not write again.
+    p.setZoneDefaultSec(0, 300);
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("z0_dur"));
+    p.setZoneDefaultSec(0, 300);
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("z0_dur"));
+}
+
+void test_persist_diverter_tristate() {
+    FakeKvStore s;
+    Persistence p(s, 3);
+    p.begin();
+    TEST_ASSERT_FALSE(p.diverterKnown());        // unknown until first actuation
+    p.setDiverterPosition(false);                // AROUND
+    TEST_ASSERT_TRUE(p.diverterKnown());
+    TEST_ASSERT_FALSE(p.diverterThrough());
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("div_pos"));
+    p.setDiverterPosition(false);                // no change -> no write
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("div_pos"));
+    p.setDiverterPosition(true);                 // THROUGH
+    TEST_ASSERT_TRUE(p.diverterThrough());
+    TEST_ASSERT_EQUAL_INT(2, s.writesTo("div_pos"));
+}
+
+void test_persist_zone_bounds() {
+    FakeKvStore s;
+    Persistence p(s, 3);
+    p.begin();
+    // Out-of-range zone: read returns the default, write is a silent no-op (no flash).
+    TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, p.zoneDefaultSec(7));
+    p.setZoneDefaultSec(7, 123);
+    TEST_ASSERT_EQUAL_INT(0, s.writesTo("z7_dur"));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -898,5 +1006,12 @@ int main() {
     RUN_TEST(test_display_transitional);
     RUN_TEST(test_display_frame_equality);
     RUN_TEST(test_display_led_modes);
+
+    RUN_TEST(test_persist_defaults_on_empty_nvs);
+    RUN_TEST(test_persist_schema_stamped_once);
+    RUN_TEST(test_persist_roundtrip_across_reboot);
+    RUN_TEST(test_persist_write_on_change);
+    RUN_TEST(test_persist_diverter_tristate);
+    RUN_TEST(test_persist_zone_bounds);
     return UNITY_END();
 }
