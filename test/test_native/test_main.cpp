@@ -1170,6 +1170,13 @@ void test_sched_idempotent_within_minute() {
     s.tick(100);        // same minute, 0.1 s later
     s.tick(59000);      // still 06:00
     TEST_ASSERT_EQUAL_INT(1, (int)sink.reqs.size());   // evaluated once for the minute
+    // Advance into 06:01, then a DEC-009 sub-second backward nudge to 06:00:59. Forward-only
+    // eval must NOT re-fire 06:00 (the previous minute), which a == guard would have missed.
+    s.add(mkEntry(1, 6, 1, MON_BIT));
+    s.tick(60000);      // 06:01 -> zone 1 fires
+    TEST_ASSERT_EQUAL_INT(2, (int)sink.reqs.size());
+    s.tick(59900);      // nudged back to 06:00:59 -> must be a no-op
+    TEST_ASSERT_EQUAL_INT(2, (int)sink.reqs.size());
 }
 
 void test_sched_fert_first_run_of_day() {

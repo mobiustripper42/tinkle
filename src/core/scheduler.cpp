@@ -17,7 +17,13 @@ void Scheduler::clear() {
 void Scheduler::tick(uint32_t nowMs) {
     if (!clock_.valid()) return;                         // no wall clock -> nothing schedulable
     const uint32_t curMin = clock_.epoch(nowMs) / 60u;   // absolute local minute
-    if (evaledOnce_ && curMin == lastEvalMin_) return;   // already evaluated this minute (idempotent)
+    // Forward-only: evaluate a given absolute minute at most once, ever. `<=` (not `==`)
+    // matters because the DEC-009 hourly resync can nudge the epoch sub-second *backward*
+    // across a minute boundary (06:00:00 -> 05:59:59); evaluating only strictly-newer
+    // minutes drops that re-entry. A legitimate small backward correction lands on minutes
+    // we already ran, so skipping them is correct, not a miss. (No free-run before the first
+    // sync, so the baseline is always real NTP time — there's no wrong-base to "catch up" from.)
+    if (evaledOnce_ && curMin <= lastEvalMin_) return;
     lastEvalMin_ = curMin;
     evaledOnce_  = true;
     evaluate(nowMs);

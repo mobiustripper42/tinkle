@@ -205,9 +205,11 @@ minute** from the `Clock`. Three calls:
   depend on a narrow `IRunSink { requestRun() }` interface; `RunController` implements it.
   Overlap is **not** the scheduler's problem — `RunController` already queues sequential runs
   and rejects when full (§4); a due run that can't enqueue is dropped and counted (§13).
-- **Idempotent eval:** evaluation is keyed on the absolute local minute (`epoch/60`) and runs
-  at most once per minute, so the DEC-009 hourly-resync backward nudge can't double-enqueue a
-  due run. `evalNow()` re-arms the key to cover "on edit" (§13).
+- **Idempotent eval:** evaluation is keyed on the absolute local minute (`epoch/60`) and is
+  **forward-only** (`curMin <= lastEvalMin_` skips) — each minute is evaluated at most once,
+  ever. This drops the DEC-009 hourly-resync backward nudge even when it steps across a minute
+  boundary into an already-run minute (an `==` guard would miss that). `evalNow()` re-arms the
+  key to cover "on edit" (§13).
 - **Fert policy (§6):** the first `Auto` run of each calendar day fertigates; the daily slot
   is consumed **only on a successful enqueue** (a queue-full rejection doesn't burn the day's
   fert). `On`/`Off` overrides force the diverter state and bypass the slot.
