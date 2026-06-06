@@ -8,6 +8,7 @@
 #include "../core/display.h"
 #include "../core/persistence.h"
 #include "../core/clock.h"
+#include "../core/scheduler.h"
 #include "display_tm1637.h"
 #include "preferences_store.h"
 #include "system_clock.h"
@@ -57,6 +58,12 @@ static Persistence       persistence(prefsStore, ZONE_COUNT);
 // lands (no WiFi before Phase 4) it stays false and the panel holds "--:--".
 static SystemClock       systemClock;
 static Clock             wallClock(systemClock);
+
+// Scheduler (§13). Evaluates schedule entries once per local minute and enqueues due runs
+// through RunController (the sole actuator commander), applying the §6 fert policy. The
+// schedule is empty until the web-config editor lands (Phase 4); with no clock yet (no WiFi
+// pre-Phase-4) tick() is a no-op regardless.
+static Scheduler         scheduler(runController, wallClock);
 
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
@@ -138,6 +145,7 @@ void loop() {
     runController.tick(now);   // sole actuator commander; ticks the ValveDriver too
     buttons.tick(now);         // debounce + edge detect (§11)
     wallClock.tick(now);       // poll NTP / free-run the wall clock (§13)
+    scheduler.tick(now);       // per-minute eval of due runs -> RunController (§13)
 
     // §11 manual buttons (DEC-006). RunController owns the single-active invariant; we
     // only map debounced edges onto it. One uniform policy for every zone button:
@@ -193,7 +201,7 @@ void loop() {
         digitalWrite(ZONES[z].ledPin, ledLevel(m, blinkOn) ? HIGH : LOW);
     }
 
-    // (scheduler / flow / web / watchdog tick here as they land)
+    // (flow / web / watchdog tick here as they land)
 
     // micros() subtraction wraps cleanly across the ~71 min rollover.
     if (loopMon.record(micros() - t0))
