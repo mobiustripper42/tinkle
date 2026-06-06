@@ -282,6 +282,7 @@ explicit feedback so a held button never reads as a dead panel —
 ## 13. Clock & scheduling
 
 - NTP via `configTime` on Wi-Fi join. On no network, free-run from last known time + `millis()` (drift acceptable for irrigation; document it). Optional future DS3231 RTC — leave a clean seam (`Clock` interface) but don't require it for V1.
+- **Implemented (#26 / DEC-009):** `Clock` core sits over an injected `IWallClock` whose contract is **local epoch seconds**; the ESP32 `SystemClock` shim owns timezone + DST (`configTzTime` with a POSIX TZ rule, re-packing `localtime_r` fields via the pure `epochFromCivil`). Core anchors a synced reading to a `millis()` instant and free-runs between reads, re-syncing hourly; `valid()` feeds the display's `clockValid` (false → "--:--" until NTP lands). `minuteRolled()` is the per-minute eval edge the `Scheduler` consumes below. A DST flip while the network is down isn't reflected until the next resync (accepted, DEC-009).
 - Schedule entry model:
 
 ```
