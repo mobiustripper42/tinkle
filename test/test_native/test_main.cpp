@@ -1251,6 +1251,70 @@ void test_sched_add_capacity() {
     TEST_ASSERT_EQUAL_UINT8(0, s.count());
 }
 
+// --- Fertigation end-to-end (firmware spec §6 / #28) -----------------------------
+// The §6 policy is decided in the Scheduler and actuated by RunController via the §4
+// diverter step. These tests exercise the REAL stack (Scheduler -> RunController ->
+// ValveDriver over FakeGpio) rather than a fake sink, locking the criterion that the
+// first auto run of the day routes THROUGH the Dosatron and the rest route AROUND.
+
+void test_sched_rc_fert_routing() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 6, 0, 0);   // Monday 06:00
+    Clock clock(src); clock.begin(0);
+    Scheduler s(rc, clock);
+    s.add(mkEntry(0, 6, 0, DAILY, 60));                   // first auto run of the day -> fert
+    s.add(mkEntry(1, 6, 5, DAILY, 60));                   // later auto run -> no fert
+
+    // 06:00 — scheduler enqueues the fert run; RunController commands the diverter THROUGH.
+    s.tick(0);
+    TEST_ASSERT_FALSE(rc.isIdle());
+    TEST_ASSERT_TRUE(vd.diverterThrough());               // routed through the Dosatron
+    uint32_t now = pump(rc, 0, 5, 80000, [&]{ return rc.isIdle(); });
+    TEST_ASSERT_TRUE(rc.isIdle());
+
+    // 06:05 — second auto run of the same day: no fert, diverter travels back AROUND.
+    now = 300000;                                         // 06:05 in free-run ms
+    s.tick(now);
+    TEST_ASSERT_FALSE(rc.isIdle());
+    TEST_ASSERT_FALSE(vd.diverterThrough());              // bypassed
+}
+
+void test_diverter_persist_roundtrip() {
+    // Persist a THROUGH position, then "reboot": a fresh ValveDriver seeded from NVS must
+    // know the position WITHOUT traveling, so a matching fert run skips the 6 s travel.
+    FakeKvStore kv;
+    Persistence p(kv, 3);
+    p.begin();
+    p.setDiverterPosition(true);                          // last run left it THROUGH
+
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    if (p.diverterKnown()) vd.assumeDiverter(p.diverterThrough());   // boot-seed (mirrors main.cpp)
+    TEST_ASSERT_TRUE(vd.diverterKnown());
+    TEST_ASSERT_TRUE(vd.diverterThrough());
+    TEST_ASSERT_FALSE(vd.diverterBusy());                 // seeding drove no motor
+
+    // A fert (THROUGH) run now skips travel: it reaches Running far under the 6 s window.
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 30; req.fertigate = true;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
+    uint32_t now = pump(rc, 0, 5, 2000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL_INT((int)RunState::Running, (int)rc.state());
+    TEST_ASSERT_TRUE(now < 6000);                         // travel skipped, not waited out
+
+    // persist-on-travel: a non-fert run travels AROUND; the main-loop poll records it.
+    rc.stop(now);
+    now = pump(rc, now, 5, 4000, [&]{ return rc.isIdle(); });
+    req.fertigate = false;
+    rc.requestRun(req, now);                              // -> diverter AROUND
+    p.setDiverterPosition(vd.diverterThrough());          // mirrors main's write-on-change poll
+    TEST_ASSERT_FALSE(p.diverterThrough());
+    TEST_ASSERT_TRUE(p.diverterKnown());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -1324,5 +1388,8 @@ int main() {
     RUN_TEST(test_sched_dropped_on_full_queue);
     RUN_TEST(test_sched_eval_now_on_edit);
     RUN_TEST(test_sched_add_capacity);
+
+    RUN_TEST(test_sched_rc_fert_routing);
+    RUN_TEST(test_diverter_persist_roundtrip);
     return UNITY_END();
 }

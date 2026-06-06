@@ -63,6 +63,14 @@ public:
     // Persistence's job (§8).
     void setDiverter(bool through, uint32_t nowMs);
 
+    // Seed the cached diverter position WITHOUT driving the motor — for restoring the
+    // last-known position from NVS at boot (§8). A motorized ball valve holds its position
+    // mechanically with no power, so the cache is physically true across a clean reboot;
+    // trusting it lets the first run skip the 6 s travel when the position already matches.
+    // (A wrong cache only mis-routes one run; the master FET, not the diverter, gates water
+    // — so this never holds water on.) No-op on the actuator pins.
+    void assumeDiverter(bool through) { diverterThrough_ = through; diverterKnown_ = true; }
+
     // Master FET + pump relay — immediate level sets, no travel window.
     void masterOpen();
     void masterClose();

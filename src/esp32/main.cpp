@@ -116,6 +116,13 @@ void setup() {
     prefsStore.begin();
     persistence.begin();
 
+    // Restore the last-known diverter position from NVS (§6/§8). A motorized ball valve
+    // holds position with no power, so seeding the cache lets the first run skip the 6 s
+    // travel when it already matches. Must follow runController.begin() (which ran
+    // valve.begin()/safeState(), both of which leave the diverter as-is).
+    if (persistence.diverterKnown())
+        valve.assumeDiverter(persistence.diverterThrough());
+
     // Configure TZ + SNTP and take the first sync attempt (§13). No network yet, so this
     // stays invalid until Phase 4 brings up WiFi; the call is harmless until then.
     systemClock.begin();
@@ -200,6 +207,17 @@ void loop() {
         const LedMode m = ackOn ? LedMode::Solid : zoneLedMode(az, z, faulted);
         digitalWrite(ZONES[z].ledPin, ledLevel(m, blinkOn) ? HIGH : LOW);
     }
+
+    // Persist the diverter position once travel COMPLETES (§6/§8). Observing it here keeps
+    // the run path free of a Persistence dependency (RunController is the sole commander).
+    // Gating on !diverterBusy() records the position the valve actually *reached*, not the
+    // one merely commanded — so a power loss mid-travel doesn't leave NVS claiming a
+    // destination the valve never made. Write-on-change down in Persistence guards flash, so
+    // this is a no-op write every settled tick. (Residual edge: a power loss mid-travel
+    // strands the valve mid-stroke regardless of NVS; the next matching run may skip travel
+    // and mis-route once. Never holds water on — the master FET gates water. Accepted, V1.)
+    if (valve.diverterKnown() && !valve.diverterBusy())
+        persistence.setDiverterPosition(valve.diverterThrough());
 
     // (flow / web / watchdog tick here as they land)
 

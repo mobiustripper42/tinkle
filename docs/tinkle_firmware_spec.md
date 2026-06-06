@@ -127,6 +127,7 @@ The pulse timers must be independent per actuator so a diverter travel doesn't b
 - Each schedule entry has a `fertigate` bool. Default scheduler **policy:** the first enabled run of each calendar day is marked `fertigate=true`, all others `false`. Policy is overridable per entry (`fertOverride: auto|on|off`).
 - `RunController` only actuates the diverter when the requested state differs from the cached position (avoids needless 6s travel + wear).
 - Manual runs default `fertigate=false` unless explicitly requested.
+- **Implemented (#27 policy / #28 actuation+persistence):** the one-fert-run/day policy + `auto|on|off` per-entry override live in the `Scheduler` (`resolveFert`, day boundary off the `Clock`); `RunController` sets the diverter in the §4 `PrepDiverter` step from `RunRequest::fertigate` with the skip-when-unchanged guard. The cached position survives reboot (§8) — boot-seeded into `ValveDriver` and persisted on change. Fail-dry holds: the diverter travels *before* the master opens, and the master gates water, so a fert decision never holds water on.
 
 ---
 
@@ -168,6 +169,17 @@ not bump it. NVS keys cap at 15 chars (silent truncation) — key names are boun
 source. Phase 2.1 (#25) persists the scalars that exist today (per-zone default durations,
 `swMaxRuntimeSec`, cached diverter position); the rest of this list is filled by its owning
 module through the same store as that module lands.
+
+**Cached diverter position wired (#28):** the stored position is restored into `ValveDriver`
+at boot (`assumeDiverter()`, no motor travel) and written back **once travel completes**
+(`!diverterBusy()` poll in `main.cpp`) so NVS records the position actually reached, not one
+merely commanded. A motorized ball valve holds position with no power, so the cache is
+physically true across a clean reboot — the first run skips the 6 s travel when the position
+already matches. Residual edge: a power loss *during* the 6 s travel strands the valve
+mid-stroke regardless of NVS, so the next matching run may skip travel and mis-route once;
+this never holds water on (the master FET, not the diverter, gates water) — accepted for V1.
+(`swMaxRuntimeSec` is still stored-not-read-back until RunController gains runtime config in
+Phase 4.)
 
 ---
 
