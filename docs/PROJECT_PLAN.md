@@ -93,9 +93,9 @@ to safe state, driven by a button, with a live countdown.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 3.1 | `FlowMonitor` — ISR pulse count, rate window, gallons from K | 5 | §7 |
-| 3.2 | Fault detection — no-flow (grace) + unexpected idle flow | 3 | §7, §14 |
-| 3.3 | Calibration mode — start/finish endpoints, K to NVS, sanity bounds | 5 | §7 |
+| 3.1 | `FlowMonitor` — ISR pulse count, rate window, gallons from K | 5 | [#34](https://github.com/mobiustripper42/tinkle/issues/34) · §7 |
+| 3.2 | Fault detection — no-flow (grace) + unexpected idle flow | 3 | [#35](https://github.com/mobiustripper42/tinkle/issues/35) · §7, §14 |
+| 3.3 | Calibration mode — start/finish endpoints, K to NVS, sanity bounds | 5 | [#36](https://github.com/mobiustripper42/tinkle/issues/36) · §7 |
 
 **Phase 3 total: 13 pts**
 
