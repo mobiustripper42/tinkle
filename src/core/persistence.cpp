@@ -8,6 +8,7 @@ namespace tinkle {
 static constexpr const char* KEY_SCHEMA  = "schema_ver";  // 10
 static constexpr const char* KEY_SW_MAX  = "sw_max_sec";  // 10
 static constexpr const char* KEY_DIV_POS = "div_pos";     //  7
+static constexpr const char* KEY_K_PPG   = "k_ppg";       //  5  flow K, pulses/gallon (§7)
 
 const char* Persistence::zoneKey(char* buf, uint8_t zone) {
     // "z<N>_dur": longest is two-digit zone "z15_dur" = 7 chars + NUL. buf must be >= 8.
@@ -22,7 +23,8 @@ Persistence::Persistence(IKeyValueStore& store, uint8_t zoneCount)
     : store_(store),
       zoneCount_(zoneCount > ValveConfig::MAX_ZONES ? ValveConfig::MAX_ZONES : zoneCount),
       swMaxRuntimeSec_(DEFAULT_SW_MAX_SEC),
-      divPos_(DivPos::Unknown) {
+      divPos_(DivPos::Unknown),
+      pulsesPerGallon_(DEFAULT_PULSES_PER_GALLON) {
     for (uint8_t z = 0; z < ValveConfig::MAX_ZONES; ++z) {
         zoneDefaultSec_[z] = DEFAULT_RUN_SEC;
     }
@@ -55,6 +57,8 @@ void Persistence::begin() {
     divPos_ = (raw == static_cast<uint8_t>(DivPos::Around))  ? DivPos::Around
             : (raw == static_cast<uint8_t>(DivPos::Through)) ? DivPos::Through
             : DivPos::Unknown;
+
+    pulsesPerGallon_ = store_.getFloat(KEY_K_PPG, DEFAULT_PULSES_PER_GALLON);
 }
 
 uint32_t Persistence::zoneDefaultSec(uint8_t zone) const {
@@ -81,6 +85,13 @@ void Persistence::setDiverterPosition(bool through) {
     if (divPos_ == next) return;
     divPos_ = next;
     store_.putU8(KEY_DIV_POS, static_cast<uint8_t>(next));
+}
+
+void Persistence::setPulsesPerGallon(float k) {
+    if (k <= 0.0f) return;                 // a non-positive K is a calibration error; keep the old one
+    if (pulsesPerGallon_ == k) return;     // write-on-change (exact: we only ever store what we set)
+    pulsesPerGallon_ = k;
+    store_.putFloat(KEY_K_PPG, k);
 }
 
 } // namespace tinkle

@@ -22,6 +22,8 @@ struct PreferencesStore : IKeyValueStore {
     void     putU32(const char* key, uint32_t value)    override { prefs.putUInt(key, value); }
     uint8_t  getU8 (const char* key, uint8_t  fallback) override { return prefs.getUChar(key, fallback); }
     void     putU8 (const char* key, uint8_t  value)    override { prefs.putUChar(key, value); }
+    float    getFloat(const char* key, float fallback)  override { return prefs.getFloat(key, fallback); }
+    void     putFloat(const char* key, float value)     override { prefs.putFloat(key, value); }
 };
 
 } // namespace tinkle

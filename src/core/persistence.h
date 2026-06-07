@@ -14,10 +14,10 @@
 //   - per-zone manual default run durations (retires the BUTTON_RUN_SEC placeholder)
 //   - swMaxRuntimeSec (software run ceiling, RunConfig)
 //   - cached diverter position (§8; ValveDriver flags Persistence as its owner)
+//   - pulsesPerGallon (flow K, §7; loaded by FlowMonitor #34, written by calibration #36)
 // The remaining §8 state is owned by modules not yet built; each fills the SAME store
 // through its own keys when it lands — they are deliberately NOT pre-carved here:
 //   - schedule entries        -> Scheduler (#27, §13 model)
-//   - pulsesPerGallon         -> Calibration (Phase 3, §7)
 //   - fertigation policy      -> Fert policy (#28)
 //   - Wi-Fi credentials       -> Web/config (Phase 4)
 //   - fault-log ring buffer   -> FaultManager (Phase 3/5)
@@ -36,6 +36,8 @@ struct IKeyValueStore {
     virtual void     putU32(const char* key, uint32_t value)    = 0;
     virtual uint8_t  getU8 (const char* key, uint8_t  fallback) = 0;
     virtual void     putU8 (const char* key, uint8_t  value)    = 0;
+    virtual float    getFloat(const char* key, float fallback)  = 0;   // calibration K (§7)
+    virtual void     putFloat(const char* key, float value)     = 0;
     virtual ~IKeyValueStore() = default;
 };
 
@@ -49,6 +51,9 @@ public:
     // First-boot / empty-NVS defaults.
     static constexpr uint32_t DEFAULT_RUN_SEC    = 600;   // retires BUTTON_RUN_SEC (main.cpp)
     static constexpr uint32_t DEFAULT_SW_MAX_SEC = 1200;  // matches RunConfig::swMaxRuntimeSec
+    // Flow K (§7): a placeholder datasheet seed for the hall sensor — calibration (#36)
+    // overwrites it. §15: defaults are seeds, not gospel; bench-confirm the real K.
+    static constexpr float    DEFAULT_PULSES_PER_GALLON = 450.0f;
 
     // zoneCount is the runtime number of live zones (<= ValveConfig::MAX_ZONES). Injected,
     // not redefined — ValveConfig owns the count so the two never drift (DEC-008).
@@ -65,11 +70,13 @@ public:
     uint32_t swMaxRuntimeSec()       const { return swMaxRuntimeSec_; }
     bool     diverterKnown()         const { return divPos_ != DivPos::Unknown; }
     bool     diverterThrough()       const { return divPos_ == DivPos::Through; }
+    float    pulsesPerGallon()       const { return pulsesPerGallon_; }   // flow K (§7, #34)
 
     // --- writes (write-on-change: a set to the current value touches no flash) ---
     void setZoneDefaultSec(uint8_t zone, uint32_t sec);
     void setSwMaxRuntimeSec(uint32_t sec);
     void setDiverterPosition(bool through);   // called by the run/fert path on actuation (#28)
+    void setPulsesPerGallon(float k);         // written by calibration (#36); ignores k <= 0
 
 private:
     enum class DivPos : uint8_t { Unknown = 0, Around = 1, Through = 2 };
@@ -84,6 +91,7 @@ private:
     uint32_t zoneDefaultSec_[ValveConfig::MAX_ZONES];
     uint32_t swMaxRuntimeSec_;
     DivPos   divPos_;
+    float    pulsesPerGallon_;
 };
 
 } // namespace tinkle
