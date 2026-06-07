@@ -21,6 +21,7 @@ Tests are baked into every task estimate — no separate testing tasks.
 |-------|----------|--------|----------|---------|------------|--------------|
 | 0 | — | ~19 | — | — | — | scaffold — done pre-session-tracking, no time data |
 | 1 | 2 | 31\* | 15.75 | 3.58 | 1.75 | 0.12 |
+| 2 | 2 | 16 | 2.92 | 1.66 | 0.16 | 0.10 |
 
 \* 31 = 25 Phase-1-labeled (#9–#14) + 6 spillover (Wokwi #7 [3, Phase 0], C++11 build-standard fix [2], TM1637 lib unblock [1]). Wall clock was ~66% breaks (toolchain download, a connection-drop gap), so treat Phase 1 as a **noisy baseline** — Phase 2 is the first clean read. Full detail in `RETROSPECTIVES.md`.
 
@@ -79,12 +80,12 @@ to safe state, driven by a button, with a live countdown.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 2.1 | `Persistence` — NVS read/write of all stored state, write-on-change | 5 | [#25](https://github.com/mobiustripper42/tinkle/issues/25) · §8 |
-| 2.2 | `Clock` — NTP sync + free-running fallback | 3 | [#26](https://github.com/mobiustripper42/tinkle/issues/26) · §13 |
-| 2.3 | `Scheduler` — entry model, per-minute eval, queue, overlap guard | 5 | [#27](https://github.com/mobiustripper42/tinkle/issues/27) · §13 |
-| 2.4 | Fertigation policy — one fert run/day + per-entry override | 3 | [#28](https://github.com/mobiustripper42/tinkle/issues/28) · §6 |
+| 2.1 | `Persistence` — NVS read/write of all stored state, write-on-change | 5 | [x] [#25](https://github.com/mobiustripper42/tinkle/issues/25) · §8 <!-- completed 2026-06-06 --> |
+| 2.2 | `Clock` — NTP sync + free-running fallback | 3 | [x] [#26](https://github.com/mobiustripper42/tinkle/issues/26) · §13 <!-- completed 2026-06-06 --> |
+| 2.3 | `Scheduler` — entry model, per-minute eval, queue, overlap guard | 5 | [x] [#27](https://github.com/mobiustripper42/tinkle/issues/27) · §13 <!-- completed 2026-06-06 --> |
+| 2.4 | Fertigation policy — one fert run/day + per-entry override | 3 | [x] [#28](https://github.com/mobiustripper42/tinkle/issues/28) · §6 <!-- completed 2026-06-06 --> |
 
-**Phase 2 total: 16 pts**
+**Phase 2 total: 16 pts** — complete (all closed). §6 fert policy + diverter actuation/persistence landed across #25–#28; the `Scheduler` is the single eval engine (DEC-010), the `Clock` an NTP/free-run seam (DEC-009). Carry-forward: `swMaxRuntimeSec` stored-not-read-back until the Phase 4 settings API.
 
 ---
 

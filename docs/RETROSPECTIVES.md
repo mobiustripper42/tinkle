@@ -5,6 +5,39 @@ Phase-end retrospectives, written by `/retro`. Most recent first.
 <!-- Entries appended here at each phase boundary: velocity, scope changes,
      process notes, forecast update. -->
 
+## Phase 2 — 2026-06-06 (Persistence + Scheduler + Clock + Fertigation)
+
+**Sessions:** 2 (Sessions 4 + 5; Session 3 was the boundary session — its 5 pts / PR #29 were the Phase-1-deferred #23 button model, counted in the Phase 1 retro)
+**Points:** 16 / 16 (100%)
+**Wall clock:** 2.92h
+**Dev time:** 1.66h
+**Review time:** 0.16h
+**Velocities:**
+- Wall: 0.18 h/pt
+- Dev: 0.10 h/pt  ← headline forecast
+- Review: 0.01 h/pt
+**Issues:** 4 created (#25–#28, materialized in Session 3), 4 closed, 0 moved.
+
+### Per-session breakdown
+| Session | Date | Wall | Dev | Review | Breaks | Points | PRs |
+|---------|------|------|-----|--------|--------|--------|-----|
+| 4 | 2026-06-06 | 0.67 | 0.33 | 0.08 | 0.27 | 5 | #30 |
+| 5 | 2026-06-06 | 2.25 | 1.33 | 0.08 | 0.78 | 11 | #31, #32, #33 |
+
+### Notes
+Retro notes (what worked / didn't / changes) and the PM read were skipped at Eric's request.
+
+The clean read Phase 1 predicted: dev velocity held at 0.10 h/pt (vs Phase 1's noisy 0.12), but wall/pt fell 0.51 → 0.18 — far less idle. Review time is structurally tiny: #32 merged in 3 min, #33's merge landed after `/its-dead` (capped at session end), and the one large "review" block was a 30-min idle gap waiting on the #31 merge, correctly booked as a break, not review. Session 5 ran three PRs under the DEC-015 per-PR-window model; the per-PR split attributes Clock ≈44 min dev, Scheduler ≈18 min, Fertigation ≈16 min of active work.
+
+### Scope changes
+- **#28 (Fertigation) was ~90% pre-built** by #25–#27: the §6 policy (one fert run/day, `auto|on|off` override, day boundary) lives in the Scheduler (#27), and RunController already actuated the diverter per §4 (#25). #28 became "wire the cached diverter position across reboot (closing a deferred 2.1 flag) + lock the criteria with the first real Scheduler→RunController→ValveDriver end-to-end test." Delivered at its 3-pt estimate; flagged to Eric mid-task.
+- **Schedule-entry NVS persistence deferred to Phase 4** (DEC-010) — no editor exists until the web-config API, so there is nothing to persist yet.
+- **`swMaxRuntimeSec` carry-forward:** stored by Persistence but not read back into RunController until the Phase 4 settings API (the second of the two deferred 2.1 review flags; the diverter-cache flag closed in #28).
+- New decisions this phase: **DEC-009** (Clock — local-epoch seam, TZ/DST in the ESP32 shim, hourly resync), **DEC-010** (Scheduler — IRunSink seam, forward-only minute-keyed idempotent eval, fert-slot-on-success).
+
+### Process note
+@code-review backend threw repeated 529 overloads during Session 5's Scheduler PR (#32) — two ~3.5-min hangs before being cut; that PR was reviewed inline instead, which caught a real forward-only idempotency bug. The backend recovered by the Fertigation PR (#33). Lesson logged in the session file: when the review agent is overloaded, review inline rather than burn wall-clock on retries.
+
 ## Phase 1 — 2026-06-04 (Actuation core)
 
 **Sessions:** 2
