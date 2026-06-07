@@ -1397,6 +1397,31 @@ void test_flow_reset_accumulation() {
     TEST_ASSERT_EQUAL_FLOAT(1.0f, fm.gallons());
 }
 
+void test_flow_single_sample_zero_rate() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);                         // exactly one sample in the window
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, fm.rateGPM());
+}
+
+void test_flow_subhz_ticks_update_gallons() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);
+    // Production cadence: tick every ~10 ms. gallons() tracks every call, but no second ring
+    // sample is taken before the 1 Hz boundary, so rateGPM stays 0 until ~1 s elapses.
+    for (uint32_t t = 10; t <= 100; t += 10) fm.tick((t / 10) * 90, t);   // 900 pulses by t=100
+    TEST_ASSERT_EQUAL_FLOAT(2.0f, fm.gallons());     // 900/450, updated mid-second
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, fm.rateGPM());     // still one sample
+}
+
+void test_flow_full_ring_steady_rate() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);
+    // Steady 60 GPM (450 pulses/s) sampled at 1 Hz for 12 s — past the 8-slot ring, so the
+    // head wraps and oldest = sampleHead_. Rate must stay correct after the wrap.
+    for (uint32_t t = 1; t <= 12; ++t) fm.tick(t * 450, t * 1000);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 60.0f, fm.rateGPM());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -1480,5 +1505,8 @@ int main() {
     RUN_TEST(test_flow_rate_gpm);
     RUN_TEST(test_flow_rate_decays_when_flow_stops);
     RUN_TEST(test_flow_reset_accumulation);
+    RUN_TEST(test_flow_single_sample_zero_rate);
+    RUN_TEST(test_flow_subhz_ticks_update_gallons);
+    RUN_TEST(test_flow_full_ring_steady_rate);
     return UNITY_END();
 }
