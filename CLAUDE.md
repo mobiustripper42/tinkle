@@ -60,8 +60,8 @@ allowed to command `ValveDriver` actuators** — every actuation flows through o
 auditable sequence (§4).
 
 **Two-key fail-dry chain:**
-- **ESP32** *commands* each actuator (drives the master FET, pulses zone valves,
-  enables the pump, sets the diverter).
+- **ESP32** *commands* each actuator (drives the master FET, drives the zone ball
+  valves for travel, enables the pump, sets the diverter).
 - **ATtiny85** *arms* the safety relay (NO, energize-to-pass) that feeds 24V to the
   master and pump. It commands nothing — it can only gate power.
 - Water moves only when **both keys agree**. Lose either — power, heartbeat, the NC
@@ -89,18 +89,18 @@ Code) runs the firmware in simulation without hardware (Phase 0.7).
 ## Conventions
 
 - **Non-blocking always.** No `delay()` in the run path. Per-actuator timers so a
-  diverter travel never blocks a zone pulse.
+  diverter travel never blocks a zone's travel.
 - **`pins.h` is the single pin source**, mirroring `docs/tinkle_wiring.html`. The
   wiring doc wins on pins; this doc wins on behavior.
 - **`ValveDriver` invariant:** never both H-bridge inputs HIGH. Assert/guard it.
-  Latching valves hold with zero current between pulses (both inputs LOW = coast).
+  Motorized ball valves hold position with zero current between moves (both inputs LOW = coast).
 - **`RunController` is the sole actuator commander.** Everything else requests runs
   through it.
 - **Fail dry on every fault and on power loss.** Entering any fault commands the
   safe state (pump off → zones closed → master closed) and latches.
 - **Platform-independent logic lives in `src/core`** so it compiles for both the
   ESP32 and the native test runner. ESP32-only code stays in `src/esp32`.
-- **Constants in one place; bench-confirm the physical ones** (`PULSE_MS`,
+- **Constants in one place; bench-confirm the physical ones** (`ZONE_TRAVEL_MS`,
   `DIVERTER_TRAVEL_MS`, flow K) — defaults are seeds, not gospel (§15).
 - **C++ style:** prefer `constexpr` over `#define` for typed constants; keep modules
   one translation unit each; comments explain *why*, not *what*.

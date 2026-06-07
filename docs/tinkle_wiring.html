@@ -91,7 +91,7 @@
   <text class="tm" x="95" y="56" text-anchor="middle">LRS-150-24</text>
   <rect class="blk pwr" x="200" y="18" width="170" height="54" rx="5"/>
   <text class="t" x="285" y="38" text-anchor="middle">Bucks 12 / 5 / 3.3V</text>
-  <text class="tm" x="285" y="56" text-anchor="middle">logic + valve + LED rails</text>
+  <text class="tm" x="285" y="56" text-anchor="middle">logic + LED + sensor rails</text>
   <line class="pw" x1="170" y1="45" x2="198" y2="45" marker-end="url(#arP)"/>
 
   <!-- ESP32 center -->
@@ -199,14 +199,14 @@
   <thead><tr><th>GPIO</th><th>Dir</th><th>Connects to</th><th>Notes</th></tr></thead>
   <tbody>
     <tr class="grp"><td colspan="4">Zone &amp; diverter H-bridges (DRV8871)</td></tr>
-    <tr><td class="pin">13</td><td class="io">OUT</td><td>Zone 1 — DRV8871 IN1</td><td>open pulse = IN1 high</td></tr>
-    <tr><td class="pin">14</td><td class="io">OUT</td><td>Zone 1 — DRV8871 IN2</td><td>close pulse = IN2 high; never both high</td></tr>
+    <tr><td class="pin">13</td><td class="io">OUT</td><td>Zone 1 — DRV8871 IN1</td><td>open drive = IN1 high (~5–15s travel)</td></tr>
+    <tr><td class="pin">14</td><td class="io">OUT</td><td>Zone 1 — DRV8871 IN2</td><td>close drive = IN2 high; never both high</td></tr>
     <tr><td class="pin">16</td><td class="io">OUT</td><td>Zone 2 — DRV8871 IN1</td><td></td></tr>
     <tr><td class="pin">17</td><td class="io">OUT</td><td>Zone 2 — DRV8871 IN2</td><td></td></tr>
     <tr><td class="pin">15</td><td class="io">OUT ⚠</td><td>Zone 3 — DRV8871 IN1</td><td>hose outlet (build-for-three). <span class="warn">strapping MTDO; boot-safe via DRV8871 pulldown — see §D</span></td></tr>
     <tr><td class="pin">12</td><td class="io">OUT ⚠</td><td>Zone 3 — DRV8871 IN2</td><td><span class="warn">strapping MTDI — MUST sit LOW at boot (3.3V flash); nothing may pull it high</span></td></tr>
     <tr><td class="pin">18</td><td class="io">OUT</td><td>Diverter — DRV8871 IN1</td><td>THROUGH (fertigate)</td></tr>
-    <tr><td class="pin">19</td><td class="io">OUT</td><td>Diverter — DRV8871 IN2</td><td>AROUND (plain). ~6s travel, not 75ms</td></tr>
+    <tr><td class="pin">19</td><td class="io">OUT</td><td>Diverter — DRV8871 IN2</td><td>AROUND (plain). ~6s travel, same as the zones</td></tr>
     <tr class="grp"><td colspan="4">Master &amp; pump</td></tr>
     <tr><td class="pin">21</td><td class="io">OUT</td><td>Master valve — IRLZ44N gate</td><td>logic-level FET; flyback diode on coil</td></tr>
     <tr><td class="pin">22</td><td class="io">OUT</td><td>Pump relay — trigger</td><td>opto/ULN input; snubber on coil</td></tr>
@@ -244,10 +244,10 @@
   <div class="ncard"><h3>Flyback on every coil</h3><p>1N4007 (or Schottky) across the master solenoid, pump relay coil, and both relays. The DRV8871 has internal protection; the discrete FET and relays do not.</p></div>
   <div class="ncard"><h3>Flow sensor level shift</h3><p>Power the sensor at 5V, but its pulse output swings to 5V — drop it to 3.3V (divider or the level-shifter module) before GPIO27, or you cook the input over time.</p></div>
   <div class="ncard"><h3>Input-only button pins</h3><p>GPIO 34/35/39/36 have <b>no internal pull-ups</b>. Add 10k to 3.3V + a 100nF debounce cap on each button, even though firmware also debounces.</p></div>
-  <div class="ncard"><h3>Diverter ≠ solenoid timing</h3><p>The motorized ball valve travels ~5–6s and self-cuts at its limit switch. Drive its DRV8871 for the full travel window, not the 75ms latch pulse the Hunter solenoids use.</p></div>
+  <div class="ncard"><h3>Motorized valves: drive for travel</h3><p>Every H-bridge valve — both zones and the diverter — is a motorized ball valve that travels ~5–6s and self-cuts at its limit switch. Drive the DRV8871 for the full travel window, then coast. There is no 75ms latch pulse anywhere (v1.3 retired the Hunter latching solenoids); the valve holds its position with no power between moves.</p></div>
   <div class="ncard"><h3>Common ground</h3><p>Tie all buck grounds + 24V return + ESP32 GND together at one star point. Floating logic ground against a switching 24V rail is the classic intermittent-glitch source.</p></div>
   <div class="ncard"><h3>Master FET gate</h3><p>IRLZ44N is logic-level and fine at 0.75A with a 3.3V gate. Add a 100&#8486; series gate resistor + 100k gate-to-GND pulldown so it sits off during ESP32 boot.</p></div>
-  <div class="ncard"><h3>Zone 3 on strapping pins (DEC-007)</h3><p>Z3's H-bridge sits on GPIO15 (MTDO) and GPIO12 (MTDI) because all non-strapping output GPIO are spent. This is safe <b>only</b> because the DRV8871's internal input pulldowns (~100k) hold both pins LOW through the boot strap window while the ESP32 pins are hi-Z: GPIO12 sampling low selects the correct <b>3.3V flash VDD</b>, GPIO15 low is cosmetic (boot log), and both-low means no spurious valve pulse at boot. <span class="warn">Never put an external pull-up — or a probe with one — on GPIO12: a high at boot selects 1.8V flash and bricks boot.</span> Do not add Z3's own H-bridge pull resistors; rely on the DRV8871's internal ones.</p></div>
+  <div class="ncard"><h3>Zone 3 on strapping pins (DEC-007)</h3><p>Z3's H-bridge sits on GPIO15 (MTDO) and GPIO12 (MTDI) because all non-strapping output GPIO are spent. This is safe <b>only</b> because the DRV8871's internal input pulldowns (~100k) hold both pins LOW through the boot strap window while the ESP32 pins are hi-Z: GPIO12 sampling low selects the correct <b>3.3V flash VDD</b>, GPIO15 low is cosmetic (boot log), and both-low means no spurious valve travel at boot. <span class="warn">Never put an external pull-up — or a probe with one — on GPIO12: a high at boot selects 1.8V flash and bricks boot.</span> Do not add Z3's own H-bridge pull resistors; rely on the DRV8871's internal ones.</p></div>
 </div>
 
 </main>

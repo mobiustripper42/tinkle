@@ -63,7 +63,7 @@ final confirm gate only.
 **Why:** The flash/reflash loop is slow and the wet hardware arrives last (build
 target Winter 2026–27). Most logic — including the safety-critical state machine —
 can be exercised off-hardware. Bench stand-ins validate real silicon before water.
-**Tradeoff:** Bench-tunable constants (`PULSE_MS`, `DIVERTER_TRAVEL_MS`, flow
+**Tradeoff:** Bench-tunable constants (`ZONE_TRAVEL_MS`, `DIVERTER_TRAVEL_MS`, flow
 K-factor) stay at seeded defaults until tiers 3–4 confirm them.
 
 ---
@@ -104,8 +104,8 @@ button (resolves #23). Behavior (§11):
   ring/display ack on a successful clear, and a *visible* no-op (not silence) when held
   while latched-but-unresolved, so a held button never reads as a dead panel.
 - Zone 3 is a real third zone — a **general-purpose hose outlet** separate from the Red
-  Tunnel's Z1/Z2 — under build-for-three: wired now (3rd latching valve + H-bridge, see
-  DEC-007), plumbed when that line goes in.
+  Tunnel's Z1/Z2 — under build-for-three: wired now (3rd motorized ball valve + H-bridge,
+  see DEC-007; valve type per DEC-011), plumbed when that line goes in.
 **Why:** This is Eric's literal directive ("each button runs its own zone, any button
 cancels"). The earlier §11 design (B1/B2 = zones, B3 = dedicated Stop/cancel-all +
 long-press clear) was a spec error, not the intent. The any-press-stops rule is
@@ -132,7 +132,7 @@ output GPIO is already spent (wiring doc §B). Assign **Z3_IN1 = GPIO15 (MTDO)**
 ESP32 pins **LOW** through the boot strapping window while the pins are still hi-Z:
 GPIO12 sampling low selects the correct **3.3 V flash VDD** (a HIGH here bricks boot —
 the pulldown is doing real work), GPIO15 low is cosmetic (suppresses the U0TXD boot
-log), and both-low means **no spurious valve pulse at boot** (fail-dry). This mirrors
+log), and both-low means **no spurious valve travel at boot** (fail-dry). This mirrors
 the existing master-FET gate-pulldown boot note — an established pattern here.
 **Rejected:** GPIO0 (pulldown → download mode at boot), GPIO5 (must be HIGH at boot,
 pulldown fights it), GPIO2 (works, but its onboard LED flickers on every Z3 actuation),
@@ -230,3 +230,36 @@ the thing that edits them.
 the loop in `main.cpp` (no-op until the schedule is populated and the clock is valid). Fert
 **actuation** still flows through `RunController`'s existing diverter handling; #28 layers any
 remaining fert-policy nuance on top.
+
+---
+
+## DEC-011: Zone valves are motorized ball valves; one regulator per tunnel, upstream
+**Decision:** V1's zone valves are **U.S. Solid 3/4" brass 2-wire reverse-polarity motorized
+ball valves** (9–24V DC, ~$34 ea), driven full-travel (~5–15 s) off a DRV8871 H-bridge — the
+**same channel type and valve family as the Dosatron diverter**. A **single pressure regulator
+per tunnel** sits **upstream** of the zone valves (≤15 psi), so zone valves and tape both run at
+low pressure. Supersedes the v1.1 selection (Hunter PGV diaphragm + Hunter 458200 latching
+solenoid on a 12V pulse rail, sitting *upstream* of the regulator at full pump pressure).
+Recorded in the hardware spec's v1.3 changelog.
+**Why:** Zero-pressure seal lets the valves live *downstream* of the regulator, so one regulator
+per tunnel — not one-per-zone or a high-pressure valve bank — feeds every zone (decisive for the
+5-zone Green tunnel; unifies Red + Green on one design). Collapses the system to one valve family
+and one driver-channel type across zones + diverter, and retires the 12V zone-pulse rail (the buck
+now feeds only the button LED rings). ~$238 for all seven future valves vs. five regulators +
+fittings + leak points in Green.
+**Why it's safe (fail-dry preserved):** A motorized ball valve **holds its last position** on
+power loss — it does **not** spring closed — so it can never be the element that guarantees "dry."
+That role stays with the **NC master solenoid** (de-energize-to-close) plus the ATtiny + safety
+relay (DEC-003). The master gates all water; a stuck-open zone valve still passes nothing unless
+the master is also open and the pump live, so the §6 two-fault tolerance is unchanged. The master
+is deliberately **not** converted to a ball valve for exactly this reason.
+**Firmware impact (tracked, not yet done):** `ValveDriver` and its constant still carry the v1.1
+latching-pulse names (`pulseOpen`/`pulseClose`, `PULSE_MS`=75). The behavior the new parts need —
+drive the bridge for a multi-second window then coast — is *already* how the diverter works and is
+*already* gated correctly by the run state machine (`RunController` advances OPEN_ZONE→START_PUMP
+only once the zone is no longer busy, §4). So the change is a rename + a raised constant
+(`driveOpen`/`driveClose`, `ZONE_TRAVEL_MS` ≈ 6000 ms, bench-confirm) plus comment/test updates.
+Captured as a task in `PROJECT_PLAN.md`; the firmware spec §5/§15 already describe the target.
+**Tradeoff:** a zone close now takes seconds, not 75 ms — but it runs after STOP_PUMP against no
+pressure, with the master already gating the water, so the longer window costs nothing in fail-dry
+terms. Travel time is a bench-confirmed seed (DEC-004), like the diverter's.

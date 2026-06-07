@@ -12,7 +12,7 @@ This spec assumes the pin map and arming architecture in `tinkle_wiring.html`. W
 
 In scope for V1:
 - Execute a stored watering schedule locally, with no network dependency.
-- Sequence zones one at a time; drive latching valves, master, pump, and the Dosatron diverter in the correct order.
+- Sequence zones one at a time; drive the motorized valves (zones + diverter), master, and pump in the correct order.
 - Per-run fertigation control via the diverter, defaulting to one fert run/day.
 - Monitor flow as a sanity cross-check; fault on mismatch.
 - Serve a local web config UI over Wi-Fi.
@@ -33,7 +33,7 @@ Suggested modules (one translation unit each):
 
 - `Clock` — NTP sync + free-running fallback; exposes wall-clock + monotonic ms.
 - `Persistence` — NVS/Preferences read/write of all stored state (§8).
-- `ValveDriver` — low-level latching pulse + diverter travel + master FET + pump relay.
+- `ValveDriver` — low-level motorized-valve travel (zones + diverter) + master FET + pump relay.
 - `FlowMonitor` — ISR pulse count, rate calc, calibration, fault detection.
 - `RunController` — the state machine (§4); owns the actuation sequence.
 - `Scheduler` — evaluates schedule entries, enqueues due runs, assigns fert flag.
@@ -96,11 +96,11 @@ Sequence (each step non-blocking, advancing on its own timer/confirmation):
 
 1. **PREP_DIVERTER** — if `fertigate` differs from cached diverter position, drive the diverter to THROUGH (fertigate) or AROUND (plain); wait `DIVERTER_TRAVEL_MS`. If unchanged, skip immediately. Cache new position.
 2. **OPEN_MASTER** — energize `MASTER_FET`. (Safety relay must be armed; if `WD_TRIPPED_IN` is asserted, abort to FAULT.)
-3. **OPEN_ZONE** — latch-open pulse on the zone valve (`PULSE_MS`).
+3. **OPEN_ZONE** — drive the zone ball valve open for `ZONE_TRAVEL_MS` (full travel, then coast). The pump waits for this to complete (the state machine gates on the valve no longer being busy), so the pump never loads against a closed/mid-travel ball valve.
 4. **START_PUMP** — close `PUMP_RELAY`. Begin `RUNNING`.
 5. **RUNNING** — run for `durationSec`. Continuously: update countdown display, run flow checks (§7), watch software max-runtime. Any fault → jump to STOP_PUMP path then FAULT.
 6. **STOP_PUMP** — open pump relay.
-7. **CLOSE_ZONE** — latch-close pulse.
+7. **CLOSE_ZONE** — drive the zone ball valve closed for `ZONE_TRAVEL_MS`, then coast. (Pump is already off from STOP_PUMP, so the valve closes against no pressure.)
 8. **CLOSE_MASTER** — de-energize master FET (spring closes).
 9. **SETTLE** — brief dwell, log the run (zone, start, duration, gallons, fert y/n, result). Diverter is left as-is. → IDLE (or next queued run).
 
@@ -110,15 +110,17 @@ Only one run active at a time. Queued requests run sequentially with a short int
 
 ## 5. Valve actuation contract (`ValveDriver`)
 
-- `pulseOpen(zone)` — `IN1=HIGH, IN2=LOW` for `PULSE_MS` (default 75), then **both LOW** (coast — latching valve holds, zero hold current). 
-- `pulseClose(zone)` — `IN1=LOW, IN2=HIGH` for `PULSE_MS`, then both LOW.
+- `driveOpen(zone)` — `IN1=HIGH, IN2=LOW` for `ZONE_TRAVEL_MS`, then **both LOW** (coast — the motorized ball valve self-stops at its internal limit switch and holds position with zero current).
+- `driveClose(zone)` — `IN1=LOW, IN2=HIGH` for `ZONE_TRAVEL_MS`, then both LOW.
 - **Invariant:** never both inputs HIGH. Assert/guard this.
-- `setDiverter(through)` — drive `DIV_IN1/IN2` for direction, hold for `DIVERTER_TRAVEL_MS` (default 6000), then both LOW. The motorized valve self-stops at its limit; we just supply the travel window. Cache the commanded position in NVS.
+- `setDiverter(through)` — drive `DIV_IN1/IN2` for direction, hold for `DIVERTER_TRAVEL_MS` (default 6000), then both LOW. Mechanically identical to a zone drive — same valve family. Cache the commanded position in NVS.
 - `masterOpen()/masterClose()` — set/clear `MASTER_FET`.
 - `pumpOn()/pumpOff()` — set/clear `PUMP_RELAY`.
-- On boot and on any FAULT entry: force pump off, both zones close-pulsed, master closed, diverter left as-is. This is the **safe state**.
+- On boot and on any FAULT entry: force pump off, both zones driven closed, master closed, diverter left as-is. This is the **safe state**.
 
-The pulse timers must be independent per actuator so a diverter travel doesn't block a zone pulse.
+The travel timers must be independent per actuator so a diverter travel doesn't block a zone's travel.
+
+> **Implementation note (pending rename):** the code still ships the v1.1 latching-pulse API — `pulseOpen`/`pulseClose` and `PULSE_MS` (default 75) — from before the v1.3 ball-valve change. Renaming it to the travel semantics above (`driveOpen`/`driveClose`, `ZONE_TRAVEL_MS`) is tracked as a task in `PROJECT_PLAN.md`. The run sequence already gates on `zoneBusy()` (§4), so the change is mostly naming plus raising the constant from a 75 ms pulse to a multi-second travel window.
 
 ---
 
@@ -328,7 +330,7 @@ struct ScheduleEntry {
 
 | Constant | Default | Notes |
 |---|---|---|
-| `PULSE_MS` | 75 | latching solenoid pulse; confirm on bench |
+| `ZONE_TRAVEL_MS` | 6000 | motorized ball-valve travel window; bench-confirm (was `PULSE_MS`=75 in the v1.1 latching scheme — rename tracked in `PROJECT_PLAN.md`) |
 | `DIVERTER_TRAVEL_MS` | 6000 | motorized ball valve travel window |
 | `HEARTBEAT_MS` | 250 | ESP32 → ATtiny toggle |
 | `HB_TIMEOUT_MS` | 2000 | ATtiny trip on lost heartbeat |
@@ -338,7 +340,7 @@ struct ScheduleEntry {
 | `IDLE_FLOW_FAULT_PULSES` | tune | unexpected-flow threshold |
 | button debounce | 30 ms | on top of RC |
 
-Bench-confirm `PULSE_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
+Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
 
 ---
 
@@ -360,4 +362,4 @@ PlatformIO + Arduino-ESP32. Libraries: ESPAsyncWebServer + AsyncTCP, ArduinoJson
 - [ ] Schedule executes with Wi-Fi pulled (local autonomy).
 - [ ] Web UI shows live countdown + lets a phone start/stop/calibrate in the field.
 - [ ] SPA is served gzipped from flash, loads with no internet, and a dead phone/Wi-Fi never affects a running or scheduled irrigation.
-- [ ] Never both H-bridge inputs high; valves hold with zero current between pulses.
+- [ ] Never both H-bridge inputs high; valves hold position with zero current between moves.

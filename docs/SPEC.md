@@ -52,7 +52,7 @@ Repo, seeds workflow, PlatformIO skeleton (esp32/attiny85/native), `pins.h` from
 the wiring doc, native test harness + Wokwi sim config, docs.
 
 ### Phase 1 — Actuation core
-`ValveDriver` (latching pulse, diverter travel, master FET, pump relay, safe state),
+`ValveDriver` (motorized-valve travel for zones + diverter, master FET, pump relay, safe state),
 `RunController` state machine (§4), non-blocking loop, buttons, TM1637 display.
 
 ### Phase 2 — Persistence + Scheduler + Clock
@@ -72,7 +72,7 @@ ATtiny85 sketch (DEC-003 encoding), safety relay, ESP32 `Watchdog` module, run t
 
 ### Phase 6 — Bench validation + wet confirm
 Breadboard bench (LED/pulse stand-ins) full §17 pass; then wet confirm with real
-parts — calibrate K, confirm `PULSE_MS` / `DIVERTER_TRAVEL_MS`. Parts-gated.
+parts — calibrate K, confirm `ZONE_TRAVEL_MS` / `DIVERTER_TRAVEL_MS`. Parts-gated.
 
 ## Not V1
 - **Green Tunnel and any third tunnel hardware** — chassis/board/enclosure headroom
