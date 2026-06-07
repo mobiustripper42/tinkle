@@ -1,12 +1,12 @@
 ---
 name: retro
-description: Phase-end retrospective. Closes the current phase. Under DEC-013, retro is also where per-session time math runs — for every session in the phase window, it computes wall_clock / dev_time / review_time from `started`, `ended`, the transcript JSONL, and GitHub PR timestamps. Aggregates to phase velocity. Marks PROJECT_PLAN.md `[x]`, reconciles drift, writes RETROSPECTIVES.md, runs version bumps (patch per merged PR + minor at phase close on dev projects), prompts retro notes. Optionally chains into `/start-phase`.
+description: Phase-end retrospective. Closes the current phase. Under DEC-S013, retro is also where per-session time math runs — for every session in the phase window, it computes wall_clock / dev_time / review_time from `started`, `ended`, the transcript JSONL, and GitHub PR timestamps. Aggregates to phase velocity. Marks PROJECT_PLAN.md `[x]`, reconciles drift, writes RETROSPECTIVES.md, runs version bumps (patch per merged PR + minor at phase close on dev projects), prompts retro notes. Optionally chains into `/start-phase`.
 tools: Read, Edit, Write, Bash, Glob, Grep, Agent
 ---
 
 You are running the phase-end retrospective. Work for this phase is complete (or you've decided to call it done and move scope).
 
-Under DEC-013, this skill **owns all per-session time math** that used to live in `/its-dead` and **all version bumps** that used to live in `/its-dead` (patch per merge) and `/retro` (minor at close). Session files are atomic event logs; retro is where they get turned into numbers.
+Under DEC-S013, this skill **owns all per-session time math** that used to live in `/its-dead` and **all version bumps** that used to live in `/its-dead` (patch per merge) and `/retro` (minor at close). Session files are atomic event logs; retro is where they get turned into numbers.
 
 ## Step 0 — Identify the current phase
 
@@ -32,7 +32,7 @@ For each open issue, ask the user: "Move to next phase, leave open, or close as 
 - **Leave open:** record in retro.
 - **Close as won't-do:** `gh issue close <N> --reason "not planned" --comment "Closed at Phase N retro — descoped."`
 
-## Step 2 — Per-session time math (DEC-013 — moved from `/its-dead`)
+## Step 2 — Per-session time math (DEC-S013 — moved from `/its-dead`)
 
 Find every session file in the phase window. Phase window = first issue's `createdAt` → last issue's `closedAt` (use `gh issue list --label "phase:<N>" --state all --json createdAt,closedAt`).
 
@@ -68,7 +68,7 @@ If `gh` is unavailable, try `mcp__github__pull_request_read` with `owner`, `repo
 
 If both unavailable: skip PR-derived math for this session; note `inference: github-unavailable`. The user can rerun retro later.
 
-### Step 2.5 — dev_time and review_time (per-PR windows, DEC-015)
+### Step 2.5 — dev_time and review_time (per-PR windows, DEC-S015)
 
 Each PR gets its own dev window (time building it) and its own review window (time reviewing it). Sum across all PRs. Replaces the prior single-boundary model — which collapsed an N-PR session to one seam and structurally under-reported dev_time when PRs > 1.
 
@@ -215,7 +215,7 @@ Read `docs/RETROSPECTIVES.md` first (Edit requires a prior Read). If it doesn't 
 
 ## Step 7 — Commit (sessions branch updates are read-only here)
 
-Session files were already finalized by `/its-dead` and are not modified by this skill — DEC-013 atomicity.
+Session files were already finalized by `/its-dead` and are not modified by this skill — DEC-S013 atomicity.
 
 ```
 git add docs/PROJECT_PLAN.md docs/RETROSPECTIVES.md
@@ -223,9 +223,9 @@ git commit -m "Phase <N> retro — <points> pts in <dev>h dev (<dev/pt> hrs/pt)"
 git push origin <BRANCH>
 ```
 
-## Step 8 — Version bumps (dev projects only — DEC-013 moved patch bumps from `/its-dead` here)
+## Step 8 — Version bumps (dev projects only — DEC-S013 moved patch bumps from `/its-dead` here)
 
-Run only if `package.json` exists at the repo root (dev-project signal — DEC-007).
+Run only if `package.json` exists at the repo root (dev-project signal — DEC-S007).
 
 Resolve working branch:
 ```
@@ -309,8 +309,8 @@ Version: v<NEW_VERSION>  (dev projects only; skipped if no package.json)
 
 ## Notes
 
-- **Session files are read-only here.** Retro reads them; never writes. DEC-013 atomicity.
+- **Session files are read-only here.** Retro reads them; never writes. DEC-S013 atomicity.
 - **GitHub queries can fail.** If `gh` and MCP are both unavailable, skip the PR-derived numbers, mark them `inference: github-unavailable` in the retro, and tell the user they can rerun retro later. Don't guess.
 - **The headline velocity is `dev_time / point`.** Wall-clock velocity is inflated by review-and-merge wait. Review-time velocity is interesting but secondary. Forecast against dev_time.
-- **Each PR has its own dev + review window** (Step 2.5, DEC-015). Replaces both the original `min(pr.createdAt)` single-boundary model AND its `max(pr.createdAt)` follow-up — both collapsed multi-PR sessions to one seam and structurally mis-attributed dev vs review time. Per-PR windows make `dev_time + review_time + breaks ≈ wall_clock` honestly hold for any N.
-- **Historical retros run under the single-boundary model are method artifacts.** Sessions where N>1 will have under-reported `dev_time` and over-reported `review_time` (or vice versa, depending on which seam version). Forecast against `wall_clock − breaks` (active time) when comparing to pre-DEC-015 numbers. Going forward (post-DEC-015), `dev_time / point` and `review_time / point` are both meaningful headlines.
+- **Each PR has its own dev + review window** (Step 2.5, DEC-S015). Replaces both the original `min(pr.createdAt)` single-boundary model AND its `max(pr.createdAt)` follow-up — both collapsed multi-PR sessions to one seam and structurally mis-attributed dev vs review time. Per-PR windows make `dev_time + review_time + breaks ≈ wall_clock` honestly hold for any N.
+- **Historical retros run under the single-boundary model are method artifacts.** Sessions where N>1 will have under-reported `dev_time` and over-reported `review_time` (or vice versa, depending on which seam version). Forecast against `wall_clock − breaks` (active time) when comparing to pre-DEC-S015 numbers. Going forward (post-DEC-S015), `dev_time / point` and `review_time / point` are both meaningful headlines.

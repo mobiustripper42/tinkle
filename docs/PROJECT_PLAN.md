@@ -15,7 +15,7 @@ Fibonacci scale (2, 3, 5, 8, 13). See `VELOCITY_AND_POKER_GUIDE.md`.
 All estimates from planning poker between Eric and Claude.
 Tests are baked into every task estimate — no separate testing tasks.
 
-**Velocity** (per `/retro`, DEC-013 — `dev_time` is the forecast number; wall clock is break-inflated):
+**Velocity** (per `/retro`, DEC-S013 — `dev_time` is the forecast number; wall clock is break-inflated):
 
 | Phase | Sessions | Points | Wall (h) | Dev (h) | Review (h) | hrs/pt (dev) |
 |-------|----------|--------|----------|---------|------------|--------------|

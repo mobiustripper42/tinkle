@@ -16,7 +16,7 @@ Run `git fetch origin` to refresh remote state. Capture `BRANCH=$(git branch --s
 
 **Branch handling:**
 - `task/*` or other intentional feature branch: continue (PR-flow project).
-- `claude/*` (CC Desktop / web / mobile auto-branch): accept and continue. The platform pre-cuts this branch when launching a session. Per DEC-013, this branch is the **session-anchor**; per-task code branches get cut as work proceeds, each PR'd separately. Session-file commits go to the orphan `sessions` branch via the worktree (DEC-014), NOT to this branch.
+- `claude/*` (CC Desktop / web / mobile auto-branch): accept and continue. The platform pre-cuts this branch when launching a session. Per DEC-S013, this branch is the **session-anchor**; per-task code branches get cut as work proceeds, each PR'd separately. Session-file commits go to the orphan `sessions` branch via the worktree (DEC-S014), NOT to this branch.
 - `main`: `git pull --ff-only origin main`. On divergence, show `git log --oneline origin/main..HEAD` and `git log --oneline HEAD..origin/main`, then ask: **"(a) rebase, (b) reset to origin/main, (c) abort?"** Wait for the choice.
 - Anything else (manual non-standard branch): if `git status --porcelain` is dirty, stop and ask the user to commit/stash. If clean, ask the user **"Stay on `$BRANCH` or switch to `main`?"** Wait for the choice.
 
@@ -54,7 +54,7 @@ The **Merged-cleanable** category is the fix for the most-common Step 0.5 noise 
 
 **Tool-outage fallback.** If `gh` and `mcp__github__list_pull_requests` are both unavailable, skip Scan B entirely and surface every Scan-A candidate as "branch has commits — PR state check unavailable, do not assume orphan." Don't false-alarm during a tool outage. Note the skipped check in the session Context section.
 
-### Step 0.6 — Ensure `.sessions-worktree/` (DEC-014)
+### Step 0.6 — Ensure `.sessions-worktree/` (DEC-S014)
 
 The session file lives on an orphan `sessions` branch checked out at `.sessions-worktree/`. Skills commit there; the user's main checkout never moves.
 
@@ -73,19 +73,19 @@ git rm -rf . 2>/dev/null || true
 # If a sessions/ dir existed on main, bring its contents over:
 git checkout main -- sessions/ 2>/dev/null || mkdir -p sessions
 [ -d sessions ] || mkdir sessions
-[ -f sessions/README.md ] || echo "# Sessions branch (DEC-014). Each project session writes one file here." > sessions/README.md
+[ -f sessions/README.md ] || echo "# Sessions branch (DEC-S014). Each project session writes one file here." > sessions/README.md
 git add sessions/
 git commit -m "Initialize sessions branch"
 git push -u origin sessions
 git checkout main
 # Remove sessions/ from main if it existed:
-[ -d sessions ] && git rm -r sessions && git commit -m "Move sessions to orphan sessions branch (DEC-014)" && git push origin main
+[ -d sessions ] && git rm -r sessions && git commit -m "Move sessions to orphan sessions branch (DEC-S014)" && git push origin main
 # Add .gitignore entry on main:
-grep -q "^\.sessions-worktree/" .gitignore 2>/dev/null || (echo ".sessions-worktree/" >> .gitignore && git add .gitignore && git commit -m "Ignore .sessions-worktree (DEC-014)" && git push origin main)
+grep -q "^\.sessions-worktree/" .gitignore 2>/dev/null || (echo ".sessions-worktree/" >> .gitignore && git add .gitignore && git commit -m "Ignore .sessions-worktree (DEC-S014)" && git push origin main)
 # Attach worktree:
 git worktree add .sessions-worktree sessions
 ```
-Note: on protected main, the two follow-up commits (remove `sessions/`, add `.gitignore`) may need a PR instead of direct push. Detect with `gh api repos/{owner}/{repo}/branches/main/protection --silent 2>/dev/null`; if protected, open a "Migrate to DEC-014" PR with those commits on a `claude/dec-014-migrate` branch and surface the URL.
+Note: on protected main, the two follow-up commits (remove `sessions/`, add `.gitignore`) may need a PR instead of direct push. Detect with `gh api repos/{owner}/{repo}/branches/main/protection --silent 2>/dev/null`; if protected, open a "Migrate to DEC-S014" PR with those commits on a `claude/dec-014-migrate` branch and surface the URL.
 
 c. **`origin/sessions` exists but local sessions/ also has uncommitted files** (mid-migration): stop and ask the user to resolve manually.
 
@@ -149,7 +149,7 @@ Capture as `JSONL_DIR`. Use the **Glob** tool with `path: <JSONL_DIR>` and `patt
 SESSION_FILE=".sessions-worktree/sessions/${DATE_PART}-${TIME_PART}-${DEV}-${SLUG}.md"
 ```
 
-Write the file with this content (DEC-013 schema — atomic, no time math fields):
+Write the file with this content (DEC-S013 schema — atomic, no time math fields):
 
 ```
 ---
@@ -200,7 +200,7 @@ Extract:
 - **Next Steps** — verbatim
 - **Context** — gotchas
 
-**Pre-DEC-013 schema tolerance:** legacy session files use a single `Task:` block instead of `## Task <N>` headers. Read either shape.
+**Pre-DEC-S013 schema tolerance:** legacy session files use a single `Task:` block instead of `## Task <N>` headers. Read either shape.
 
 ## Step 8 — Read project state
 
@@ -236,7 +236,7 @@ Then ask: **"Ready to go? Confirm the task or redirect me."**
 
 Stop. Do not begin work until the user confirms.
 
-## DEC-013 + DEC-014 reminders
+## DEC-S013 + DEC-S014 reminders
 
 - One Claude window opens **one** session. `/its-dead` runs **once** at the end.
 - `/kill-this` may run multiple times — one per task — each opens its own PR and appends a `## Task <N>` block to this session file (on the sessions branch).

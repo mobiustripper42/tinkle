@@ -27,7 +27,7 @@ Phase-end retrospectives, written by `/retro`. Most recent first.
 ### Notes
 Retro notes (what worked / didn't / changes) and the PM read were skipped at Eric's request.
 
-The clean read Phase 1 predicted: dev velocity held at 0.10 h/pt (vs Phase 1's noisy 0.12), but wall/pt fell 0.51 → 0.18 — far less idle. Review time is structurally tiny: #32 merged in 3 min, #33's merge landed after `/its-dead` (capped at session end), and the one large "review" block was a 30-min idle gap waiting on the #31 merge, correctly booked as a break, not review. Session 5 ran three PRs under the DEC-015 per-PR-window model; the per-PR split attributes Clock ≈44 min dev, Scheduler ≈18 min, Fertigation ≈16 min of active work.
+The clean read Phase 1 predicted: dev velocity held at 0.10 h/pt (vs Phase 1's noisy 0.12), but wall/pt fell 0.51 → 0.18 — far less idle. Review time is structurally tiny: #32 merged in 3 min, #33's merge landed after `/its-dead` (capped at session end), and the one large "review" block was a 30-min idle gap waiting on the #31 merge, correctly booked as a break, not review. Session 5 ran three PRs under the DEC-S015 per-PR-window model; the per-PR split attributes Clock ≈44 min dev, Scheduler ≈18 min, Fertigation ≈16 min of active work.
 
 ### Scope changes
 - **#28 (Fertigation) was ~90% pre-built** by #25–#27: the §6 policy (one fert run/day, `auto|on|off` override, day boundary) lives in the Scheduler (#27), and RunController already actuated the diverter per §4 (#25). #28 became "wire the cached diverter position across reboot (closing a deferred 2.1 flag) + lock the criteria with the first real Scheduler→RunController→ValveDriver end-to-end test." Delivered at its 3-pt estimate; flagged to Eric mid-task.

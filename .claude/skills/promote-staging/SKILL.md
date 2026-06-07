@@ -1,10 +1,10 @@
 ---
 name: promote-staging
-description: Promote staging to main via fast-forward merge. ff-merges `staging` into `main`, tags the release with the current `package.json` version, and pushes both branches plus the tag. Use when accumulated work on `staging` is ready to ship. Requires `origin/staging` to exist (DEC-008).
+description: Promote staging to main via fast-forward merge. ff-merges `staging` into `main`, tags the release with the current `package.json` version, and pushes both branches plus the tag. Use when accumulated work on `staging` is ready to ship. Requires `origin/staging` to exist (DEC-S008).
 tools: Read, Edit, Write, Bash, Grep
 ---
 
-You are promoting `staging` → `main`. This is the deploy moment for staging-flow projects (DEC-008).
+You are promoting `staging` → `main`. This is the deploy moment for staging-flow projects (DEC-S008).
 
 ## Step 0 — Sanity gates
 
@@ -12,13 +12,13 @@ You are promoting `staging` → `main`. This is the deploy moment for staging-fl
 ```
 git show-ref --verify --quiet refs/remotes/origin/staging || echo "missing"
 ```
-If `origin/staging` doesn't exist (locally cached), STOP. Tell the user: "/promote-staging requires `origin/staging` (DEC-008). This repo doesn't have a staging branch — promotions go straight through `/its-dead` on `main`." Do not proceed. Step 1 will refresh the cache from the remote regardless, so a stale local view that misses a freshly-created staging is recovered after the user re-runs.
+If `origin/staging` doesn't exist (locally cached), STOP. Tell the user: "/promote-staging requires `origin/staging` (DEC-S008). This repo doesn't have a staging branch — promotions go straight through `/its-dead` on `main`." Do not proceed. Step 1 will refresh the cache from the remote regardless, so a stale local view that misses a freshly-created staging is recovered after the user re-runs.
 
 **Dev project (for tagging):**
 ```
 [ -f package.json ] || echo "missing"
 ```
-If `package.json` is missing, STOP. Tell the user: "/promote-staging tags with the version in `package.json` (DEC-007). This repo has none — promotion would be untagged. Aborting." (If the user genuinely wants an untagged ff-merge, they can do it manually.)
+If `package.json` is missing, STOP. Tell the user: "/promote-staging tags with the version in `package.json` (DEC-S007). This repo has none — promotion would be untagged. Aborting." (If the user genuinely wants an untagged ff-merge, they can do it manually.)
 
 **Clean working tree:**
 ```
