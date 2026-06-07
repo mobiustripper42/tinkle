@@ -1,10 +1,10 @@
 ---
 name: its-dead
-description: Session end. Stamps `ended:` on the open session file, tallies total points from per-task blocks, displays wall_clock to screen for gut-check, commits + pushes the sessions branch. No time math, no version bump, no merge handshake — those moved to `/retro` per DEC-013. Run once at the end of a Claude window after every task's `/kill-this` has shipped its PR.
+description: Session end. Stamps `ended:` on the open session file, tallies total points from per-task blocks, displays wall_clock to screen for gut-check, commits + pushes the sessions branch. No time math, no version bump, no merge handshake — those moved to `/retro` per DEC-S013. Run once at the end of a Claude window after every task's `/kill-this` has shipped its PR.
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
-You are closing the session. Under DEC-013, this is a one-action skill: stamp `ended:`, write `status: closed`, commit + push to the orphan `sessions` branch. All time math (wall_clock / dev_time / review_time / break inference) and version bumps moved to `/retro`. The session file becomes atomic — never modified after this runs.
+You are closing the session. Under DEC-S013, this is a one-action skill: stamp `ended:`, write `status: closed`, commit + push to the orphan `sessions` branch. All time math (wall_clock / dev_time / review_time / break inference) and version bumps moved to `/retro`. The session file becomes atomic — never modified after this runs.
 
 ## Step 0 — Locate the open session (on the sessions worktree)
 
@@ -26,7 +26,7 @@ Edit `$SESSION_FILE` frontmatter:
 - `ended: <END_UTC>`
 - `status: closed`
 
-Do **not** write `wall_clock`, `dev_time`, `review_time`, `duration`, or any time-derived field. Those are `/retro`'s job (DEC-013).
+Do **not** write `wall_clock`, `dev_time`, `review_time`, `duration`, or any time-derived field. Those are `/retro`'s job (DEC-S013).
 
 ## Step 2 — Tally total points
 
@@ -108,5 +108,5 @@ Phase progress: gh issue list --label phase:current --state open
 ## Notes
 
 - Sanity check at close: the displayed wall_clock is `ended − started`. If it includes overnight or away-from-desk time, that's correct — `/retro` will subtract break gaps later. The screen number isn't the final number.
-- No interactive merge handshake (DEC-012 had one). Under DEC-013, the user merges PRs whenever convenient — before `/its-dead`, after, doesn't matter. Retro reads GitHub for merge timestamps at retro time.
-- Atomicity guarantee: once `status: closed` is set and the file is pushed, this skill is done. No subsequent skill modifies this file. `/its-alive`'s old Step 7.5 backfill is gone (DEC-013).
+- No interactive merge handshake (DEC-S012 had one). Under DEC-S013, the user merges PRs whenever convenient — before `/its-dead`, after, doesn't matter. Retro reads GitHub for merge timestamps at retro time.
+- Atomicity guarantee: once `status: closed` is set and the file is pushed, this skill is done. No subsequent skill modifies this file. `/its-alive`'s old Step 7.5 backfill is gone (DEC-S013).

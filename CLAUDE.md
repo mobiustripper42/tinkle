@@ -19,7 +19,7 @@ closed-loop-later**.
 
 `tool` (embedded firmware + tiny static web UI). **Not a webapp** — no Supabase,
 Next.js, React, or Playwright. The `@ui-reviewer` agent and `VersionTag.tsx` are
-intentionally absent (gated out for `tool` type, DEC-011 in seeds).
+intentionally absent (gated out for `tool` type, DEC-S011 in seeds).
 
 ## Stack
 
@@ -47,7 +47,7 @@ intentionally absent (gated out for `tool` type, DEC-011 in seeds).
 | `docs/tinkle_v1_spec.md` | **Hardware spec** — water path, components, power, failure modes (source of truth for hardware) |
 | `docs/tinkle_firmware_spec.md` | **Firmware spec** — modules, run state machine, API, constants (source of truth for behavior) |
 | `docs/tinkle_wiring.html` | **Wiring + pin map** — source of truth for pins; if `pins.h` disagrees, the wiring doc wins |
-| `sessions/*.md` (orphan `sessions` branch via `.sessions-worktree/`) | Per-session files (DEC-013/014) |
+| `sessions/*.md` (orphan `sessions` branch via `.sessions-worktree/`) | Per-session files (DEC-S013/S014) |
 | `.claude/seeds-version` | Schema version for `/pull-seeds` |
 | `.claude/project-type` | `tool` |
 
@@ -124,7 +124,7 @@ The §17 acceptance checklist is the definition of done for the fail-dry behavio
 |-------|------|------|
 | `/its-alive` | Session start | Ensure `.sessions-worktree/`, open session file on `sessions` branch, capture transcript, recommend task |
 | `/pause-this` · `/restart-this` | Mid-session break / resume | Build check + WIP commit; reload context |
-| `/kill-this` | Per task (DEC-013) | Build check, commit, @code-review, open PR, append `## Task <N>` to session file |
+| `/kill-this` | Per task (DEC-S013) | Build check, commit, @code-review, open PR, append `## Task <N>` to session file |
 | `/its-dead` | Session end (once) | Stamp `ended:`, tally points, close session file |
 | `/start-phase` · `/retro` | Phase boundaries | Materialize phase as Issues / compute velocity, write retro, version-bump |
 | `/push-seeds` · `/pull-seeds` | Workflow sync | Backport to / pull from the seeds templates via @sync-config (schema-version gated) |

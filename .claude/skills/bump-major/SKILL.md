@@ -8,7 +8,7 @@ You are bumping the project's major version. Major bumps are manual because they
 
 ## Step 0 — Sanity gate
 
-Run `[ -f package.json ] || echo "missing"`. If `package.json` is missing at the repo root, STOP. Tell the user: "/bump-major requires `package.json` (DEC-007 — dev projects only). This repo has none." Do not proceed.
+Run `[ -f package.json ] || echo "missing"`. If `package.json` is missing at the repo root, STOP. Tell the user: "/bump-major requires `package.json` (DEC-S007 — dev projects only). This repo has none." Do not proceed.
 
 ## Step 1 — Resolve working branch
 
