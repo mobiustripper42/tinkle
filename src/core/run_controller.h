@@ -46,8 +46,10 @@ struct IRunSink {
     virtual ~IRunSink() = default;
 };
 
-// Outcome of the most recent run, for logging / status (§4 step 9). Gallons are
-// filled by FlowMonitor later (§7); 0 until then.
+// Outcome of the most recent run, for logging / status (§4 step 9). Measured gallons
+// live in FlowMonitor (§7, #34) — kept out of here to preserve the RunController <-> flow
+// decoupling; main logs the per-run volume on the RUNNING edge. The Phase 4 status API can
+// join the two if a single summary record is wanted.
 struct RunSummary {
     enum class Result : uint8_t { None, Completed, Stopped, Faulted };
     Result   result      = Result::None;

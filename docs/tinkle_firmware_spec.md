@@ -139,6 +139,7 @@ The pulse timers must be independent per actuator so a diverter travel doesn't b
 - **During RUNNING**, after `FLOW_GRACE_S` (default 20): if `rateGPM` ≈ 0 → `FAULT_NO_FLOW` (clog, dead pump, valve never opened). Optionally fault on rate far outside an expected band.
 - **During IDLE**: if accumulated pulses exceed `IDLE_FLOW_FAULT_PULSES` over a window → `FAULT_UNEXPECTED_FLOW` (stuck-open valve, burst). On this fault, re-assert safe state immediately (master closed, pump off) and latch.
 - All runs log measured gallons.
+- **Implemented (#34):** `FlowMonitor` (core) consumes a monotonic pulse count (ESP32 ISR + counter in `src/esp32/flow_sensor.h` via `attachInterruptArg`; injected in host tests). `gallons = (pulses − baseline)/K`; `rateGPM` from a ~1 Hz rolling ring that decays to 0 when flow stops (the signal #35's no-flow check keys on). K (`pulsesPerGallon`) loads from NVS via `Persistence` (float key, datasheet seed, overwritten by calibration #36). `main` re-baselines on the RUNNING edge and logs per-run gallons. The no-flow / unexpected-flow **faults** (#35) and the calibration state machine (#36) build on this.
 
 ### Calibration mode
 - `POST /api/calibrate/start {zoneIndex}` → opens that zone's path (diverter AROUND, master open, zone open, pump on), zeroes the pulse counter, enters a bounded calibration run (own max-runtime).

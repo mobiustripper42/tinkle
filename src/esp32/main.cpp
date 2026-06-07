@@ -9,9 +9,11 @@
 #include "../core/persistence.h"
 #include "../core/clock.h"
 #include "../core/scheduler.h"
+#include "../core/flow_monitor.h"
 #include "display_tm1637.h"
 #include "preferences_store.h"
 #include "system_clock.h"
+#include "flow_sensor.h"
 
 // Tinkle ESP32 firmware — entry point and the cooperative non-blocking loop
 // (firmware spec §2). On boot RunController::begin forces the fail-dry safe state
@@ -64,6 +66,13 @@ static Clock             wallClock(systemClock);
 // schedule is empty until the web-config editor lands (Phase 4); with no clock yet (no WiFi
 // pre-Phase-4) tick() is a no-op regardless.
 static Scheduler         scheduler(runController, wallClock);
+
+// Flow monitoring (§7 / #34). The ISR-backed counter (flow_sensor.h) is the only hardware
+// touch; FlowMonitor turns its cumulative pulses into per-run gallons + a live GPM rate. K
+// (pulses/gallon) loads from NVS at boot and is overwritten by calibration (#36). The §7
+// no-flow / unexpected-flow faults (#35) hang off the same rate/accumulation.
+static FlowSensor        flowSensor;
+static FlowMonitor       flowMonitor(Persistence::DEFAULT_PULSES_PER_GALLON);
 
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
@@ -128,6 +137,12 @@ void setup() {
     systemClock.begin();
     wallClock.begin(millis());
 
+    // Flow sensor ISR + monitor (§7). Load the calibrated K from NVS, then baseline the
+    // counter so gallons starts at zero.
+    flowSensor.begin();
+    flowMonitor.setK(persistence.pulsesPerGallon());
+    flowMonitor.begin(flowSensor.pulses(), millis());
+
     buttons.begin();              // configure the panel pins as inputs (§11)
     display.begin();              // TM1637 init + clear (§12)
 
@@ -153,6 +168,7 @@ void loop() {
     buttons.tick(now);         // debounce + edge detect (§11)
     wallClock.tick(now);       // poll NTP / free-run the wall clock (§13)
     scheduler.tick(now);       // per-minute eval of due runs -> RunController (§13)
+    flowMonitor.tick(flowSensor.pulses(), now);   // pulses -> gallons + rolling GPM (§7)
 
     // §11 manual buttons (DEC-006). RunController owns the single-active invariant; we
     // only map debounced edges onto it. One uniform policy for every zone button:
@@ -180,6 +196,18 @@ void loop() {
         if (buttons.longPressEdge(z) && runController.clearFault())
             faultAckUntilMs = now + FAULT_ACK_MS;         // §12 success ack
     }
+
+    // Per-run flow tally (§7): re-baseline gallons when a run starts pumping, and log the
+    // measured volume when it stops. Edge-detected off the RUNNING state. (#35 adds the
+    // no-flow / unexpected-flow faults on top of the same rate + accumulation.)
+    static RunState prevRunState = RunState::Idle;
+    const RunState runState = runController.state();
+    if (runState == RunState::Running && prevRunState != RunState::Running)
+        flowMonitor.resetAccumulation(flowSensor.pulses(), now);
+    else if (runState != RunState::Running && prevRunState == RunState::Running)
+        Serial.printf("[tinkle] run flow: %.2f gal @ %.2f GPM\n",
+                      flowMonitor.gallons(), flowMonitor.rateGPM());
+    prevRunState = runState;
 
     // §12 panel. Render the frame from controller state; the shim pushes to the
     // TM1637 only when it changes (bit-bang cost vs the tick budget). The idle clock

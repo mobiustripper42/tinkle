@@ -11,6 +11,7 @@
 #include "persistence.h"
 #include "clock.h"
 #include "scheduler.h"
+#include "flow_monitor.h"
 
 // Native unit tests for ValveDriver (firmware spec §5). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -860,6 +861,7 @@ void test_display_led_modes() {
 struct FakeKvStore : tinkle::IKeyValueStore {
     std::map<std::string, uint32_t> u32;
     std::map<std::string, uint8_t>  u8;
+    std::map<std::string, float>    f32;
     std::map<std::string, int>      writes;
 
     uint32_t getU32(const char* k, uint32_t def) override {
@@ -870,6 +872,10 @@ struct FakeKvStore : tinkle::IKeyValueStore {
         auto it = u8.find(k); return it == u8.end() ? def : it->second;
     }
     void putU8(const char* k, uint8_t v) override { u8[k] = v; writes[k]++; }
+    float getFloat(const char* k, float def) override {
+        auto it = f32.find(k); return it == f32.end() ? def : it->second;
+    }
+    void putFloat(const char* k, float v) override { f32[k] = v; writes[k]++; }
 
     int writesTo(const char* k) const {
         auto it = writes.find(k); return it == writes.end() ? 0 : it->second;
@@ -1315,6 +1321,107 @@ void test_diverter_persist_roundtrip() {
     TEST_ASSERT_TRUE(p.diverterKnown());
 }
 
+// --- Persistence: flow K (§7 / #34) ----------------------------------------------
+void test_persist_pulses_per_gallon() {
+    FakeKvStore s;
+    Persistence p(s, 3);
+    p.begin();
+    TEST_ASSERT_EQUAL_FLOAT(Persistence::DEFAULT_PULSES_PER_GALLON, p.pulsesPerGallon());  // seed
+    p.setPulsesPerGallon(382.5f);
+    TEST_ASSERT_EQUAL_FLOAT(382.5f, p.pulsesPerGallon());
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("k_ppg"));
+    p.setPulsesPerGallon(382.5f);                       // unchanged -> no write
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("k_ppg"));
+    p.setPulsesPerGallon(0.0f);                         // invalid -> ignored, no write
+    TEST_ASSERT_EQUAL_FLOAT(382.5f, p.pulsesPerGallon());
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("k_ppg"));
+    // Survives reboot.
+    Persistence p2(s, 3);
+    p2.begin();
+    TEST_ASSERT_EQUAL_FLOAT(382.5f, p2.pulsesPerGallon());
+}
+
+// --- FlowMonitor (firmware spec §7 / #34) ----------------------------------------
+using tinkle::FlowMonitor;
+
+void test_flow_gallons_from_k() {
+    FlowMonitor fm(450.0f);                 // K = 450 pulses/gal
+    fm.begin(0, 0);
+    fm.tick(450, 1000);                     // one gallon's worth
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, fm.gallons());
+    fm.tick(1125, 2000);                    // 2.5 gal total
+    TEST_ASSERT_EQUAL_FLOAT(2.5f, fm.gallons());
+    TEST_ASSERT_EQUAL_UINT32(1125, fm.pulsesSinceReset());
+}
+
+void test_flow_k_guard() {
+    FlowMonitor fm(450.0f);
+    fm.setK(0.0f);                          // rejected
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, fm.k());
+    fm.setK(-5.0f);                         // rejected
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, fm.k());
+    fm.setK(300.0f);                        // accepted
+    TEST_ASSERT_EQUAL_FLOAT(300.0f, fm.k());
+}
+
+void test_flow_rate_gpm() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);                         // sample @0: 0 pulses
+    fm.tick(450, 1000);                     // +450 pulses in 1 s = 1 gal/s = 60 GPM
+    fm.tick(900, 2000);
+    fm.tick(1350, 3000);                    // window 0..3000: 1350 pulses = 3 gal over 0.05 min
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 60.0f, fm.rateGPM());
+}
+
+void test_flow_rate_decays_when_flow_stops() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);
+    for (uint32_t t = 1000; t <= 3000; t += 1000) fm.tick(t * 0.45f, t);  // flowing
+    TEST_ASSERT_TRUE(fm.rateGPM() > 0.0f);
+    // Flow stops: pulse count frozen, but ticks continue. After the window fills with the
+    // frozen count, the rolling rate reads ~0 — this is what the §7 no-flow check (#35) keys on.
+    uint32_t frozen = 1350;
+    for (uint32_t t = 4000; t <= 12000; t += 1000) fm.tick(frozen, t);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, fm.rateGPM());
+    TEST_ASSERT_EQUAL_FLOAT(3.0f, fm.gallons());        // 1350/450, still the run total
+}
+
+void test_flow_reset_accumulation() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);
+    fm.tick(900, 1000);
+    TEST_ASSERT_EQUAL_FLOAT(2.0f, fm.gallons());
+    fm.resetAccumulation(900, 2000);        // new run starts at the current count
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, fm.gallons());
+    fm.tick(1350, 3000);                     // +450 since reset
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, fm.gallons());
+}
+
+void test_flow_single_sample_zero_rate() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);                         // exactly one sample in the window
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, fm.rateGPM());
+}
+
+void test_flow_subhz_ticks_update_gallons() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);
+    // Production cadence: tick every ~10 ms. gallons() tracks every call, but no second ring
+    // sample is taken before the 1 Hz boundary, so rateGPM stays 0 until ~1 s elapses.
+    for (uint32_t t = 10; t <= 100; t += 10) fm.tick((t / 10) * 90, t);   // 900 pulses by t=100
+    TEST_ASSERT_EQUAL_FLOAT(2.0f, fm.gallons());     // 900/450, updated mid-second
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, fm.rateGPM());     // still one sample
+}
+
+void test_flow_full_ring_steady_rate() {
+    FlowMonitor fm(450.0f);
+    fm.begin(0, 0);
+    // Steady 60 GPM (450 pulses/s) sampled at 1 Hz for 12 s — past the 8-slot ring, so the
+    // head wraps and oldest = sampleHead_. Rate must stay correct after the wrap.
+    for (uint32_t t = 1; t <= 12; ++t) fm.tick(t * 450, t * 1000);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 60.0f, fm.rateGPM());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -1391,5 +1498,15 @@ int main() {
 
     RUN_TEST(test_sched_rc_fert_routing);
     RUN_TEST(test_diverter_persist_roundtrip);
+
+    RUN_TEST(test_persist_pulses_per_gallon);
+    RUN_TEST(test_flow_gallons_from_k);
+    RUN_TEST(test_flow_k_guard);
+    RUN_TEST(test_flow_rate_gpm);
+    RUN_TEST(test_flow_rate_decays_when_flow_stops);
+    RUN_TEST(test_flow_reset_accumulation);
+    RUN_TEST(test_flow_single_sample_zero_rate);
+    RUN_TEST(test_flow_subhz_ticks_update_gallons);
+    RUN_TEST(test_flow_full_ring_steady_rate);
     return UNITY_END();
 }
