@@ -261,3 +261,34 @@ This is no longer a rename — it's a re-architecture of `ValveDriver` + `RunCon
 > 1 NO) instead of 3 zone valves + a 3-way diverter, and **zero H-bridge driver chips**
 > (5 FETs instead). Net parts: +2 valves, −4 DRV8871s, −1 master solenoid, −1 master FET,
 > −1 12V buck, +1 check valve.
+
+---
+
+## 9. Additional V1 requirement (this session) — flow-check manual override
+
+Not a valve item, but captured here so it isn't lost; lands in the **firmware spec** at the
+doc pass (§7 FlowMonitor, §10 `/api/settings` + §10.1 settings screen + status banner,
+§14 fault gating) and in the Phase 3/4 plan tasks.
+
+**Requirement:** a web-UI setting that disables the FlowMonitor **faults** (`NO_FLOW` and
+unexpected-idle-flow) so a missing, uncalibrated, or misbehaving flow sensor can't block
+watering. Fail-dry cuts both ways — a bad sensor that halts all irrigation is its own
+failure mode.
+
+**Behavior / safety boundaries:**
+- **Mutes faults, not measurement:** flow is still counted (gallons logged) and shown live;
+  only the fault/stop action is suppressed.
+- **Software-only — cannot touch the hardware fail-dry:** no effect on the watchdog, safety
+  relay, pump-power gate, or `HARD_MAX_RUNTIME`. With flow checks off, a run still can't
+  exceed the runtime ceiling and still fails dry on power loss / hang. (Consistent with
+  §10.1: the SPA has no role in fail-dry.) Worst case = a run finishes its commanded
+  duration without the cross-check — bounded, never a runaway.
+- **Default ON (override off); persisted in NVS** (needed for the "sensor not installed
+  yet" case). Enabling it clears any latched flow fault and prevents re-fault while active.
+- **Loud + visible:** persistent "⚠ FLOW CHECK DISABLED" banner on every screen + a status
+  API flag + a fault-log entry on toggle. A silently-muted safety check is the hazard.
+
+**Open choice:** single toggle (mute both faults) vs. granular (mute `NO_FLOW`, keep the
+unexpected-idle-flow leak detector always on). Recommend single toggle for V1; granular as a
+refinement. *Auto-revert after a window* is a possible future safeguard against "left it off
+forever," not required for V1.
