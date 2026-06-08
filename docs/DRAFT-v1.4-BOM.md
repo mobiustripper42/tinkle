@@ -15,9 +15,9 @@ switched by a simple low-side driver.
 
 | Item | Qty | Key spec | Candidate / link | Notes |
 |---|---|---|---|---|
-| Motorized ball valve, **NC** (normally-closed) | **3 now** (+1 later) | 3/4" brass, 9–36V AC/DC, 2-wire auto-return, ~2 W, 6–10 s, full/std port | [US Solid brass NC](https://ussolid.com/products/3-4-motorized-ball-valve-brass-9-36v-ac-dc-2-wire-auto-return-electric-ball-valve-normally-closed-3-indicator-lights) | Now: Zone 1, Zone 2, Dosatron-leg. Later: Zone 3 (hose outlet, plumbed later). Lead-bearing brass → non-potable irrigation only (fine). |
-| Motorized ball valve, **NO** (normally-open) | **1 now** | same family, normally-open | [US Solid brass NO](https://ussolid.com/products/3-4-motorized-ball-valve-brass-electric-ball-valve-with-3-indicator-lights-2-wire-auto-return-normally-open-9-36v-ac-dc-by-u-s-solid-html) | Clean / plain-water bypass leg. Confirm exact 3/4" SKU at order. |
-| Check valve, 3/4" | 1 now | brass, low cracking pressure | TBD | Dosatron **outlet**, passes toward the merge, blocks reverse. |
+| Motorized ball valve, **NC** (normally-closed) | **3 now** (+1 later) | 3/4" brass, 9–36V AC/DC, 2-wire auto-return, ~2 W, 6–10 s, **NPT, standard port**, 2-indicator-light SKU | [US Solid brass NC](https://ussolid.com/products/3-4-motorized-ball-valve-brass-9-36v-ac-dc-2-wire-auto-return-electric-ball-valve-normally-closed-3-indicator-lights) | Now: Zone 1, Zone 2, Dosatron-leg. Later: Zone 3 (hose outlet). Draws holding current only while energized (open) during a run — negligible on mains; size future solar for valves-held-open. Lead-bearing brass → non-potable only (fine). |
+| Motorized ball valve, **NO** (normally-open) | **1 now** | same family, **NPT, standard port**, 3-indicator-light SKU | [US Solid brass NO](https://ussolid.com/products/3-4-motorized-ball-valve-brass-electric-ball-valve-with-3-indicator-lights-2-wire-auto-return-normally-open-9-36v-ac-dc-by-u-s-solid-html) | Clean / plain-water bypass leg. Resting (de-energized) default = plain flows, Dosatron isolated. |
+| Check valve, 3/4" | **reuse** | brass, 200 psi | existing **GASHER** | Dosatron **outlet — between the injector and the rejoin tee** (not after the tee — that would block the bypass). High-pressure side → cracking pressure irrelevant. Single check is proportional (rainwater, no city cross-connection — no RPZ/double-check). |
 | Pressure regulator, ≤15 psi, 3/4" | 1 now | one per tunnel, upstream of zone split | Senninger PRL (or reuse if rated) | Drops to tape pressure before the zones. |
 | Pump, SEAFLO 51 24V | 1 now | SFDP2-055-060-51, 5.5 GPM, switch set ~20 psi, internal bypass, run-dry | SEAFLO | Dead-51 on shelf = bench mule only. Buy a deployment unit. |
 | Flex connectors (pump in + out) | 2 now | braided SS / reinforced, 12–18" | — | **Required** — never hard-plumb the glass-filled nylon ports. |
@@ -36,9 +36,9 @@ switched by a simple low-side driver.
 |---|---|---|---|---|
 | ESP32 DevKitC, 38-pin | 1 | Arduino-ESP32 | — | Re-mapped pins (see draft §4). |
 | ATtiny85 + programmer | 1 | watchdog MCU | Digispark / AVR-ISP | Dependency-free sketch. |
-| Low-side valve driver | 5 populated (build ~8–16) | logic-level N-FET **or** ULN2803 array | IRLZ44N (discrete) / ULN2803 (8-ch) | Valve ~80 mA + cap inrush — **verify inrush** if using ULN2803; discrete FET is the safe default. Gate R + gate-to-GND pulldown so valves sit off at boot. |
-| Per-valve snubber/clamp | 5 | RC or TVS across the valve supply | TBD — bench | Motor+cap load turn-off transient. **Real answer before BOM freeze.** |
-| Flyback diode | per pump relay + as needed | 1N4007 / Schottky | — | |
+| Low-side valve driver | 1 per valve (5 now, build ~8–16) | discrete logic-level N-FET | **IRLZ44N** | Huge margin over cap inrush → inrush spec moot (don't bench it). Gate R + gate-to-GND pulldown so valves sit off at boot. |
+| TVS clamp, drain–source per FET | 5 | e.g. **SMAJ30A** | SMAJ30A | Valves have an internal bridge rectifier → a freewheel diode across the valve won't clamp; clamp the **FET**, not the load. No RC snubber unless a scope shows ringing. |
+| Flyback diode | pump-relay coil | 1N4007 / Schottky | — | Relay coil only — the valves use the per-FET TVS above, not a freewheel diode. |
 | Pump relay (or MOSFET) | 1 | ~5–6 A, clean isolation | — | On the **armed** 24V (fail-dry source gate). |
 | Safety/arm relay | 1 | NO, energize-to-pass, ≥10 A | — | ATtiny-armed; gates 24V to the **pump**. |
 | TM1637 4-digit display | 1 | 2-wire | — | MM:SS countdown, read-only. |
@@ -65,8 +65,8 @@ switched by a simple low-side driver.
 
 | Item | Qty | Key spec | Candidate | Notes |
 |---|---|---|---|---|
-| Momentary button + LED ring | 3 | IP67 | — | One per zone (Z1/Z2 + Z3 hose), DEC-006. |
-| LED-ring driver | 1 | ULN2803 (sink) | — | Ring drive voltage (24V via series-R, or a logic rail) — **decide**; 12V buck is gone. |
+| Momentary button + **24V LED ring** | 3 | 19 mm, IP67, 24V (or 12–24V) ring | — | One per zone (Z1/Z2 + Z3 hose), DEC-006. Ring runs straight off the 24V bus through its FET. |
+| LED-ring low-side switch | 3 | small N-FET / logic-level transistor per ring | — | GPIO can't sink a 24V ring directly; one switch per ring off 24V. (No ULN2803, no 12V rail.) |
 
 ---
 
@@ -79,15 +79,23 @@ switched by a simple low-side driver.
 
 ---
 
-## Open items that affect the BOM (resolve before freeze)
+## Open items
 
-1. **Valve low-side driver:** discrete FET-per-valve vs one ULN2803 array — depends on the
-   cap inrush current (datasheet doesn't give it; bench-measure or ask US Solid).
-2. **Per-valve snubber values** for the motor+cap load.
-3. **LED-ring drive voltage** now that the 12V rail is gone.
-4. **Confirm the NO brass valve SKU** in 3/4" (search says it exists; verify at order).
-5. **Check-valve cracking pressure** low enough not to disturb the ≤15 psi tape side
-   (it's upstream of the regulator, so pump-side pressure — fine, but pick a sane one).
+**Resolved (sourcing pass):**
+1. ✅ Driver = **IRLZ44N FET per valve** — margin makes the cap-inrush question moot.
+2. ✅ Clamp = **SMAJ30A TVS drain–source per FET** (internal-rectifier valves; no RC).
+3. ✅ LED rings = **24V**, one low-side switch per ring off the 24V bus (no 12V, no ULN2803).
+4. ✅ Check valve = **existing GASHER**, Dosatron outlet between injector and rejoin tee
+   (200 psi, single check sufficient — rainwater, no cross-connection).
+
+**Confirm at order:**
+- Valve SKUs: NO clean leg = **3-indicator-light**, NC fert + zone legs = **2-indicator-light**;
+  **NPT (not BSP)**, standard port on all.
+
+**⚠ Reconcile before buying — master valve:** the sourcing note lists a *master* among the
+valves, but the **v1.4 design dropped the master** (the pump on the armed rail is the source
+gate). If the master is back, it changes the BOM and re-opens DEC-003; if it's a leftover
+from before the drop, omit it. Needs a yes/no (see chat).
 
 ## Net delta vs the pre-v1.4 design
 

@@ -128,11 +128,13 @@ note above for what the removal actually costs.
 
 ## 4. Control hardware
 
-**Valve driver — one low-side N-FET per valve** (logic-level, e.g. IRLZ44N), gate
-resistor + gate-to-GND pulldown so each valve sits **off** through ESP32 boot. Flyback
-diode across each valve (motor + cap load) and the pump relay coil. No H-bridges, no
-DRV8871, no never-both-high invariant. Build ~8–16 channels (build-for-three); **populate
-5** for Red V1.
+**Valve driver — one low-side N-FET per valve** (IRLZ44N; huge margin over the cap inrush,
+so the inrush spec is moot), gate resistor + gate-to-GND pulldown so each valve sits **off**
+through ESP32 boot. **Clamp the FET, not the load:** a TVS (SMAJ30A) drain-to-source per
+FET — the valves have an internal bridge rectifier, so a freewheel diode across the valve
+won't clamp cleanly. The pump-relay coil keeps its flyback diode. No H-bridges, no DRV8871,
+no never-both-high invariant. Build ~8–16 channels (build-for-three); **populate 5** for
+Red V1.
 
 **Valve channels populated (Red V1):** Z1, Z2, Z3 (NC) + clean bypass (NO) + Dosatron
 leg (NC) = **5**.
@@ -150,7 +152,7 @@ leg (NC) = **5**.
 | 27 | IN  | Flow sensor pulse | interrupt; level-shift 5V→3.3V |
 | 25 / 26 | OUT | TM1637 CLK / DIO | |
 | 34 / 35 / 39 | IN | Buttons B1 / B2 / B3 | input-only, ext pull-up + debounce cap |
-| 32 / 33 / 23 | OUT | LED rings 1 / 2 / 3 | drive sorted at button BOM (24V via resistor or logic rail) |
+| 32 / 33 / 23 | OUT | LED rings 1 / 2 / 3 → per-ring low-side switch | 24V rings off the 24V bus |
 | 4 | OUT | Heartbeat → ATtiny | |
 | 36 | IN | ATtiny "tripped" → ESP32 | input-only |
 
@@ -163,9 +165,10 @@ one (boot-safe by the same master-FET pattern), but the proposed map avoids them
 (gated) 24V** — the fail-dry source gate. **Valves on raw 24V** (as today's zones already
 are): minimal wiring change, and it sidesteps a de-arm-vs-`CLOSE_ZONE` timing race; the
 source gate (pump) is what makes it dry, so the valves don't need gating. Valves are
-9–36V, ~2 W → 24V direct, **no 12V buck**. Keep **24→5V** (flow sensor) and **24→3.3V**
-(logic). Per-valve snubber/clamp for the motor+cap load (open item — real answer before
-BOM freeze), flyback on the pump relay, inline fuse, TVS, reverse-polarity protection.
+9–36V, ~2 W → 24V direct, **no 12V buck** (button LED rings are now 24V rings, one low-side
+switch each off the 24V bus). Keep **24→5V** (flow sensor) and **24→3.3V** (logic). Per-FET
+TVS clamp (SMAJ30A) on each valve channel, flyback on the pump relay, inline fuse, TVS,
+reverse-polarity protection.
 
 **Watchdog:** unchanged in principle (ATtiny + safety relay, DEC-003), except the relay
 now gates the **pump** alone (the source) instead of "master + pump" — master gone, valves
@@ -186,6 +189,10 @@ source and lets the NC valves close.
   still gates the sequence (already correct).
 - **Fert logic:** no cached diverter position (DEC-008 simplifies). Keep a
   "don't re-toggle if already in the wanted state" guard to avoid needless travel/wear.
+- **Diverter leg-switch transient:** the two legs take ~5–15 s to travel, so a fert↔plain
+  switch briefly overlaps (both-open or both-closed for a few seconds). Harmless — the pump
+  rides a short deadhead on its internal bypass, and a brief split just under-injects for a
+  moment. Firmware *may* stagger the two (make-before-break) for cleanliness; not required.
 - **Constants:** `ZONE_TRAVEL_MS ≈ 10000` (6–10 s spec + margin; bench-confirm), same for
   the diverter legs. `PULSE_MS` and the H-bridge config are gone.
 - **Boot caveat:** document the ~1-min cap-charge window — valves can't be trusted to
