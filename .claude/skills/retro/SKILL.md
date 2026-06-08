@@ -1,6 +1,6 @@
 ---
 name: retro
-description: Phase-end retrospective. Closes the current phase. Under DEC-S013, retro is also where per-session time math runs — for every session in the phase window, it computes wall_clock / dev_time / review_time from `started`, `ended`, the transcript JSONL, and GitHub PR timestamps. Aggregates to phase velocity. Marks PROJECT_PLAN.md `[x]`, reconciles drift, writes RETROSPECTIVES.md, runs version bumps (patch per merged PR + minor at phase close on dev projects), prompts retro notes. Optionally chains into `/start-phase`.
+description: Phase-end retrospective. Closes the current phase. Under DEC-S013, retro is also where per-session time math runs — for every session in the phase window, it computes wall_clock and active time (active = wall_clock - breaks, breaks inferred from the transcript JSONL) from `started`, `ended`. Aggregates to one phase velocity: active h/pt. Marks PROJECT_PLAN.md `[x]`, reconciles drift, writes RETROSPECTIVES.md, runs version bumps (patch per merged PR + minor at phase close on dev projects), prompts retro notes. Optionally chains into `/start-phase`.
 tools: Read, Edit, Write, Bash, Glob, Grep, Agent
 ---
 
@@ -56,81 +56,37 @@ If `transcript` is set and the file is readable:
 
 If the transcript is unreadable or missing, set `total_breaks_hours = 0` and note `inference: transcript-unavailable` in the per-session line of the retro.
 
-### Step 2.4 — PR timestamps from GitHub
+### Step 2.4 — active_time (the headline number)
 
-For each PR number in `pr_numbers`:
 ```
-gh pr view <N> --json number,createdAt,mergedAt,state
-```
-Capture `createdAt` (= `pr_opened_at`) and `mergedAt` (= `pr_merged_at`, may be null if still open or closed-without-merge).
-
-If `gh` is unavailable, try `mcp__github__pull_request_read` with `owner`, `repo`, `pullNumber`.
-
-If both unavailable: skip PR-derived math for this session; note `inference: github-unavailable`. The user can rerun retro later.
-
-### Step 2.5 — dev_time and review_time (per-PR windows, DEC-S015)
-
-Each PR gets its own dev window (time building it) and its own review window (time reviewing it). Sum across all PRs. Replaces the prior single-boundary model — which collapsed an N-PR session to one seam and structurally under-reported dev_time when PRs > 1.
-
-Sort `pr_numbers` by `createdAt` ascending. For each `PR_i` (i = 0..N-1):
-
-**dev_window_i** = `anchor_i → PR_i.createdAt`
-- `anchor_i = started` if i = 0; otherwise `anchor_i = PR_{i-1}.mergedAt`.
-- If `PR_{i-1}.mergedAt` is null (previous PR not yet merged at retro time): use `PR_{i-1}.createdAt` as the anchor — conservative under-count of dev time for PR_i; the cost is absorbed into PR_{i-1}'s review window.
-- If `anchor_i > PR_i.createdAt` (next PR opened before previous merged — concurrent work): `dev_window_i = 0`. The time is real dev work but it overlapped review of PR_{i-1} and is counted there.
-
-**review_window_i** = `PR_i.createdAt → effective_merge_i`
-- `effective_merge_i = min(PR_i.mergedAt, ended)` if `mergedAt` is non-null. If merged after `/its-dead`, cap at `ended` — post-session review is uncountable.
-- If `PR_i` is still OPEN at retro time: `effective_merge_i = ended`.
-- If `PR_i` was CLOSED-without-merge in-session: still count `PR_i.createdAt → closed_at` as review (the time was spent on it). Skip if closed after `ended`.
-
-**Trailing review window** — after the last in-session activity:
-- `last_in_session = max over i of (effective_merge_i)`
-- If `last_in_session < ended`: add a trailing review window `last_in_session → ended` covering session close-out (final review reads, `/its-dead`, etc.).
-
-**Subtract breaks per window:** for each window above, sum break gaps > 15 min whose start timestamp falls inside the window. Subtract from that window's contribution.
-
-**Sum and clamp:**
-```
-dev_time     = Σ max(0, dev_window_i − dev_breaks_i)
-review_time  = Σ max(0, review_window_i − review_breaks_i)
-              + max(0, trailing_window − trailing_breaks)
+active_time = max(0, wall_clock - total_breaks_hours)
 ```
 
-Round each to nearest 0.083 h (5 min).
+Active time is wall-clock minus inferred idle — the time actually spent at the keyboard on this session's work. Round to nearest 0.083 h (5 min). This is the **single** velocity input. No PR timestamps are fetched; no time is split into "dev" vs "review."
 
-**Sanity check:** `dev_time + review_time + Σ breaks_in_all_windows ≈ wall_clock`. If off by more than 0.1 h after rounding, surface in Notes — likely a missed break or a merge timestamp outside the session window.
+**Why there is no dev/review split anymore (retiring the DEC-S015 per-PR window model).** Through Phase 7 the retro also computed `dev_time` and `review_time` via per-PR windows. That math is retired. It assumed each PR was merged before the next opened, but the actual workflow opens PRs in a burst and merges them whenever ("merge PRs whenever — order doesn't matter" — CLAUDE.md). Under that real pattern the per-PR anchors collapse: `dev_time` falls to a fictional ~0.03–0.09 h/pt and the overlapping review windows sum past wall-clock (a real case: Session 25 reported 26.8h of "review" inside a 9.2h session — physically impossible). Every retro since Phase 3 footnoted the split as untrustworthy and forecast on active anyway. So we keep the number that was always the headline and drop the two that were always disclaimed. There is no cheap fix for the split — correctly attributing per-task time would require reconstructing keystroke spans from the transcript, which is exactly what `active = wall - breaks` already approximates.
 
-**Edge cases:**
-- **N=0 (no PRs):** `dev_time = wall_clock − all_breaks`, `review_time = 0`. Pure dev session.
-- **N=1:** collapses cleanly. dev_window = `started → PR.createdAt`. review_window = `PR.createdAt → effective_merge`. Trailing = `effective_merge → ended`.
-- **N≥2 with concurrent work:** dev_window_i clamps at 0 when the next PR opened before the previous merged; that overlap time is implicitly inside PR_{i-1}'s review_window. Honest accounting — you were context-switching, not pure-deving.
-- **All PRs merged post-`/its-dead`:** every review_window caps at `ended`. dev_time and review_time still split correctly; the post-session merge time is just invisible to the metric.
-
-### Step 2.6 — Per-session line for the retro
+### Step 2.5 — Per-session line for the retro
 
 Build one row per session for the RETROSPECTIVES.md table:
 
 ```
-| Session N | YYYY-MM-DD | wall_clock | dev_time | review_time | breaks | points | PRs |
+| Session N | YYYY-MM-DD | wall_clock | breaks | active | points | PRs |
 ```
 
-Hold these numbers — they get summed in Step 3.
+Hold these numbers — they get summed in Step 3. (`PRs` is just the `pr_numbers` list from frontmatter, for reference — no timestamps.)
 
 ## Step 3 — Phase metrics
 
 Sum the per-session numbers:
 - `phase_wall_clock` = Σ wall_clock
-- `phase_dev_time` = Σ dev_time
-- `phase_review_time` = Σ review_time
 - `phase_breaks` = Σ breaks
+- `phase_active` = Σ active   (= `phase_wall_clock - phase_breaks`)
 - `phase_points` = Σ points (also confirm against `points:N` label sum from closed issues — flag mismatch)
 - `phase_sessions` = count
 
-Three velocities:
-- `wall_clock / point` — total elapsed including all idle and review
-- `dev_time / point` — active dev only (the headline number for forecasting)
-- `review_time / point` — review-and-iterate cost per point
+One velocity:
+- `active / point` — active hours per effort point. **This is the headline and the only number to forecast on.** `wall_clock` is kept as raw bookkeeping (it carries overnight gaps and idle), but `wall_clock / point` is not a velocity — don't quote it as one.
 
 ## Step 4 — Update PROJECT_PLAN.md
 
@@ -143,9 +99,9 @@ Reconcile drift: issues with `phase:<N>` labels that don't appear in PROJECT_PLA
 
 Update the velocity table at the top:
 ```
-| Phase | Sessions | Points | Wall (h) | Dev (h) | Review (h) | hrs/pt (dev) |
-|-------|----------|--------|----------|---------|------------|--------------|
-| N     | <count>  | <pts>  | <wall>   | <dev>   | <review>   | <hrs_pt_dev> |
+| Phase | Sessions | Points | Wall (h) | Breaks (h) | Active (h) | h/pt (active) |
+|-------|----------|--------|----------|------------|------------|---------------|
+| N     | <count>  | <pts>  | <wall>   | <breaks>   | <active>   | <active_pt>   |
 ```
 
 Append one row per phase as they complete.
@@ -183,19 +139,16 @@ Read `docs/RETROSPECTIVES.md` first (Edit requires a prior Read). If it doesn't 
 
 **Sessions:** <count>
 **Points:** <points completed> / <planned> (<%>)
-**Wall clock:** <wall>h
-**Dev time:** <dev>h
-**Review time:** <review>h
-**Velocities:**
-- Wall: <wall/pt> h/pt
-- Dev: <dev/pt> h/pt  ← headline forecast
-- Review: <review/pt> h/pt
+**Wall clock:** <wall>h  (raw elapsed — includes overnight + idle)
+**Breaks:** <breaks>h
+**Active time (wall - breaks):** <active>h ← honest headline
+**Velocity:** <active/pt> h/pt active  ← the only forecast number
 **Issues:** <created> created, <closed> closed, <moved> moved to Phase <N+1>
 
 ### Per-session breakdown
-| Session | Date | Wall | Dev | Review | Breaks | Points | PRs |
-|---------|------|------|-----|--------|--------|--------|-----|
-| <row>   | ...  | ...  | ... | ...    | ...    | ...    | ... |
+| Session | Date | Wall | Breaks | Active | Points | PRs |
+|---------|------|------|--------|--------|--------|-----|
+| <row>   | ...  | ...  | ...    | ...    | ...    | ... |
 
 ### What worked
 - <verbatim>
@@ -219,7 +172,7 @@ Session files were already finalized by `/its-dead` and are not modified by this
 
 ```
 git add docs/PROJECT_PLAN.md docs/RETROSPECTIVES.md
-git commit -m "Phase <N> retro — <points> pts in <dev>h dev (<dev/pt> hrs/pt)"
+git commit -m "Phase <N> retro — <points> pts in <active>h active (<active/pt> h/pt)"
 git push origin <BRANCH>
 ```
 
@@ -227,10 +180,11 @@ git push origin <BRANCH>
 
 Run only if `package.json` exists at the repo root (dev-project signal — DEC-S007).
 
-Resolve working branch:
+Resolve working branch — always the active trunk (DEC-S022):
 ```
-git show-ref --verify --quiet refs/remotes/origin/staging && WORKING_BRANCH=staging || WORKING_BRANCH=main
+WORKING_BRANCH=main
 ```
+Bumps and tags land on `main` directly; `production` (if any) only moves at `/promote-production`.
 
 If `BRANCH != $WORKING_BRANCH`: STOP. Tell the user "Switch to `$WORKING_BRANCH` and re-run /retro." Wait.
 
@@ -259,8 +213,9 @@ c. **Commit + tag (main only):**
    git add package.json CHANGELOG.md
    [ -f package-lock.json ] && git add package-lock.json
    git commit -m "Bump version to v<NEW_VERSION> (PR #<N>)"
+   git tag "v<NEW_VERSION>"
    ```
-   If `$WORKING_BRANCH = main`: `git tag "v<NEW_VERSION>"`. On `staging`: skip the tag — `/promote-staging` tags later.
+   Tags land on the trunk at bump time. Promotion to `production` (if the project has it) carries the already-tagged commit — `/promote-production` does not tag.
 
 ### Step 8.3 — Minor-bump at phase close
 
@@ -271,7 +226,7 @@ a. `NEW_VERSION=$(npm version minor --no-git-tag-version | tr -d 'v')` — zeros
 b. CHANGELOG entry:
    ```
    ## [<NEW_VERSION>] - <YYYY-MM-DD> — Phase <N>
-   - <points> pts shipped across <session count> sessions (<dev/pt> hrs/pt dev)
+   - <points> pts shipped across <session count> sessions (<active/pt> h/pt active)
    - See `docs/RETROSPECTIVES.md` for the full retro
    ```
 
@@ -280,8 +235,8 @@ c. Commit + tag (main only):
    git add package.json CHANGELOG.md
    [ -f package-lock.json ] && git add package-lock.json
    git commit -m "Phase <N> close — bump to v<NEW_VERSION>"
+   git tag "v<NEW_VERSION>"
    ```
-   `$WORKING_BRANCH = main` → `git tag "v<NEW_VERSION>"`. `staging` → skip.
 
 ### Step 8.4 — Push
 
@@ -300,8 +255,8 @@ Echo: `Phase <N> closed at v<NEW_VERSION>` (and `tagged` if main).
 
 ```
 Phase <N> closed.
-Points: <P> in <dev>h dev time (<dev/pt> hrs/pt)
-Wall: <wall>h | Review: <review>h | Sessions: <count>
+Points: <P> in <active>h active time (<active/pt> h/pt)
+Wall: <wall>h | Breaks: <breaks>h | Sessions: <count>
 Issues: <closed>/<created> closed; <moved> moved to Phase <N+1>
 Retro: docs/RETROSPECTIVES.md
 Version: v<NEW_VERSION>  (dev projects only; skipped if no package.json)
@@ -310,7 +265,6 @@ Version: v<NEW_VERSION>  (dev projects only; skipped if no package.json)
 ## Notes
 
 - **Session files are read-only here.** Retro reads them; never writes. DEC-S013 atomicity.
-- **GitHub queries can fail.** If `gh` and MCP are both unavailable, skip the PR-derived numbers, mark them `inference: github-unavailable` in the retro, and tell the user they can rerun retro later. Don't guess.
-- **The headline velocity is `dev_time / point`.** Wall-clock velocity is inflated by review-and-merge wait. Review-time velocity is interesting but secondary. Forecast against dev_time.
-- **Each PR has its own dev + review window** (Step 2.5, DEC-S015). Replaces both the original `min(pr.createdAt)` single-boundary model AND its `max(pr.createdAt)` follow-up — both collapsed multi-PR sessions to one seam and structurally mis-attributed dev vs review time. Per-PR windows make `dev_time + review_time + breaks ≈ wall_clock` honestly hold for any N.
-- **Historical retros run under the single-boundary model are method artifacts.** Sessions where N>1 will have under-reported `dev_time` and over-reported `review_time` (or vice versa, depending on which seam version). Forecast against `wall_clock − breaks` (active time) when comparing to pre-DEC-S015 numbers. Going forward (post-DEC-S015), `dev_time / point` and `review_time / point` are both meaningful headlines.
+- **GitHub queries can fail.** Time math no longer touches GitHub at all — active time comes from the session file + transcript. `gh` is only used for issue accounting (Steps 1 and 3's points cross-check) and version bumps (Step 8). If it's down, skip those, note it, and let the user rerun. Don't guess.
+- **The headline velocity is `active / point`, and it's the only one.** `active = wall_clock - breaks`. Wall-clock velocity is inflated by overnight gaps and idle — don't quote `wall / point` as a velocity. There is no `dev_time` or `review_time` (retired — see Step 2.4).
+- **Old retros carry dead columns.** Phase retros written under the per-PR model have `Dev` / `Review` columns and a dev/review velocity, all artifacts — the `Active` figure in those same retros was always the real headline. Phases that predate active time have only a legacy `Velocity: X hrs/pt` and no active number; **don't blend those with active h/pt** — they're a different, older metric (the standalone velocity extractor handles this split for you).

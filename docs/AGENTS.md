@@ -1,7 +1,7 @@
 # [Project] — Claude Code Agents & Skills
 
 ## Overview
-Several agents and slash-command skills support the development workflow. All run as Claude Code sessions, subagents, or slash commands. None are blocking — if one creates friction, drop it and revisit later. The summary table at the end of this doc is the canonical list — the per-skill sections below cover the original session-lifecycle set; newer skills (`/start-phase`, `/retro`, `/bump-major`, `/promote-staging`, etc.) are documented in their own `SKILL.md` files under `.claude/skills/`.
+Several agents and slash-command skills support the development workflow. All run as Claude Code sessions, subagents, or slash commands. None are blocking — if one creates friction, drop it and revisit later. The summary table at the end of this doc is the canonical list — the per-skill sections below cover the original session-lifecycle set; newer skills (`/start-phase`, `/retro`, `/bump-major`, `/promote-production`, etc.) are documented in their own `SKILL.md` files under `.claude/skills/`.
 
 ---
 
@@ -206,7 +206,7 @@ Slash commands manage session lifecycle. Time tracking is automatic.
 | /start-phase | — | Phase boundary (start) | Materialize phase as Issues |
 | /retro | — | Phase boundary (end) | Close out phase, write retro, bump minor version |
 | /bump-major | — | Breaking change | Manual major version bump |
-| /promote-staging | — | Ship staging to prod | ff-merge `staging` → `main`, tag, push |
+| /promote-production | — | Ship trunk to prod | ff-merge `main` → `production` (deploy-only), push |
 | /doc-consistency-check | — | Mid-project, before phase boundaries | Invokes @doc-consistency; cross-refs `docs/*.md` + root `CLAUDE.md` |
 | /push-seeds | — | After workflow improvements | Backport project-side improvements to seeds templates |
 | /pull-seeds | — | After seeds gets new improvements | Pull template changes into this project |

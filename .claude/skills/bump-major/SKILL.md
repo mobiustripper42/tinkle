@@ -1,6 +1,6 @@
 ---
 name: bump-major
-description: Manually bump the project's major version. Use for breaking changes — new data model, removed feature, anything users would notice on upgrade. Dev projects only (requires `package.json`). Writes a CHANGELOG.md entry, tags on `main`, defers tag to `/promote-staging` on `staging`.
+description: Manually bump the project's major version. Use for breaking changes — new data model, removed feature, anything users would notice on upgrade. Dev projects only (requires `package.json`). Writes a CHANGELOG.md entry and tags on the active trunk (`main`).
 tools: Read, Edit, Write, Bash, Grep
 ---
 
@@ -13,8 +13,9 @@ Run `[ -f package.json ] || echo "missing"`. If `package.json` is missing at the
 ## Step 1 — Resolve working branch
 
 ```
-git show-ref --verify --quiet refs/remotes/origin/staging && WORKING_BRANCH=staging || WORKING_BRANCH=main
+WORKING_BRANCH=main
 ```
+The active trunk is always `main` (DEC-S022). `production` (if any) only moves at `/promote-production`.
 
 `BRANCH=$(git branch --show-current)`.
 
@@ -59,11 +60,11 @@ git add package.json CHANGELOG.md
 git commit -m "Bump major version to v$NEW_VERSION — <RATIONALE>"
 ```
 
-**Tag (main only):** if `$WORKING_BRANCH = main`:
+**Tag:**
 ```
 git tag "v$NEW_VERSION"
 ```
-On `staging`, skip the tag — `/promote-staging` will tag when promoting.
+Tags land on the trunk at bump time. Promotion to `production` (if the project has it) carries the already-tagged commit — `/promote-production` does not tag.
 
 **Push:**
 ```
@@ -76,7 +77,7 @@ If a tag was created: `git push origin "v$NEW_VERSION"`.
 ```
 v<CURRENT_VERSION> → v<NEW_VERSION> (major)
 Branch: <WORKING_BRANCH>
-Tag: v<NEW_VERSION> [on main] | deferred to /promote-staging [on staging]
+Tag: v<NEW_VERSION>
 CHANGELOG.md updated.
 ```
 

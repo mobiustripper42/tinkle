@@ -78,6 +78,10 @@ For each pair that survived the gate, diff project-live against seeds-template:
 
 The diff itself is direction-symmetric — same hunks, same classification rubric. Direction only matters at apply time (Step 4).
 
+**Ignore formatting-only differences (DEC-S022 — anti-churn).** A hunk whose only delta is whitespace or non-semantic formatting is **not drift** and must be dropped from the diff scope before classification. This includes: tabs vs spaces, trailing whitespace, indentation width, blank-line count, line-wrapping, and markdown-table separator padding (`|---|` vs `|------|`). Concretely, treat a hunk as formatting-only if it disappears under `git diff --ignore-all-space --ignore-blank-lines` (or the equivalent normalized comparison). Never "forward-port" or "backport" a formatting-only hunk, and never overwrite a file solely to reformat it. The 2026-06-01 sailbook loop (PR #75) was exactly this: the apply step regenerated files with cosmetic drift (tabs, literal `\n`, indent, table padding), which the next run re-detected as "drift" and re-proposed — a self-perpetuating noise generator. Real semantic changes (added/removed/reordered *content*, not whitespace) classify normally.
+
+**Apply deterministically; never paraphrase (DEC-S022).** When a hunk IS a real change to apply, transcribe the source side **verbatim** — copy the bytes, don't regenerate prose from memory. For a full-file/"logic-drift" overwrite, write the source file's exact content (then re-apply the project's preserved substitutions per Step 4). Regenerating text is what introduced the cosmetic drift that fed the loop.
+
 **Never blanket-skip a file** that has a corresponding template, even if the project's copy is heavily customized. Hunk-classify the diff. Files like `docs/BRAND.md`, `docs/PROJECT_PLAN.md`, `docs/RETROSPECTIVES.md`, and `CLAUDE.md` carry both project substitutions AND structural template content; treating them as 100%-project-specific blanks out the structural channel and was the failure mode of the 2026-05-08 first run. The only gates that drop a whole file from scope are the project-type manifest above, the file-class `context` lookup in Step 1.4 below, and the duplicate-PR check in Step 1.5 — all three explicit.
 
 ### Step 1.4 — File-class lookup (DEC-S018)
@@ -252,6 +256,8 @@ If a logic file picks up project-specific content over time, the right fix is to
 
 The classifier is symmetric; the substitution-preservation logic flips. In push, you generify; in pull, you respect existing concretions. Logic-drift bypasses both — it's a wholesale sync (or, in PUSH+auto, no sync at all).
 
+**Post-apply no-op guard (DEC-S022 — anti-churn).** After writing all approved changes, re-diff the target against its pre-apply state with whitespace ignored (`git diff --ignore-all-space --ignore-blank-lines`). If nothing remains, **revert the writes and stage no commit** — the "changes" were formatting-only and must not open a PR. Never stage an empty or whitespace-only commit. This is the backstop that breaks the sailbook-style nightly loop even if a formatting-only hunk slips past the Step 1 filter.
+
 ### Step 5 — Bug check
 
 If the file on the **non-applying side** has a bug fixed on the applying side, flag it. Direction matters:
@@ -264,6 +270,8 @@ Apply if approved.
 ### Step 6 — Report
 
 Output the following sections in order. Sections with no entries are omitted entirely — do not emit empty section headers.
+
+**Derive this report from the actual staged diff, not from intentions (DEC-S022 — anti-churn).** The "Files updated" list and any action/classification table MUST be generated from what was really written and staged (`git diff --staged --name-only` / `--stat`), never from the set of changes you *planned* to make. The sailbook PR #75 body advertised 15 full-file overwrites and 4 new files while the staged diff touched 5 files with cosmetic changes only — because the table was written from intent. A file that produced no staged change (e.g. dropped by the no-op guard, or whose only delta was formatting) must NOT appear as an applied row. Report what happened, byte-for-byte.
 
 **Files updated.** List with one line per file noting hunks touched (PUSH: seeds-side; PULL: project-side). For logic-drift, write `<file> — full-file overwrite from <source-side>`.
 

@@ -26,8 +26,9 @@ Before stamping time, check for leftover work from prior sessions. The CC platfo
 
 **Resolve `WORKING_BRANCH`:**
 ```
-git show-ref --verify --quiet refs/remotes/origin/staging && WORKING_BRANCH=staging || WORKING_BRANCH=main
+WORKING_BRANCH=main
 ```
+The active trunk is always `main` (DEC-S022); a `production` branch, if present, is a downstream deploy pointer and never the orphan-scan base.
 
 **Scan A — remote `claude/*` branches with commits not on `$WORKING_BRANCH`:**
 ```
@@ -42,15 +43,15 @@ For each Scan-A candidate, find the most recent PR whose `headRefName` matches t
 
 | Category | Definition | Action |
 |----------|------------|--------|
-| Open-with-PR | Most recent PR is OPEN | Tell the user; don't touch — in-flight. Flag if `createdAt` is more than 24h old — likely a forgotten merge. |
-| Merged-cleanable | Most recent PR is CLOSED with `mergedAt` set (non-null) | **Squash-merge artifact** — branch is safe to delete. Aggregate count across all matches. After Scans A + B finish, prompt once: **"Found N merged-cleanable branches: `<list>`. Delete all? (y/n)"**. On `y`: run `git push origin --delete <ref>` per branch. Non-blocking — Step 1 proceeds regardless of the answer. |
-| Orphan-abandoned | Most recent PR is CLOSED with `mergedAt` null | PR closed without merging — work was abandoned. Surface advisory: "(a) reopen PR, (b) cherry-pick onto current branch, (c) delete?" Non-blocking. |
+| Open-with-PR | Most recent PR is OPEN | Silent. In-flight — nothing to do. |
+| Merged-cleanable | Most recent PR is CLOSED with `mergedAt` set (non-null) | Silent. Squash-merge artifact, safe to delete but harmless. Don't prompt. |
+| Orphan-abandoned | Most recent PR is CLOSED with `mergedAt` null | Silent. PR closed without merging — the close was the decision. |
 | Orphan-without-PR | Branch has commits but NO PR was ever opened for it | **Real problem — work has no shipping path.** Surface and **wait**: "(a) open a PR now, (b) cherry-pick onto current branch, (c) delete (commits lost)?" |
-| Stale-no-commits | Branch on remote, zero commits ahead of `$WORKING_BRANCH` and no associated PR commits | Suggest deletion (`git push origin --delete <ref>`) if more than one such ref exists. Non-blocking. |
+| Stale-no-commits | Branch on remote, zero commits ahead of `$WORKING_BRANCH` and no associated PR commits | Silent. |
 
-The **Merged-cleanable** category is the fix for the most-common Step 0.5 noise source. Under the prior contract (which checked only OPEN PRs), a squash-merged branch's original commits matched "Orphan-without-PR" and falsely raised an alarm every session. With the merged-state lookup in Scan B, these branches are correctly recognized as "shipped, safe to delete" and aggregated into one cleanup prompt instead of repeatedly nagging.
+**Why the PR cross-reference still runs even though only one category surfaces.** Scan B is not optional decoration — it's what keeps **Orphan-without-PR** honest. Without the merged-state lookup, every squash-merged branch (whose original commits never land on `$WORKING_BRANCH`) would match "branch has commits, looks like no PR" and false-alarm every session. The cross-reference is what tells a genuinely-orphaned branch apart from a shipped-and-squashed one. Keep the scan; suppress the output.
 
-**Gating rule.** Only **Orphan-without-PR** blocks the briefing — that's real lost work that needs a decision before continuing. Every other category is advisory; their prompts may surface (and the user may answer them inline), but Step 1 proceeds regardless of answer or skip.
+**Gating rule.** Surface **exactly one** category: **Orphan-without-PR**, and only when it's non-empty — that's real lost work with no shipping path, and it blocks the briefing until the user decides. Every other category is computed silently and produces **no output and no prompt**. The old per-session nag (merged-branch cleanup prompts, abandoned-PR advisories, stale-branch deletion suggestions) is gone — it printed "nothing wrong" every session and trained you to ignore it. If you ever want to reap merged/stale branches, that's an explicit ad-hoc ask, not a session-open ritual.
 
 **Tool-outage fallback.** If `gh` and `mcp__github__list_pull_requests` are both unavailable, skip Scan B entirely and surface every Scan-A candidate as "branch has commits — PR state check unavailable, do not assume orphan." Don't false-alarm during a tool outage. Note the skipped check in the session Context section.
 
@@ -204,7 +205,9 @@ Extract:
 
 ## Step 8 — Read project state
 
-Grep `docs/PROJECT_PLAN.md`:
+**Skip-when-directed.** If the user already named a task or goal when they launched this session, you do **not** need to compute a recommendation — they've told you what they're doing. Skip the recommendation-building below; Step 7's context read (last session, Next Steps, gotchas) is the part that always matters. The recommendation exists for the cold open, when you start a session with no task in hand. Don't spend the session's first move ranking the backlog the user has already overruled.
+
+When a recommendation *is* wanted (cold open), grep `docs/PROJECT_PLAN.md`:
 - Unchecked: `grep "\[ \]" docs/PROJECT_PLAN.md`
 - Deferred: `grep "\[~\]" docs/PROJECT_PLAN.md`
 - Priority: `grep "Next session priority" docs/PROJECT_PLAN.md -A 2`
@@ -227,12 +230,12 @@ Last session: [one-line summary]
 Next Steps from last session: [verbatim or paraphrased]
 Context to remember: [gotchas worth mentioning]
 
-Recommended task: [task ID + name + why]
+Recommended task: [task ID + name + why — OMIT this line entirely if the user opened with their own task]
 
 Branch already cut: <BRANCH> — good to go. Each task today gets its own /kill-this; the session file lives on the orphan `sessions` branch independent of any task branch.
 ```
 
-Then ask: **"Ready to go? Confirm the task or redirect me."**
+Then ask: **"Ready to go? Confirm the task or redirect me."** — or, if the user already named the task, just confirm you've got the context and restate their task in one line: **"Context loaded. Picking up <their task> — go?"**
 
 Stop. Do not begin work until the user confirms.
 
