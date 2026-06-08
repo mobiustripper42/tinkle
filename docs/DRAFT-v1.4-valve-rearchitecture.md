@@ -67,7 +67,7 @@ Rainwater tanks (west)
 ## 3. Fail-dry architecture (restated without the master)
 
 **The backbone is source control, not a valve.** The ATtiny-armed safety relay (NO,
-energize-to-pass) gates 24V to the pump **and** the valve rail, and is armed only while
+energize-to-pass) gates 24V to the **pump** (the source), and is armed only while
 a run is active (DEC-003 heartbeat encoding). No run → no pump power → no pressure →
 no water, regardless of any valve's state. The pump's internal check valves block
 reverse/siphon flow when it is off (confirmed: water cannot flow back through the pump;
@@ -78,51 +78,49 @@ tanks give only a trickle of head when full — siphon is a non-issue).
   the pump).
 - **ATtiny85** arms the safety relay feeding the **pump** (the source), armed only during
   runs. Lose either — power, heartbeat, the relay — and the pump de-powers, so no water
-  moves. NC valves close on their own de-energize and on total power loss; the pump on the
-  armed rail is the gate, the valves are a secondary layer.
+  moves. **The pump on the armed rail is the gate**; valve state is irrelevant to dryness (a
+  valve can't pass water with no pump pressure). The valves rest closed when de-energized as
+  a convenience, not as a safety barrier.
 
-**Secondary layers (defense-in-depth, not load-bearing):**
-- NC zone valves cap-return closed; the NO bypass returns to plain.
-- These are *soft*: the cap needs ~1 min of power to arm after the valve opens, and ages
-  over years in heat. Acceptable precisely because the *source* (pump power), not the
-  valve, is the trusted barrier.
+**The valves are not a safety barrier.** NC zones rest closed and the NO bypass rests open
+when de-energized — a sensible resting state and the correct fert default, not a fail-dry
+layer. A valve can't pass water with the pump unpowered, so for the runaway/flood guarantee
+the *source gate is the whole story*; valve state only decides *which* beds get water during
+a bounded run.
 
-**Honest trade (per @architect review — not a free fail-dry wash):** removing the master
-swaps one *independent mechanical* barrier (the NC master, downstream of everything) for
-the source-gate backbone — **one** hardware gate, the armed relay, with the pump-enable in
-*series* behind it (so a welded *enable* is caught, but they are **not** two independent
-gates) — plus the soft, aging, boot-windowed NC-cap zone layer and the software flow-sensor
-cross-check. A welded **safety relay** is then the single point that defeats source gating,
-caught only by the flow sensor. Defensible for a non-potable rainwater system with
-negligible head and a reverse-checking pump — but it **requires** the self-test below, and
-it makes DEC-003's "heartbeat = run-active" idle-disarm **load-bearing** (an always-on
-heartbeat would remove the idle no-source guarantee the master used to provide).
+**Removing the master loses no real protection.** Pump-off is the complete flood gate: no
+pump → no pressure → no water, whatever the valves do. The master's one unique job —
+blocking a gravity siphon through a stuck-open valve while the pump is off — doesn't apply
+here: near-zero tank head + the SEAFLO's internal checks block reverse flow. So it's out,
+cleanly. What *does* stay load-bearing is **DEC-003's "heartbeat = run-active" idle-disarm**
+— it's why the pump is unpowered between runs; an always-on heartbeat would break that, so
+that encoding is now a safety requirement.
 
-**Auto-return self-test (a requirement, not a nicety):** since the NC cap-return is now the
-only mechanical fail-closed element, the firmware must periodically exercise and verify each
-valve's close (commanded close watched on the flow sensor / position indicator) so a
-degraded cap is caught *before* it matters.
+**Auto-return self-test (a requirement — for correctness, not safety):** the firmware
+periodically verifies each valve rests closed, so a stuck-open or degraded valve gets
+*noticed* (don't silently water the wrong bed; flag the valve for service). It is **not** a
+fail-dry barrier — the source gate is.
 
 ### Failure-mode table (revised)
 
 | Failure | Result | Why it's safe |
 |---|---|---|
-| Mains loss | Pump dead → no source; NC valves cap-close; NO bypass returns open | No water. Source gone. |
-| Firmware hang / watchdog trip | Safety relay opens → pump + valve rail de-powered → pump off, valves close | No runaway-on. |
+| Mains loss | Pump dead → no source (valves also rest closed, but the dead pump is what makes it dry) | No water. Source gone. |
+| Firmware hang / watchdog trip | Safety relay opens → **pump** de-powered → no source → no water (valve state irrelevant to dryness) | No runaway-on. |
 | Single zone valve stuck open | Between runs pump is unpowered → no source → no flow; flow sensor flags idle flow | Source-gated; bounded to commanded runs. |
-| Pump-enable relay welded on | Pump only powered while the safety relay is armed (during runs); idle = no power | Safety relay is an independent second gate on the source. |
+| Pump-enable relay welded on | Pump only powered while the safety relay is armed (during runs); idle = no power | Safety relay sits in series ahead of the enable — it still de-powers the pump at idle. |
 | Safety relay welded armed **and** enable welded **and** a zone stuck open | Possible idle flow | 3 independent faults to flood; flow sensor flags idle flow. |
 | Zone capacitor degraded (won't auto-close) | Zone may stay open after a run; pump off between runs → no flow | Source-gated; bounded; flow-flagged. Periodic auto-return test. |
 | First ~1 min after boot (caps not charged) | A zone may not auto-close on an immediate power loss | Same event de-powers the pump → no source. |
 | Diverter wrong leg / both open | Wrong fert state | Agronomic oops, not a flood; source-gated. |
 
 Net: flooding requires the pump powered when it shouldn't be **and** an open path. The
-source's hardware gate is the armed safety relay, with the pump-enable in *series* behind
-it (a welded *enable* is still caught, but they are **not** independent — a welded *safety
-relay* defeats both, leaving only the software flow check). The master's one unique
-remaining job — blocking a gravity siphon through a stuck-open zone — is moot here (pump
-checks reverse flow, negligible head), which is why it can go; but see the honest-trade
-note above for what the removal actually costs.
+source's hardware gate is the armed safety relay (pump-enable in series behind it — a welded
+*enable* is still caught; a welded *safety relay* is the single hardware point that defeats
+it, with the software flow check behind that). Runs are time-bounded by the watchdog
+ceiling, so even a wrong or extra open valve during a run waters a bounded amount, never a
+runaway. The master is out with **no loss** — its only unique job, blocking a siphon through
+a stuck-open valve, doesn't apply here (negligible head + reverse-checking pump).
 
 ---
 
@@ -173,7 +171,7 @@ reverse-polarity protection.
 **Watchdog:** unchanged in principle (ATtiny + safety relay, DEC-003), except the relay
 now gates the **pump** alone (the source) instead of "master + pump" — master gone, valves
 on raw 24V. **DEC-003's idle-disarm is now load-bearing** (see §3). A trip de-powers the
-source and lets the NC valves close.
+**pump** (the source) → no water; valve state is irrelevant to dryness.
 
 ---
 
@@ -195,8 +193,9 @@ source and lets the NC valves close.
   moment. Firmware *may* stagger the two (make-before-break) for cleanliness; not required.
 - **Constants:** `ZONE_TRAVEL_MS ≈ 10000` (6–10 s spec + margin; bench-confirm), same for
   the diverter legs. `PULSE_MS` and the H-bridge config are gone.
-- **Boot caveat:** document the ~1-min cap-charge window — valves can't be trusted to
-  auto-close on power loss until charged; the source-gate covers it, but it's written down.
+- **Boot/cap note:** a valve may not fully auto-close in the first ~1 min after boot (cap
+  not yet charged). Not a safety issue — the source gate covers power loss; the self-test
+  flags a valve that didn't close. Document it.
 
 This is no longer a rename — it's a re-architecture of `ValveDriver` + `RunController` +
 `pins.h` + the native tests. The plan's task 1.7 should be re-scoped and re-estimated
@@ -208,16 +207,14 @@ This is no longer a rename — it's a re-architecture of `ValveDriver` + `RunCon
 
 - **DEC-011** — rewrite from scratch: NC auto-return zones, no master, two-valve diverter,
   source-control fail-dry.
-- **DEC-003** — safety relay gates **pump + valve rail** (was master + pump); fail-dry
-  language shifts from "NC master springs closed" to "pump de-powered + NC valves close."
 - **DEC-007** — **retire** (no H-bridge, no strapping-pin pressure).
 - **DEC-008** — drop the cached-diverter-position machinery; fert state is set per-run.
 - **DEC-003** — amend, and the amendment is **load-bearing**: relay gates the pump (source);
   the no-master argument *depends on* heartbeat-means-run-active (idle disarm is now a safety
   requirement, not just a runtime-ceiling convenience).
-- **New DEC** — commit the **auto-return self-test** as a requirement (now the only
-  pre-failure detector for the sole mechanical fail-closed element). Record the capacitor
-  caveats (1-min charge after open, aging).
+- **New DEC** — commit the **auto-return self-test** as a requirement, framed as
+  *correctness* (catch a stuck-open / degraded valve), **not** a fail-dry barrier. Record the
+  capacitor caveats (1-min charge after open, aging).
 - **Hardware spec §4** — the line *"single 3-way preferred over two 2-way solenoids (avoids
   the both-closed deadhead)"* is **superseded**: that reasoned about NC+NC; **NO-clean +
   NC-fert** defaults to exactly one path open, so there is no deadhead.
@@ -227,15 +224,16 @@ This is no longer a rename — it's a re-architecture of `ValveDriver` + `RunCon
 
 ---
 
-## 7. Open items before BOM / freeze
+## 7. Open items before freeze
 
-- LED-ring drive voltage (24V via series resistor vs a logic rail).
-- FET + gate-network values; confirm flyback/snubber for the motor+cap valve load.
-- Confirm US Solid sells the **normally-open** brass variant in the same size (the clean
-  bypass) — search says yes; confirm SKU at sourcing.
+**Resolved at sourcing:** valve low-side driver = IRLZ44N FET per valve (cap-inrush moot);
+clamp = SMAJ30A TVS drain–source per FET (internal-rectifier valves; no RC); LED rings = 24V,
+one low-side switch per ring off the 24V bus; check valve = existing GASHER.
+
+- Confirm valve SKUs at order: NO clean leg = 3-indicator-light, NC fert + zone legs =
+  2-indicator-light; **NPT (not BSP)**, standard port on all.
 - Bench-confirm travel time and cap behavior (Phase 6).
-- Lead-in brass: "contains lead, not for drinking water" — fine for non-potable rainwater
-  irrigation; noted.
+- Lead-bearing brass: "not for drinking water" — fine for non-potable rainwater; noted.
 
 ---
 
@@ -249,7 +247,7 @@ This is no longer a rename — it's a re-architecture of `ValveDriver` + `RunCon
 | Low-side logic-level N-FET (e.g. IRLZ44N) + gate R + pulldown | 5 populated (build more) | one per valve |
 | Flyback diode (1N4007 / Schottky) | per valve + pump relay | |
 | Pump relay (or MOSFET, ~5A) | 1 | |
-| Safety relay (NO, energize-to-pass) | 1 | gates 24V to pump + valve rail |
+| Safety relay (NO, energize-to-pass) | 1 | gates 24V to the pump (the source) |
 | ESP32 DevKitC 38-pin | 1 | |
 | ATtiny85 (watchdog) | 1 | |
 | SEAFLO 51 pump (24V) | 1 | |

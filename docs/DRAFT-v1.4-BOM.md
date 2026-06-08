@@ -15,7 +15,7 @@ switched by a simple low-side driver.
 
 | Item | Qty | Key spec | Candidate / link | Notes |
 |---|---|---|---|---|
-| Motorized ball valve, **NC** (normally-closed) | **3 now** (+1 later) | 3/4" brass, 9–36V AC/DC, 2-wire auto-return, ~2 W, 6–10 s, **NPT, standard port**, 2-indicator-light SKU | [US Solid brass NC](https://ussolid.com/products/3-4-motorized-ball-valve-brass-9-36v-ac-dc-2-wire-auto-return-electric-ball-valve-normally-closed-3-indicator-lights) | Now: Zone 1, Zone 2, Dosatron-leg. Later: Zone 3 (hose outlet). Draws holding current only while energized (open) during a run — negligible on mains; size future solar for valves-held-open. Lead-bearing brass → non-potable only (fine). |
+| Motorized ball valve, **NC** (normally-closed) | **3 now** (+1 later) | 3/4" brass, 9–36V AC/DC, 2-wire auto-return, ~2 W, 6–10 s, **NPT, standard port**, 2-indicator-light SKU | [US Solid brass NC](https://ussolid.com/products/3-4-motorized-ball-valve-brass-9-36v-ac-dc-2-wire-auto-return-electric-ball-valve-normally-closed-3-indicator-lights) | Now: Zone 1, Zone 2, Dosatron-leg. Later: Zone 3 (hose outlet). Draws holding current only while energized (open) during a run — negligible on the mains 24V supply. Lead-bearing brass → non-potable only (fine). |
 | Motorized ball valve, **NO** (normally-open) | **1 now** | same family, **NPT, standard port**, 3-indicator-light SKU | [US Solid brass NO](https://ussolid.com/products/3-4-motorized-ball-valve-brass-electric-ball-valve-with-3-indicator-lights-2-wire-auto-return-normally-open-9-36v-ac-dc-by-u-s-solid-html) | Clean / plain-water bypass leg. Resting (de-energized) default = plain flows, Dosatron isolated. |
 | Check valve, 3/4" | **reuse** | brass, 200 psi | existing **GASHER** | Dosatron **outlet — between the injector and the rejoin tee** (not after the tee — that would block the bypass). High-pressure side → cracking pressure irrelevant. Single check is proportional (rainwater, no city cross-connection — no RPZ/double-check). |
 | Pressure regulator, ≤15 psi, 3/4" | 1 now | one per tunnel, upstream of zone split | Senninger PRL (or reuse if rated) | Drops to tape pressure before the zones. |
@@ -92,10 +92,9 @@ switched by a simple low-side driver.
 - Valve SKUs: NO clean leg = **3-indicator-light**, NC fert + zone legs = **2-indicator-light**;
   **NPT (not BSP)**, standard port on all.
 
-**⚠ Reconcile before buying — master valve:** the sourcing note lists a *master* among the
-valves, but the **v1.4 design dropped the master** (the pump on the armed rail is the source
-gate). If the master is back, it changes the BOM and re-opens DEC-003; if it's a leftover
-from before the drop, omit it. Needs a yes/no (see chat).
+**✅ Master valve — confirmed OUT** (architect review): pump-off is the complete flood gate;
+the master's only unique job (siphon block) doesn't apply here (negligible head +
+reverse-checking pump). No master in the BOM.
 
 ## Net delta vs the pre-v1.4 design
 
