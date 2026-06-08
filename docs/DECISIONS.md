@@ -52,6 +52,10 @@ hard ceiling is the backstop. The ATtiny can never *cause* water — it only gat
 power.
 **Tradeoff:** The heartbeat conflates "firmware alive" with "run active." That
 conflation is sound here precisely because de-arming during idle is desired.
+**Update (DEC-012):** with the master valve removed, this idle-disarm is the **fail-dry
+backbone**, not just a runtime-ceiling convenience — the safety relay gates the **pump** (the
+water source), so "no heartbeat → relay de-armed → pump unpowered → no water" is the primary
+guarantee. An always-on heartbeat would remove the no-source-at-idle property and is prohibited.
 
 ## DEC-004: Firmware-first development; sim and bench before flash
 **Decision:** Build and validate in tiers, deferring real hardware. (1) Native
@@ -63,7 +67,7 @@ final confirm gate only.
 **Why:** The flash/reflash loop is slow and the wet hardware arrives last (build
 target Winter 2026–27). Most logic — including the safety-critical state machine —
 can be exercised off-hardware. Bench stand-ins validate real silicon before water.
-**Tradeoff:** Bench-tunable constants (`PULSE_MS`, `DIVERTER_TRAVEL_MS`, flow
+**Tradeoff:** Bench-tunable constants (`ZONE_TRAVEL_MS`, `DIVERTER_TRAVEL_MS`, flow
 K-factor) stay at seeded defaults until tiers 3–4 confirm them.
 
 ---
@@ -104,8 +108,8 @@ button (resolves #23). Behavior (§11):
   ring/display ack on a successful clear, and a *visible* no-op (not silence) when held
   while latched-but-unresolved, so a held button never reads as a dead panel.
 - Zone 3 is a real third zone — a **general-purpose hose outlet** separate from the Red
-  Tunnel's Z1/Z2 — under build-for-three: wired now (3rd latching valve + H-bridge, see
-  DEC-007), plumbed when that line goes in.
+  Tunnel's Z1/Z2 — under build-for-three: wired now (3rd NC motorized ball valve + low-side
+  FET, per DEC-011), plumbed when that line goes in.
 **Why:** This is Eric's literal directive ("each button runs its own zone, any button
 cancels"). The earlier §11 design (B1/B2 = zones, B3 = dedicated Stop/cancel-all +
 long-press clear) was a spec error, not the intent. The any-press-stops rule is
@@ -116,7 +120,7 @@ duration}) resolves with no ambiguity — in FAULT only the long-press acts.
 the *surface* for an accidental hold but not its *probability* (a 3 s hold is
 deliberate), and §14's re-fault-on-next-run makes a premature clear harmless. The button
 only *requests* a guarded state transition — it can never command water — so the
-fail-dry chain (sw ceiling → ATtiny → NC master) is untouched. The web `/api/fault/clear`
+fail-dry chain (sw ceiling → ATtiny → pump-power gate, DEC-012) is untouched. The web `/api/fault/clear`
 (§10) stays as the parallel path; the button preserves local autonomy at the enclosure.
 **Status:** Implemented Phase 1.7 (#23). The "unresolved-hold visible no-op" feedback
 branch is **gated on the FaultManager resolved-condition signal (Phase 3/5)** — until
@@ -132,7 +136,7 @@ output GPIO is already spent (wiring doc §B). Assign **Z3_IN1 = GPIO15 (MTDO)**
 ESP32 pins **LOW** through the boot strapping window while the pins are still hi-Z:
 GPIO12 sampling low selects the correct **3.3 V flash VDD** (a HIGH here bricks boot —
 the pulldown is doing real work), GPIO15 low is cosmetic (suppresses the U0TXD boot
-log), and both-low means **no spurious valve pulse at boot** (fail-dry). This mirrors
+log), and both-low means **no spurious valve travel at boot** (fail-dry). This mirrors
 the existing master-FET gate-pulldown boot note — an established pattern here.
 **Rejected:** GPIO0 (pulldown → download mode at boot), GPIO5 (must be HIGH at boot,
 pulldown fights it), GPIO2 (works, but its onboard LED flickers on every Z3 actuation),
@@ -141,6 +145,11 @@ cosmetic boot-log — against build-for-three/populate-one).
 **Constraint:** **Nothing may pull GPIO12 high** — no external pull-up, no scope probe
 with a pull, nothing. Documented in the wiring doc §D so the next person doesn't brick
 boot without knowing why. (Supersedes the wiring doc's prior "no Z3 pins allocated.")
+**Retired (DEC-011/012):** the v1.4 valves are on/off (1 GPIO each, no H-bridge), so there is
+no Z3 H-bridge and no IN1/IN2 pair on the strapping pins — GPIO12/15 are freed and this
+brick-boot hazard is gone. A valve FET that lands on a strapping pin still needs a gate-pulldown
+for boot-off (the master-FET pattern), but the specific GPIO12/15 allocation is withdrawn. See
+the v1.4 pin map (wiring doc §B).
 
 ## DEC-008: NVS persistence — per-zone-indexed keys, read-with-default, single schema_ver
 **Decision:** `Persistence` (§8) stores state as flat, prefixed keys in one `tinkle`
@@ -169,6 +178,10 @@ store with its own keys, deliberately not pre-carved here.
 `ValveDriver` (`assumeDiverter()`, no travel) and written back via a write-on-change poll in
 `main.cpp`. The `swMaxRuntimeSec` mirror remains stored-not-read-back until RunController
 gains runtime config (Phase 4).
+**Update (DEC-011/013):** the two-2-way diverter has **no hold-position to cache** — fert state
+is set per-run by energizing the correct leg (legs rest by their NO/NC type). The `div_pos` key
+and the `assumeDiverter()` boot-seed are removed in the task 1.7 rework; the per-zone duration +
+`swMaxRuntimeSec` keys are unaffected.
 
 ---
 
@@ -230,3 +243,101 @@ the thing that edits them.
 the loop in `main.cpp` (no-op until the schedule is populated and the clock is valid). Fert
 **actuation** still flows through `RunController`'s existing diverter handling; #28 layers any
 remaining fert-policy nuance on top.
+
+---
+
+## DEC-011: Valve architecture — US Solid 2-wire auto-return ball valves, FET-driven, no H-bridges
+**Decision:** Every actuated valve in V1 is a **U.S. Solid 3/4" brass 2-wire auto-return
+motorized ball valve** (9–36 V AC/DC, ~2 W, 6–10 s travel, **capacitor** return), switched
+on/off by a **discrete low-side N-FET** (IRLZ44N) — one GPIO per valve, **no H-bridges, no
+DRV8871, no reverse-polarity drive**. The set:
+- **Zones (Z1, Z2, Z3): normally-closed (NC)** — closed when de-energized, energize to open.
+- **Diverter = two 2-way valves** (replacing the 3-way — DEC-013): **NO** clean/bypass leg +
+  **NC** Dosatron leg, plus a check valve on the Dosatron outlet.
+
+A **single pressure regulator per tunnel** sits **upstream** of the zone valves (≤15 psi).
+Supersedes the v1.1 Hunter PGV + 458200 latching scheme **and** the abandoned v1.3
+reverse-polarity hold-position framing (wrong part — the as-sourced valve is on/off
+auto-return, not reverse-polarity). Recorded in the hardware spec's v1.4 changelog.
+**Why:** The actual part is on/off (energize to actuate, cap auto-return on de-energize), so it
+drives like the old master — a single FET, not an H-bridge. That collapses the system to one
+valve family on one driver type, **deletes every H-bridge** and the never-both-high invariant,
+and frees the pin map (1 GPIO/valve, not 2) — which **retires DEC-007**. NC zones rest closed
+and the NO bypass rests open, so the whole system's unpowered resting state is "plain-water path
+open, everything else closed" — the correct safe default.
+**Why it's safe:** the **pump-power gate (DEC-012), not any valve,** is the fail-dry barrier, so
+the valves' resting states are a convenience, not the safety mechanism.
+**Driver / clamp (sourcing):** IRLZ44N per valve (margin makes the cap-inrush spec moot), gate
+resistor + gate-to-GND pulldown (boot-off), and a **TVS (SMAJ30A) drain-to-source per FET** —
+the valves have an internal bridge rectifier, so a freewheel diode won't clamp; clamp the FET.
+Valves on **raw 24 V**; button LED rings are 24 V (12 V buck dropped).
+**Firmware impact (tracked, not done — re-scoped task 1.7):** `ValveDriver` still ships the
+H-bridge/latching-pulse API (`pulseOpen`/`pulseClose`, IN1/IN2 pairs, `PULSE_MS`). The rework is
+now a real re-architecture — on/off channels with per-valve travel timers (`driveOpen`/
+`driveClose` = set/clear a FET), `ZONE_TRAVEL_MS` ≈ 10 s, drop the never-both-high invariant,
+`pins.h` re-map (1 pin/valve, master pin removed), and the native tests. The run state machine
+already gates on `zoneBusy()`, so the sequencing seam survives; the driver underneath changes.
+~5–8 pts (was a 3-pt rename). Travel time is a bench-confirmed seed (DEC-004).
+
+## DEC-012: No master valve — fail-dry by source control
+**Decision:** V1 has **no master valve**. The fail-dry barrier is **source control**: the pump
+sits on the **armed 24 V** (downstream of the ATtiny safety relay, DEC-003), energized only
+during an active run. No run / hang / watchdog trip / power loss → pump unpowered → no pressure
+→ no water, regardless of any valve's state. Removes the WIC 2BCW NC solenoid + its FET channel.
+**Why:** With NC zones and a demand pump, the master's only *unique* job was blocking a gravity
+siphon through a stuck-open zone while the pump is off — and that path doesn't exist here:
+near-zero tank head plus the SEAFLO's internal check valves block reverse flow (confirmed).
+During a run the master would be open anyway; between runs the pump is already unpowered by the
+safety relay. So the master duplicated a barrier the pump-power gate already provides. Dropping
+it removes a part, ~18 W, and a continuous-duty-coil sourcing constraint with **no loss of real
+protection**.
+**Why it's safe:** the source gate is firmware-independent (ATtiny + relay), fail-safe (NO relay
+de-energizes open → no power), and runs are time-bounded by `HARD_MAX_RUNTIME`, so even a wrong
+or extra open valve during a run waters a bounded amount, never a runaway. The valves are **not**
+a safety barrier; their resting-closed state is for agronomic correctness (which bed gets water),
+caught by the self-test (DEC-014) and the flow cross-check (firmware spec §7).
+**Amends DEC-003 — now load-bearing:** the safety relay gates the **pump** (was "master + pump"),
+and DEC-003's "heartbeat = run-active" idle-disarm becomes the fail-dry backbone. An always-on
+heartbeat would remove the no-source-at-idle guarantee — so that encoding is now a safety
+requirement, not just a runtime-ceiling convenience.
+
+## DEC-013: Dosatron diverter — two 2-way valves, not a 3-way
+**Decision:** The motorized 3-way diverter is replaced by **two 2-way ball valves** (the DEC-011
+family): a **normally-open** valve on the clean/bypass leg and a **normally-closed** valve on the
+Dosatron leg, with a **check valve** (existing GASHER 3/4" brass) on the Dosatron **outlet**,
+between the injector and the rejoin tee.
+**Why:** With every valve already this on/off family, two 2-ways are simpler than a special
+reverse-polarity 3-way and unify the part list. The NO/NC pairing makes the **unpowered rest
+state = plain water flows, Dosatron isolated** — exactly one path open, so **no both-closed
+deadhead** (which is why the hardware spec's old "single 3-way preferred over two 2-way solenoids"
+note is superseded: that reasoned about NC+NC). A **plain run powers nothing**; a fert run
+energizes the NC leg open + the NO leg closed. No cached diverter position is needed (simplifies
+DEC-008).
+**Why it's safe:** the diverter is upstream of the zones and the source gate, so any diverter
+state (both-open, both-closed, wrong leg) is at worst a fertigation error, never a flood. The
+check valve stops bypass flow back-feeding the idle injector. A leg switch briefly overlaps (~5–15
+s travel) — harmless (pump rides a short deadhead on its internal bypass; brief split just
+under-injects); firmware may stagger make-before-break (optional).
+
+## DEC-014: Auto-return self-test — correctness, not a safety barrier
+**Decision:** The firmware periodically verifies each valve **rests closed** when it should
+(commanded close watched on the flow sensor / position indicator) and flags a valve that fails.
+**Why:** The auto-return is capacitor-driven — it needs ~1 min of power after the valve opens to
+charge, and a cap ages over years in heat, so a valve *could* fail to close on de-energize. This
+is **not** a fail-dry concern (the pump-power gate, DEC-012, is the barrier; a stuck-open valve
+passes nothing with the pump off), but it **is** an agronomic-correctness and maintenance concern
+— don't silently water the wrong bed, and get a heads-up to service a degrading valve. The
+self-test is the detector; it is explicitly **not** credited as a safety layer.
+
+## DEC-015: Flow-check manual override (web UI)
+**Decision:** A web-UI setting disables the FlowMonitor **faults** (`NO_FLOW` and
+unexpected-idle-flow) so a missing, uncalibrated, or misbehaving flow sensor can't block
+watering. Default = checks on; enabling clears any latched flow fault; persisted in NVS.
+**Why:** Fail-dry cuts both ways — a bad sensor that halts all irrigation is its own failure. The
+override **mutes faults, not measurement** (flow is still counted + displayed) and is
+**software-only**: it cannot touch the watchdog, safety relay, pump-power gate, or
+`HARD_MAX_RUNTIME`. Worst case is a run finishing its commanded duration without the cross-check —
+bounded, never a runaway (consistent with firmware spec §10.1: the SPA has no role in fail-dry).
+While active, every screen shows a persistent "⚠ FLOW CHECK DISABLED" banner + a status flag + a
+fault-log entry. V1 = single toggle (mute both); granular (keep the leak detector always on) is a
+later refinement.

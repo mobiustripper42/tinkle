@@ -52,7 +52,7 @@
 <header>
   <div class="kicker">Bay Branch Farm · Tinkle V1</div>
   <h1>Wiring &amp; Pin Map</h1>
-  <p class="sub">ESP32 DevKitC (38-pin). Two-key safety: the ESP32 <em>commands</em> each actuator, the ATtiny85 <em>arms</em> the whole actuator rail. Both must agree for water to move. Lose either and the master springs closed — fail-dry.</p>
+  <p class="sub">ESP32 DevKitC (38-pin). Two-key safety: the ESP32 <em>commands</em> each actuator, the ATtiny85 <em>arms</em> the pump's 24V power. Both must agree for water to move. Lose either and the pump loses power — no source, fail-dry.</p>
 </header>
 
 <main>
@@ -90,8 +90,8 @@
   <text class="tb" x="95" y="40" text-anchor="middle">24V PSU</text>
   <text class="tm" x="95" y="56" text-anchor="middle">LRS-150-24</text>
   <rect class="blk pwr" x="200" y="18" width="170" height="54" rx="5"/>
-  <text class="t" x="285" y="38" text-anchor="middle">Bucks 12 / 5 / 3.3V</text>
-  <text class="tm" x="285" y="56" text-anchor="middle">logic + valve + LED rails</text>
+  <text class="t" x="285" y="38" text-anchor="middle">Bucks 5 / 3.3V</text>
+  <text class="tm" x="285" y="56" text-anchor="middle">logic + LED + sensor rails</text>
   <line class="pw" x1="170" y1="45" x2="198" y2="45" marker-end="url(#arP)"/>
 
   <!-- ESP32 center -->
@@ -124,21 +124,21 @@
 
   <!-- RIGHT: drivers -->
   <rect class="blk" x="480" y="120" width="120" height="40" rx="5"/>
-  <text class="t" x="540" y="138" text-anchor="middle" font-size="11">DRV8871 ·Z1</text>
-  <text class="tm" x="540" y="152" text-anchor="middle">IN1/IN2</text>
+  <text class="t" x="540" y="138" text-anchor="middle" font-size="11">FET ·Z1</text>
+  <text class="tm" x="540" y="152" text-anchor="middle">IRLZ44N</text>
   <rect class="blk" x="480" y="168" width="120" height="40" rx="5"/>
-  <text class="t" x="540" y="186" text-anchor="middle" font-size="11">DRV8871 ·Z2</text>
-  <text class="tm" x="540" y="200" text-anchor="middle">IN1/IN2</text>
+  <text class="t" x="540" y="186" text-anchor="middle" font-size="11">FET ·Z2</text>
+  <text class="tm" x="540" y="200" text-anchor="middle">IRLZ44N</text>
   <rect class="blk" x="480" y="216" width="120" height="40" rx="5"/>
-  <text class="t" x="540" y="232" text-anchor="middle" font-size="11">DRV8871 ·DIV</text>
-  <text class="tm" x="540" y="247" text-anchor="middle">3-way diverter</text>
+  <text class="t" x="540" y="232" text-anchor="middle" font-size="11">FET ·DIV ×2</text>
+  <text class="tm" x="540" y="247" text-anchor="middle">NO clean + NC fert</text>
   <path class="sig" d="M420,250 L450,250 L450,140 L478,140" marker-end="url(#ar)"/>
   <path class="sig" d="M420,258 L460,258 L460,188 L478,188" marker-end="url(#ar)"/>
   <path class="sig" d="M420,266 L470,266 L470,236 L478,236" marker-end="url(#ar)"/>
 
   <rect class="blk" x="480" y="276" width="120" height="40" rx="5"/>
-  <text class="t" x="540" y="294" text-anchor="middle" font-size="11">Master FET</text>
-  <text class="tm" x="540" y="308" text-anchor="middle">IRLZ44N</text>
+  <text class="t" x="540" y="294" text-anchor="middle" font-size="11">FET ·Z3</text>
+  <text class="tm" x="540" y="308" text-anchor="middle">IRLZ44N (hose)</text>
   <path class="sig" d="M420,290 L478,290" marker-end="url(#ar)"/>
 
   <rect class="blk" x="480" y="324" width="120" height="40" rx="5"/>
@@ -153,10 +153,10 @@
   <text class="t" x="696" y="186" text-anchor="middle" font-size="11">valves</text>
   <path class="sf" d="M600,140 L648,140"/><path class="sf" d="M600,188 L648,188"/>
   <rect class="blk" x="650" y="216" width="92" height="40" rx="5"/>
-  <text class="t" x="696" y="240" text-anchor="middle" font-size="11">Diverter</text>
+  <text class="t" x="696" y="240" text-anchor="middle" font-size="11">Diverter ×2</text>
   <path class="sf" d="M600,236 L648,236"/>
   <rect class="blk" x="650" y="276" width="92" height="40" rx="5"/>
-  <text class="t" x="696" y="300" text-anchor="middle" font-size="11">Master NC</text>
+  <text class="t" x="696" y="300" text-anchor="middle" font-size="11">Zone 3 valve</text>
   <path class="sf" d="M600,296 L648,296"/>
   <rect class="blk" x="650" y="324" width="92" height="40" rx="5"/>
   <text class="t" x="696" y="348" text-anchor="middle" font-size="11">Pump</text>
@@ -165,7 +165,7 @@
   <!-- ARMING relay + ATtiny bottom -->
   <rect class="blk arm" x="430" y="430" width="180" height="56" rx="6"/>
   <text class="tb" x="520" y="453" text-anchor="middle" fill="#2f6b3f">SAFETY / ARM RELAY</text>
-  <text class="tm" x="520" y="471" text-anchor="middle" fill="#3f7d4f">NO · energize-to-pass · feeds master + pump</text>
+  <text class="tm" x="520" y="471" text-anchor="middle" fill="#3f7d4f">NO · energize-to-pass · feeds the pump</text>
 
   <rect class="blk" x="250" y="430" width="150" height="56" rx="6"/>
   <text class="tb" x="325" y="453" text-anchor="middle">ATtiny85</text>
@@ -182,9 +182,9 @@
   <!-- 24V into arm relay -->
   <path class="pw" d="M95,72 L95,500 L520,500 L520,488" marker-end="url(#arP)"/>
   <text class="tm" x="105" y="495" fill="#b8761f">24V raw</text>
-  <!-- arm relay feeds master+pump rail (dashed up) -->
+  <!-- arm relay feeds the pump (dashed up) -->
   <path class="sf" d="M610,452 L690,452 L690,366" stroke-dasharray="5 4"/>
-  <text class="tm" x="624" y="445" fill="#3f7d4f">armed 24V → actuators</text>
+  <text class="tm" x="624" y="445" fill="#3f7d4f">armed 24V → pump</text>
 </svg>
 </div>
 <div class="legend">
@@ -195,21 +195,17 @@
 
 <h2><span class="n">B</span>ESP32 GPIO assignment</h2>
 <table>
-  <caption>Avoids flash pins (6–11) and TX/RX (1/3). Zone 3's H-bridge deliberately uses two strapping pins (15/12) — boot-safe via the DRV8871 input pulldowns, see §D and DEC-007. 21 of ~24 usable GPIO used.</caption>
+  <caption>Avoids flash pins (6–11) and TX/RX (1/3). v1.4: one low-side FET per valve (1 GPIO each), no H-bridges — so no strapping pins are needed and DEC-007 is retired. ~16 of ~24 usable GPIO used.</caption>
   <thead><tr><th>GPIO</th><th>Dir</th><th>Connects to</th><th>Notes</th></tr></thead>
   <tbody>
-    <tr class="grp"><td colspan="4">Zone &amp; diverter H-bridges (DRV8871)</td></tr>
-    <tr><td class="pin">13</td><td class="io">OUT</td><td>Zone 1 — DRV8871 IN1</td><td>open pulse = IN1 high</td></tr>
-    <tr><td class="pin">14</td><td class="io">OUT</td><td>Zone 1 — DRV8871 IN2</td><td>close pulse = IN2 high; never both high</td></tr>
-    <tr><td class="pin">16</td><td class="io">OUT</td><td>Zone 2 — DRV8871 IN1</td><td></td></tr>
-    <tr><td class="pin">17</td><td class="io">OUT</td><td>Zone 2 — DRV8871 IN2</td><td></td></tr>
-    <tr><td class="pin">15</td><td class="io">OUT ⚠</td><td>Zone 3 — DRV8871 IN1</td><td>hose outlet (build-for-three). <span class="warn">strapping MTDO; boot-safe via DRV8871 pulldown — see §D</span></td></tr>
-    <tr><td class="pin">12</td><td class="io">OUT ⚠</td><td>Zone 3 — DRV8871 IN2</td><td><span class="warn">strapping MTDI — MUST sit LOW at boot (3.3V flash); nothing may pull it high</span></td></tr>
-    <tr><td class="pin">18</td><td class="io">OUT</td><td>Diverter — DRV8871 IN1</td><td>THROUGH (fertigate)</td></tr>
-    <tr><td class="pin">19</td><td class="io">OUT</td><td>Diverter — DRV8871 IN2</td><td>AROUND (plain). ~6s travel, not 75ms</td></tr>
-    <tr class="grp"><td colspan="4">Master &amp; pump</td></tr>
-    <tr><td class="pin">21</td><td class="io">OUT</td><td>Master valve — IRLZ44N gate</td><td>logic-level FET; flyback diode on coil</td></tr>
-    <tr><td class="pin">22</td><td class="io">OUT</td><td>Pump relay — trigger</td><td>opto/ULN input; snubber on coil</td></tr>
+    <tr class="grp"><td colspan="4">Valve FETs (low-side, one IRLZ44N per valve · energize = actuate)</td></tr>
+    <tr><td class="pin">13</td><td class="io">OUT</td><td>Zone 1 valve — FET gate</td><td>NC: high = open. Gate pulldown → off (closed) at boot</td></tr>
+    <tr><td class="pin">14</td><td class="io">OUT</td><td>Zone 2 valve — FET gate</td><td>NC: high = open</td></tr>
+    <tr><td class="pin">16</td><td class="io">OUT</td><td>Zone 3 valve — FET gate</td><td>NC: high = open. Hose outlet (build-for-three)</td></tr>
+    <tr><td class="pin">17</td><td class="io">OUT</td><td>Diverter clean leg — FET gate</td><td>NO: low (rest) = open = plain water</td></tr>
+    <tr><td class="pin">18</td><td class="io">OUT</td><td>Diverter fert leg — FET gate</td><td>NC: high = open (fertigate via Dosatron)</td></tr>
+    <tr class="grp"><td colspan="4">Pump</td></tr>
+    <tr><td class="pin">22</td><td class="io">OUT</td><td>Pump relay — trigger</td><td>relay on the <b>armed 24V</b> (source gate); flyback on coil. (GPIO 19/21/12/15 free for more zones.)</td></tr>
     <tr class="grp"><td colspan="4">Sensing</td></tr>
     <tr><td class="pin">27</td><td class="io">IN ⚡</td><td>Flow sensor pulse</td><td>interrupt; <span class="warn">level-shift 5V→3.3V</span>; INPUT_PULLUP</td></tr>
     <tr class="grp"><td colspan="4">Display (TM1637)</td></tr>
@@ -219,10 +215,10 @@
     <tr><td class="pin">34</td><td class="io">IN</td><td>Button 1 → Zone 1 run / stop / long-press fault-clear</td><td><span class="warn">input-only: external 10k pull-up + 100nF</span></td></tr>
     <tr><td class="pin">35</td><td class="io">IN</td><td>Button 2 → Zone 2 run / stop / long-press fault-clear</td><td>external pull-up + debounce cap</td></tr>
     <tr><td class="pin">39</td><td class="io">IN</td><td>Button 3 → Zone 3 run / stop / long-press fault-clear</td><td>one button per zone, no dedicated stop (DEC-006)</td></tr>
-    <tr class="grp"><td colspan="4">Button LED rings — 12V, low-side via ULN2803</td></tr>
-    <tr><td class="pin">32</td><td class="io">OUT</td><td>LED ring 1 → ULN2803 in</td><td>ring+ to 12V, ULN sinks to GND</td></tr>
-    <tr><td class="pin">33</td><td class="io">OUT</td><td>LED ring 2 → ULN2803 in</td><td></td></tr>
-    <tr><td class="pin">23</td><td class="io">OUT</td><td>LED ring 3 → ULN2803 in</td><td></td></tr>
+    <tr class="grp"><td colspan="4">Button LED rings — 24V, low-side FET per ring</td></tr>
+    <tr><td class="pin">32</td><td class="io">OUT</td><td>LED ring 1 → low-side FET</td><td>24V ring+, FET sinks to GND (no 12V buck, no ULN2803)</td></tr>
+    <tr><td class="pin">33</td><td class="io">OUT</td><td>LED ring 2 → low-side FET</td><td></td></tr>
+    <tr><td class="pin">23</td><td class="io">OUT</td><td>LED ring 3 → low-side FET</td><td></td></tr>
     <tr class="grp"><td colspan="4">Watchdog handshake (ATtiny85)</td></tr>
     <tr><td class="pin">4</td><td class="io">OUT</td><td>Heartbeat → ATtiny IN</td><td>square wave while firmware healthy</td></tr>
     <tr><td class="pin">36</td><td class="io">IN</td><td>ATtiny "tripped" → ESP32</td><td>VP, input-only; for logging/fault display</td></tr>
@@ -232,22 +228,22 @@
 <h2><span class="n">C</span>The arming chain (fail-dry core)</h2>
 <div class="cards three">
   <div class="ncard"><h3>ESP32 — the command key</h3>
-    <p>Opens/closes the specific zone, sets the diverter, opens the master FET, enables the pump relay per schedule. Emits a <b>heartbeat</b> square wave on GPIO4 whenever firmware is healthy.</p></div>
+    <p>Energizes the specific zone FET, sets the two diverter-leg FETs, enables the pump relay per schedule. Emits a <b>heartbeat</b> square wave on GPIO4 whenever firmware is healthy.</p></div>
   <div class="ncard"><h3>ATtiny85 — the arm key</h3>
     <p>Independent MCU. Trips if the heartbeat stops (~2s) <b>or</b> any run exceeds its own hard max-runtime ceiling (~30 min), measured on its <b>own</b> clock — it never trusts the ESP32's sense of time.</p></div>
   <div class="ncard"><h3>Safety relay — the gate</h3>
-    <p><b>Normally-open, energize-to-pass.</b> The ATtiny holds it closed only while armed. It feeds 24V to <b>both</b> the master and the pump. ATtiny trips → relay opens → master spring-closes, pump dies → no water.</p></div>
+    <p><b>Normally-open, energize-to-pass.</b> The ATtiny holds it closed only while armed. It feeds the <b>armed 24V to the pump</b> (the water source). ATtiny trips → relay opens → pump dies → no source → no water. The valves (on raw 24V) aren't gated here — they pass nothing with the pump off (DEC-012).</p></div>
 </div>
 
 <h2><span class="n">D</span>Wiring notes that bite if skipped</h2>
 <div class="cards">
-  <div class="ncard"><h3>Flyback on every coil</h3><p>1N4007 (or Schottky) across the master solenoid, pump relay coil, and both relays. The DRV8871 has internal protection; the discrete FET and relays do not.</p></div>
+  <div class="ncard"><h3>Clamp coils + valve FETs</h3><p>1N4007 (or Schottky) flyback across the pump-relay coil and the safety-relay coil. Each <b>valve FET</b> gets a TVS (SMAJ30A) drain-to-source instead — the valves have an internal bridge rectifier, so a freewheel diode across the valve won't clamp the turn-off transient.</p></div>
   <div class="ncard"><h3>Flow sensor level shift</h3><p>Power the sensor at 5V, but its pulse output swings to 5V — drop it to 3.3V (divider or the level-shifter module) before GPIO27, or you cook the input over time.</p></div>
   <div class="ncard"><h3>Input-only button pins</h3><p>GPIO 34/35/39/36 have <b>no internal pull-ups</b>. Add 10k to 3.3V + a 100nF debounce cap on each button, even though firmware also debounces.</p></div>
-  <div class="ncard"><h3>Diverter ≠ solenoid timing</h3><p>The motorized ball valve travels ~5–6s and self-cuts at its limit switch. Drive its DRV8871 for the full travel window, not the 75ms latch pulse the Hunter solenoids use.</p></div>
+  <div class="ncard"><h3>Valves: on/off FET, no H-bridge</h3><p>Every valve is a 2-wire on/off motorized ball valve (NC zones + NC fert leg + NO clean leg). Energize the FET to actuate; the valve travels ~6–10 s, self-cuts at its limit, then holds with negligible draw. De-energize and a capacitor auto-returns it to rest. One GPIO per valve — no H-bridge, no IN1/IN2, no never-both-high.</p></div>
   <div class="ncard"><h3>Common ground</h3><p>Tie all buck grounds + 24V return + ESP32 GND together at one star point. Floating logic ground against a switching 24V rail is the classic intermittent-glitch source.</p></div>
-  <div class="ncard"><h3>Master FET gate</h3><p>IRLZ44N is logic-level and fine at 0.75A with a 3.3V gate. Add a 100&#8486; series gate resistor + 100k gate-to-GND pulldown so it sits off during ESP32 boot.</p></div>
-  <div class="ncard"><h3>Zone 3 on strapping pins (DEC-007)</h3><p>Z3's H-bridge sits on GPIO15 (MTDO) and GPIO12 (MTDI) because all non-strapping output GPIO are spent. This is safe <b>only</b> because the DRV8871's internal input pulldowns (~100k) hold both pins LOW through the boot strap window while the ESP32 pins are hi-Z: GPIO12 sampling low selects the correct <b>3.3V flash VDD</b>, GPIO15 low is cosmetic (boot log), and both-low means no spurious valve pulse at boot. <span class="warn">Never put an external pull-up — or a probe with one — on GPIO12: a high at boot selects 1.8V flash and bricks boot.</span> Do not add Z3's own H-bridge pull resistors; rely on the DRV8871's internal ones.</p></div>
+  <div class="ncard"><h3>Valve FET gates</h3><p>Each valve FET (IRLZ44N, logic-level, fine at the valve's ~0.1A with a 3.3V gate) gets a 100&#8486; series gate resistor + 100k gate-to-GND pulldown so it sits <b>off</b> — valve at rest (NC closed / NO open) — during ESP32 boot.</p></div>
+  <div class="ncard"><h3>Valves on raw 24V, pump on armed 24V</h3><p>The valve FETs run off <b>raw</b> (always-on) 24V; only the <b>pump</b> is on the <b>armed</b> (safety-relay) 24V. The pump is the source gate (DEC-012), so valves don't need gating — they pass nothing with the pump off — and keeping them off the armed rail avoids a de-arm-vs-close timing race. With on/off FETs (1 GPIO each) there are no strapping pins in play, so the old DEC-007 GPIO12/15 brick-boot hazard is gone.</p></div>
 </div>
 
 </main>

@@ -12,7 +12,7 @@ This spec assumes the pin map and arming architecture in `tinkle_wiring.html`. W
 
 In scope for V1:
 - Execute a stored watering schedule locally, with no network dependency.
-- Sequence zones one at a time; drive latching valves, master, pump, and the Dosatron diverter in the correct order.
+- Sequence zones one at a time; drive the motorized valves (zones + diverter) and pump in the correct order.
 - Per-run fertigation control via the diverter, defaulting to one fert run/day.
 - Monitor flow as a sanity cross-check; fault on mismatch.
 - Serve a local web config UI over Wi-Fi.
@@ -33,7 +33,7 @@ Suggested modules (one translation unit each):
 
 - `Clock` — NTP sync + free-running fallback; exposes wall-clock + monotonic ms.
 - `Persistence` — NVS/Preferences read/write of all stored state (§8).
-- `ValveDriver` — low-level latching pulse + diverter travel + master FET + pump relay.
+- `ValveDriver` — low-level motorized-valve travel (zones + diverter, one on/off FET each) + pump relay.
 - `FlowMonitor` — ISR pulse count, rate calc, calibration, fault detection.
 - `RunController` — the state machine (§4); owns the actuation sequence.
 - `Scheduler` — evaluates schedule entries, enqueues due runs, assigns fert flag.
@@ -51,36 +51,41 @@ Suggested modules (one translation unit each):
 
 Mirror the wiring doc. Define once in `pins.h`:
 
+Every valve is on/off — **one low-side FET per valve, one GPIO each** (no H-bridges, no
+IN1/IN2 pairs, no master). All non-strapping outputs, so the DEC-007 strapping-pin
+contortion is gone (DEC-011).
+
 ```
-// H-bridges (DRV8871 IN1/IN2)
-Z1_IN1=13  Z1_IN2=14
-Z2_IN1=16  Z2_IN2=17
-Z3_IN1=15  Z3_IN2=12   // hose-outlet zone on strapping pins — DEC-007 (DRV8871 pulldowns boot-safe)
-DIV_IN1=18 DIV_IN2=19
-// Actuators
-MASTER_FET=21
-PUMP_RELAY=22
+// Zone valves — NC, one low-side FET each (energize = open, de-energize = cap-return closed)
+Z1_FET=13  Z2_FET=14  Z3_FET=16     // Z3 = hose outlet (build-for-three)
+// Diverter legs — one low-side FET each
+DIV_CLEAN_FET=17   // NO bypass leg  (de-energized = open  = plain water flows)
+DIV_FERT_FET=18    // NC Dosatron leg (de-energized = closed)
+// Actuator
+PUMP_RELAY=22      // on the ARMED 24V (the fail-dry source gate, DEC-012)
 // Sensing
 FLOW_PIN=27            // interrupt, level-shifted to 3.3V
 // Display
 TM_CLK=25  TM_DIO=26
 // Buttons (external pull-up, active-low) — one per zone, no dedicated stop (DEC-006)
 BTN1=34  BTN2=35  BTN3=39
-// Button LED rings (via ULN2803, active-high)
+// Button LED rings — 24V rings, one low-side switch each
 LED1=32  LED2=33  LED3=23
 // Watchdog
 HEARTBEAT_OUT=4
 WD_TRIPPED_IN=36
+// Free for more zones (build-for-three): 19, 21, 5, 2, 12, 15
 ```
 
-Model zones as a table so the count is data-driven:
+Each FET gate gets a series resistor + a gate-to-GND pulldown so the valve sits **off**
+(closed/rest) through ESP32 boot. Model zones as a table so the count is data-driven:
 
 ```
-struct Zone { uint8_t in1, in2, ledPin, btnPin; const char* name; };
+struct Zone { uint8_t fetPin, ledPin, btnPin; const char* name; };
 Zone zones[] = {
-  {Z1_IN1, Z1_IN2, LED1, BTN1, "Zone 1"},   // Red Tunnel beds 1–3
-  {Z2_IN1, Z2_IN2, LED2, BTN2, "Zone 2"},   // Red Tunnel beds 4–6
-  {Z3_IN1, Z3_IN2, LED3, BTN3, "Zone 3"},   // general-purpose hose outlet (build-for-three)
+  {Z1_FET, LED1, BTN1, "Zone 1"},   // Red Tunnel beds 1–3
+  {Z2_FET, LED2, BTN2, "Zone 2"},   // Red Tunnel beds 4–6
+  {Z3_FET, LED3, BTN3, "Zone 3"},   // general-purpose hose outlet (build-for-three)
 };
 ```
 
@@ -88,46 +93,56 @@ Zone zones[] = {
 
 ## 4. Run state machine
 
-States: `IDLE`, `PREP_DIVERTER`, `OPEN_MASTER`, `OPEN_ZONE`, `START_PUMP`, `RUNNING`, `STOP_PUMP`, `CLOSE_ZONE`, `CLOSE_MASTER`, `SETTLE`, `FAULT`.
+States: `IDLE`, `PREP_DIVERTER`, `OPEN_ZONE`, `START_PUMP`, `RUNNING`, `STOP_PUMP`, `CLOSE_ZONE`, `SETTLE`, `FAULT`.
 
 A run request carries: `{ zoneIndex, durationSec, fertigate }`. Source = scheduler or manual.
 
+There is no master valve (DEC-012) — the pump on the armed 24V is the source gate, so the
+sequence opens the zone, starts the pump, and stops it; no master open/close steps.
+
 Sequence (each step non-blocking, advancing on its own timer/confirmation):
 
-1. **PREP_DIVERTER** — if `fertigate` differs from cached diverter position, drive the diverter to THROUGH (fertigate) or AROUND (plain); wait `DIVERTER_TRAVEL_MS`. If unchanged, skip immediately. Cache new position.
-2. **OPEN_MASTER** — energize `MASTER_FET`. (Safety relay must be armed; if `WD_TRIPPED_IN` is asserted, abort to FAULT.)
-3. **OPEN_ZONE** — latch-open pulse on the zone valve (`PULSE_MS`).
-4. **START_PUMP** — close `PUMP_RELAY`. Begin `RUNNING`.
-5. **RUNNING** — run for `durationSec`. Continuously: update countdown display, run flow checks (§7), watch software max-runtime. Any fault → jump to STOP_PUMP path then FAULT.
-6. **STOP_PUMP** — open pump relay.
-7. **CLOSE_ZONE** — latch-close pulse.
-8. **CLOSE_MASTER** — de-energize master FET (spring closes).
-9. **SETTLE** — brief dwell, log the run (zone, start, duration, gallons, fert y/n, result). Diverter is left as-is. → IDLE (or next queued run).
+1. **PREP_DIVERTER** — set the two diverter legs for `fertigate` (fert → both leg FETs energized: fert-leg opens, bypass closes; plain → both de-energized: bypass rests open, fert-leg rests closed). Wait `DIVERTER_TRAVEL_MS` if anything changed; skip if already in the wanted state.
+2. **OPEN_ZONE** — energize the zone FET (NC valve drives open); wait `ZONE_TRAVEL_MS`. The pump waits for this (the state machine gates on the valve no longer being busy), so the pump never loads against a closed/mid-travel valve. If `WD_TRIPPED_IN` is asserted, abort to FAULT.
+3. **START_PUMP** — close `PUMP_RELAY`. Begin `RUNNING`.
+4. **RUNNING** — run for `durationSec`. Continuously: update countdown display, run flow checks (§7), watch software max-runtime. Any fault → jump to STOP_PUMP path then FAULT.
+5. **STOP_PUMP** — open pump relay (this is what stops water — the source).
+6. **CLOSE_ZONE** — de-energize the zone FET; the cap auto-return drives it closed over `ZONE_TRAVEL_MS`. (Pump is already off, so the valve closes against no pressure.)
+7. **SETTLE** — brief dwell, log the run (zone, start, duration, gallons, fert y/n, result). Diverter legs left as-is. → IDLE (or next queued run).
 
-Only one run active at a time. Queued requests run sequentially with a short inter-run gap. A stop/cancel request unwinds straight to STOP_PUMP → CLOSE_ZONE → CLOSE_MASTER from any active step.
+Only one run active at a time. Queued requests run sequentially with a short inter-run gap. A stop/cancel request unwinds straight to STOP_PUMP → CLOSE_ZONE from any active step.
 
 ---
 
 ## 5. Valve actuation contract (`ValveDriver`)
 
-- `pulseOpen(zone)` — `IN1=HIGH, IN2=LOW` for `PULSE_MS` (default 75), then **both LOW** (coast — latching valve holds, zero hold current). 
-- `pulseClose(zone)` — `IN1=LOW, IN2=HIGH` for `PULSE_MS`, then both LOW.
-- **Invariant:** never both inputs HIGH. Assert/guard this.
-- `setDiverter(through)` — drive `DIV_IN1/IN2` for direction, hold for `DIVERTER_TRAVEL_MS` (default 6000), then both LOW. The motorized valve self-stops at its limit; we just supply the travel window. Cache the commanded position in NVS.
-- `masterOpen()/masterClose()` — set/clear `MASTER_FET`.
-- `pumpOn()/pumpOff()` — set/clear `PUMP_RELAY`.
-- On boot and on any FAULT entry: force pump off, both zones close-pulsed, master closed, diverter left as-is. This is the **safe state**.
+Every channel is a **single on/off output** (a low-side FET). The safe/rest level is **LOW
+(FET off)** for all of them — NC zones closed, NC fert-leg closed, NO bypass-leg open
+(plain), pump off. There are no H-bridges and **no never-both-high invariant**.
 
-The pulse timers must be independent per actuator so a diverter travel doesn't block a zone pulse.
+- `openZone(zone)` — set the zone FET HIGH (the NC valve drives open); start a `ZONE_TRAVEL_MS` busy timer.
+- `closeZone(zone)` — set the zone FET LOW; the capacitor auto-return drives it closed over `ZONE_TRAVEL_MS` (busy until then).
+- `setDiverter(fertigate)` — `fertigate` → set **both** leg FETs HIGH (fert-leg opens, bypass closes); `!fertigate` → set **both** LOW (rest: bypass open, fert-leg closed). Hold `DIVERTER_TRAVEL_MS` busy. No NVS cache needed — the rest state is defined by the NO/NC valve types, not by memory.
+- `pumpOn()/pumpOff()` — set/clear `PUMP_RELAY`.
+- On boot and on any FAULT entry: force pump off and **de-energize every valve FET** — zones cap-close, the diverter returns to plain. This is the **safe state**.
+
+The travel timers must be independent per actuator so a diverter travel doesn't block a zone's travel. `zoneBusy(zone)` / `diverterBusy()` gate the §4 sequence.
+
+> **Implementation note (pending — task 1.7):** the shipped code still implements the v1.1
+> H-bridge/latching model — `pulseOpen`/`pulseClose` over `IN1/IN2` pairs, `PULSE_MS`, a
+> `MASTER_FET`, and the never-both-high invariant. The rework to the on/off model above
+> (one FET per valve, master removed, diverter as two leg FETs, `pins.h` re-map, native
+> tests) is tracked in `PROJECT_PLAN.md`. The §4 sequence already gates on `zoneBusy()`, so
+> the `RunController` seam survives; `ValveDriver` and `pins.h` underneath change.
 
 ---
 
 ## 6. Fertigation logic
 
 - Each schedule entry has a `fertigate` bool. Default scheduler **policy:** the first enabled run of each calendar day is marked `fertigate=true`, all others `false`. Policy is overridable per entry (`fertOverride: auto|on|off`).
-- `RunController` only actuates the diverter when the requested state differs from the cached position (avoids needless 6s travel + wear).
+- `RunController` sets the diverter legs per `fertigate` at run start (PREP_DIVERTER), skipping the travel when the legs are already in the wanted state (avoids needless ~6 s travel + wear). No cached position — the rest state is defined by the NO/NC valve types.
 - Manual runs default `fertigate=false` unless explicitly requested.
-- **Implemented (#27 policy / #28 actuation+persistence):** the one-fert-run/day policy + `auto|on|off` per-entry override live in the `Scheduler` (`resolveFert`, day boundary off the `Clock`); `RunController` sets the diverter in the §4 `PrepDiverter` step from `RunRequest::fertigate` with the skip-when-unchanged guard. The cached position survives reboot (§8) — boot-seeded into `ValveDriver` and persisted on change. Fail-dry holds: the diverter travels *before* the master opens, and the master gates water, so a fert decision never holds water on.
+- **Implemented (#27 policy / #28 actuation):** the one-fert-run/day policy + `auto|on|off` per-entry override live in the `Scheduler` (`resolveFert`, day boundary off the `Clock`); `RunController` sets the diverter in the §4 `PrepDiverter` step from `RunRequest::fertigate`. Fail-dry holds with no master: the diverter is set *before* `START_PUMP`, and the **pump** (the source) gates water, so a fert decision never holds water on. (The v1.4 two-leg diverter + the drop of the cached-position machinery land with the task 1.7 rework — DEC-013.)
 
 ---
 
@@ -137,12 +152,13 @@ The pulse timers must be independent per actuator so a diverter travel doesn't b
 - `pulsesPerGallon` (float K) stored in NVS; seeded from a datasheet default, overwritten by calibration.
 - `gallons = pulses / K`; `rateGPM` from a rolling window.
 - **During RUNNING**, after `FLOW_GRACE_S` (default 20): if `rateGPM` ≈ 0 → `FAULT_NO_FLOW` (clog, dead pump, valve never opened). Optionally fault on rate far outside an expected band.
-- **During IDLE**: if accumulated pulses exceed `IDLE_FLOW_FAULT_PULSES` over a window → `FAULT_UNEXPECTED_FLOW` (stuck-open valve, burst). On this fault, re-assert safe state immediately (master closed, pump off) and latch.
+- **During IDLE**: if accumulated pulses exceed `IDLE_FLOW_FAULT_PULSES` over a window → `FAULT_UNEXPECTED_FLOW` (stuck-open valve, burst). On this fault, re-assert safe state immediately (pump off, valves de-energized) and latch.
 - All runs log measured gallons.
+- **Manual override (DEC-015):** a stored flag disables both flow faults (web UI). When set, `FlowMonitor` still measures and reports flow but never raises `FAULT_NO_FLOW` / `FAULT_UNEXPECTED_FLOW`, and enabling it clears any latched flow fault. Software-only — it cannot touch the watchdog or the pump-power source gate. Default off; a status flag + a persistent "⚠ FLOW CHECK DISABLED" UI banner show when it's active.
 - **Implemented (#34):** `FlowMonitor` (core) consumes a monotonic pulse count (ESP32 ISR + counter in `src/esp32/flow_sensor.h` via `attachInterruptArg`; injected in host tests). `gallons = (pulses − baseline)/K`; `rateGPM` from a ~1 Hz rolling ring that decays to 0 when flow stops (the signal #35's no-flow check keys on). K (`pulsesPerGallon`) loads from NVS via `Persistence` (float key, datasheet seed, overwritten by calibration #36). `main` re-baselines on the RUNNING edge and logs per-run gallons. The no-flow / unexpected-flow **faults** (#35) and the calibration state machine (#36) build on this.
 
 ### Calibration mode
-- `POST /api/calibrate/start {zoneIndex}` → opens that zone's path (diverter AROUND, master open, zone open, pump on), zeroes the pulse counter, enters a bounded calibration run (own max-runtime).
+- `POST /api/calibrate/start {zoneIndex}` → opens that zone's path (diverter plain, zone open, pump on), zeroes the pulse counter, enters a bounded calibration run (own max-runtime).
 - User collects output in a known container.
 - `POST /api/calibrate/finish {measuredGallons}` → `K = pulsesCounted / measuredGallons`, store to NVS, close everything. Reject absurd values (sanity bounds).
 
@@ -156,9 +172,11 @@ Survives reboot and power loss:
 - Manual default durations (per zone).
 - `swMaxRuntimeSec` (software ceiling, < ATtiny hard ceiling).
 - Fertigation policy + per-entry overrides.
-- Cached diverter position.
+- Flow-fault override flag (DEC-015).
 - Wi-Fi credentials.
 - Fault log: ring buffer (~16 entries) of `{ts, code, context}`.
+
+(No cached diverter position — the two-leg NO/NC diverter has no hold-state to remember, DEC-013.)
 
 Write-on-change, not per-loop. Debounce writes.
 
@@ -168,19 +186,15 @@ read-with-default, so adding a zone post-V1 needs no migration. A single `schema
 gates *transforming* migrations only; additive fields (new zone, new defaulted scalar) do
 not bump it. NVS keys cap at 15 chars (silent truncation) — key names are bounded at the
 source. Phase 2.1 (#25) persists the scalars that exist today (per-zone default durations,
-`swMaxRuntimeSec`, cached diverter position); the rest of this list is filled by its owning
-module through the same store as that module lands.
+`swMaxRuntimeSec`); the rest of this list is filled by its owning module through the same
+store as that module lands.
 
-**Cached diverter position wired (#28):** the stored position is restored into `ValveDriver`
-at boot (`assumeDiverter()`, no motor travel) and written back **once travel completes**
-(`!diverterBusy()` poll in `main.cpp`) so NVS records the position actually reached, not one
-merely commanded. A motorized ball valve holds position with no power, so the cache is
-physically true across a clean reboot — the first run skips the 6 s travel when the position
-already matches. Residual edge: a power loss *during* the 6 s travel strands the valve
-mid-stroke regardless of NVS, so the next matching run may skip travel and mis-route once;
-this never holds water on (the master FET, not the diverter, gates water) — accepted for V1.
-(`swMaxRuntimeSec` is still stored-not-read-back until RunController gains runtime config in
-Phase 4.)
+**Cached diverter position — removed in v1.4 (DEC-013).** Phase 2 (#28) wired a stored
+diverter position (`assumeDiverter()` boot-seed + write-on-change) for the hold-position
+3-way. The two-leg NO/NC diverter has no hold-state to remember — each run sets the legs from
+the fert flag and the unpowered rest is plain water — so `div_pos` and the boot-seed are
+dropped in the task 1.7 rework. (`swMaxRuntimeSec` is still stored-not-read-back until
+RunController gains runtime config in Phase 4.)
 
 ---
 
@@ -194,7 +208,7 @@ Phase 4.)
 **ATtiny85 side (separate sketch, specified here):**
 - Inputs: heartbeat from ESP32. Output: `ARM` line driving the **safety relay** coil (NO, energize-to-pass).
 - Hold `ARM` asserted only while: (a) a heartbeat edge has been seen within `HB_TIMEOUT_MS` (default 2000), **and** (b) continuous armed time has not exceeded `HARD_MAX_RUNTIME` (default 30 min), timed on the ATtiny's own clock.
-- On either failure: de-assert `ARM` → relay opens → master + pump lose 24V → fail dry. Also assert `WD_TRIPPED_IN` to the ESP32.
+- On either failure: de-assert `ARM` → relay opens → the pump loses 24V → no source → fail dry. Also assert `WD_TRIPPED_IN` to the ESP32.
 - Require the ESP32 to actively signal "run starting / run ended" so the ATtiny knows when to apply the runtime ceiling — simplest encoding: the heartbeat is only emitted during armed/active periods, or use a second discrete "run active" line if a pin is free. **Pick one encoding and document it in the ATtiny sketch header.**
 - ATtiny must default to **ARM de-asserted** on its own power-up/reset (fail-dry on watchdog reboot).
 
@@ -205,7 +219,7 @@ Phase 4.)
 Async server (ESPAsyncWebServer). STA-join the farm mesh using stored creds; if none/unreachable, fall back to SoftAP (`Tinkle-Setup`) with a captive config page. JSON over REST; a minimal SPA or server-rendered pages are both fine — keep it phone-usable in the field.
 
 Endpoints:
-- `GET /api/status` → current state, active zone, countdown sec, diverter position, live flow GPM, last run summary, latched faults, clock/sync state. Polled for the live UI.
+- `GET /api/status` → current state, active zone, countdown sec, diverter state (plain/fert), live flow GPM, flow-override flag, last run summary, latched faults, clock/sync state. Polled for the live UI.
 - `GET /api/schedule` · `POST /api/schedule` → full schedule array.
 - `GET /api/settings` · `POST /api/settings` → default durations, `swMaxRuntimeSec`, `pulsesPerGallon`, fert policy.
 - `POST /api/run` `{zoneIndex, durationSec?, fertigate?}` → enqueue a manual run.
@@ -227,7 +241,7 @@ The firmware **serves a single-page app** that is the phone UI; it is a first-cl
 - Degrade gracefully: if an API call fails, show the last known state and a clear "disconnected" banner rather than a blank screen.
 
 **Screens (all driven by the existing API):**
-1. **Status / home** — current state, active zone, big MM:SS countdown (mirrors the TM1637), live flow GPM, diverter position, last-run summary, and any latched fault prominently. Polls `GET /api/status` (~1–2 s while active). Default screen.
+1. **Status / home** — current state, active zone, big MM:SS countdown (mirrors the TM1637), live flow GPM, diverter state (plain/fert), last-run summary, a persistent banner if the flow check is disabled (DEC-015), and any latched fault prominently. Polls `GET /api/status` (~1–2 s while active). Default screen.
 2. **Manual run** — pick zone, duration (defaults pre-filled), fertigate toggle → `POST /api/run`; a big **STOP ALL** button → `POST /api/stop` always visible.
 3. **Schedule editor** — list/add/edit/delete entries (time, zone, duration, days-of-week, fert override, enable) → `GET`/`POST /api/schedule`.
 4. **Settings** — default durations, software max-runtime, fert policy, Wi-Fi → `GET`/`POST /api/settings`.
@@ -236,7 +250,7 @@ The firmware **serves a single-page app** that is the phone UI; it is a first-cl
 
 **Boundaries the SPA must respect:**
 - The SPA can never bypass the API or touch actuation directly — same validation and FAULT gating applies.
-- The SPA has **no role in fail-dry**. Watchdog, safety relay, and NC master are hardware; losing the phone, the page, or Wi-Fi must never affect safety or stop a scheduled run (the schedule lives in flash and runs headless).
+- The SPA has **no role in fail-dry**. Watchdog, safety relay, and the pump-power gate are hardware; losing the phone, the page, or Wi-Fi must never affect safety or stop a scheduled run (the schedule lives in flash and runs headless). The flow-fault override (DEC-015) is the one SPA-reachable safety-adjacent setting, and it is firmware-gated and cannot touch any of that hardware.
 - Treat the SPA as one of potentially several API clients (curl, future tooling); it gets no special privileges.
 
 ---
@@ -317,10 +331,10 @@ struct ScheduleEntry {
 
 ## 14. Fault handling & safe state
 
-- Faults latch. Entering any fault: command safe state (pump off → zones closed → master closed), set fault code, light attention LED + display code, log.
+- Faults latch. Entering any fault: command safe state (pump off → all valve FETs de-energized: zones cap-close, diverter returns to plain), set fault code, light attention LED + display code, log.
 - Recovery requires explicit clear (`/api/fault/clear` or B3 long-press) **and** the underlying condition resolved.
 - Fault codes: `FAULT_NO_FLOW`, `FAULT_UNEXPECTED_FLOW`, `FAULT_WATCHDOG`, `FAULT_CAL_RANGE`, `FAULT_CLOCK` (optional/non-blocking).
-- Hierarchy of trust: software stops first, the ATtiny + safety relay are the hardware backstop, the NC master is the mechanical backstop. Firmware must never assume it is the only thing keeping water off.
+- Hierarchy of trust: software stops first; the ATtiny + safety relay **cutting pump power** is the hardware backstop (the source gate, DEC-012). Firmware must never assume it is the only thing keeping water off.
 
 ---
 
@@ -328,8 +342,8 @@ struct ScheduleEntry {
 
 | Constant | Default | Notes |
 |---|---|---|
-| `PULSE_MS` | 75 | latching solenoid pulse; confirm on bench |
-| `DIVERTER_TRAVEL_MS` | 6000 | motorized ball valve travel window |
+| `ZONE_TRAVEL_MS` | 10000 | NC valve open/close travel; bench-confirm (datasheet 6–10 s). Replaces `PULSE_MS` — task 1.7 |
+| `DIVERTER_TRAVEL_MS` | 10000 | diverter-leg travel (same valve family) |
 | `HEARTBEAT_MS` | 250 | ESP32 → ATtiny toggle |
 | `HB_TIMEOUT_MS` | 2000 | ATtiny trip on lost heartbeat |
 | `HARD_MAX_RUNTIME` | 30 min | ATtiny ceiling (own clock) |
@@ -338,7 +352,7 @@ struct ScheduleEntry {
 | `IDLE_FLOW_FAULT_PULSES` | tune | unexpected-flow threshold |
 | button debounce | 30 ms | on top of RC |
 
-Bench-confirm `PULSE_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
+Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
 
 ---
 
@@ -350,14 +364,17 @@ PlatformIO + Arduino-ESP32. Libraries: ESPAsyncWebServer + AsyncTCP, ArduinoJson
 
 ## 17. Acceptance checklist
 
-- [ ] Power loss at any run step leaves the system dry (master closed, pump off) with no firmware involvement.
-- [ ] Pulling the heartbeat (halt firmware) trips the safety relay within `HB_TIMEOUT_MS` and closes the master.
+- [ ] Power loss at any run step leaves the system dry (pump unpowered → no source; valve state irrelevant) with no firmware involvement.
+- [ ] Pulling the heartbeat (halt firmware) trips the safety relay within `HB_TIMEOUT_MS` and de-powers the pump.
 - [ ] A run exceeding `HARD_MAX_RUNTIME` is cut by the ATtiny even if the ESP32 believes the run is fine.
 - [ ] No-flow during a run faults and safes within a few seconds past the grace window.
 - [ ] Unexpected idle flow faults and re-safes immediately.
-- [ ] Fert policy marks exactly one run/day THROUGH the Dosatron unless overridden; diverter only travels on change.
+- [ ] Fert policy marks exactly one run/day THROUGH the Dosatron unless overridden; the diverter legs travel only on change.
 - [ ] Calibration mode writes a sane K and survives reboot.
 - [ ] Schedule executes with Wi-Fi pulled (local autonomy).
 - [ ] Web UI shows live countdown + lets a phone start/stop/calibrate in the field.
 - [ ] SPA is served gzipped from flash, loads with no internet, and a dead phone/Wi-Fi never affects a running or scheduled irrigation.
-- [ ] Never both H-bridge inputs high; valves hold with zero current between pulses.
+- [ ] Every valve channel rests LOW (off) at boot — NC zones closed, NO bypass open (plain), pump off.
+- [ ] Each valve closes within `ZONE_TRAVEL_MS` of de-energize; the auto-return self-test (DEC-014) flags a valve that doesn't.
+- [ ] The flow-fault override (DEC-015) mutes faults without touching the watchdog / source gate; the "flow check disabled" banner shows when active.
+- [ ] A power loss in the first ~60 s after boot still leaves the system dry via the source gate (caps not yet charged — but the pump is the gate).
