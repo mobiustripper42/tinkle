@@ -5,6 +5,12 @@
 **Build target:** Winter 2026–27, running the 2027 season
 **Scope of V1:** Red Tunnel only, built on a chassis sized for three tunnels
 
+**Changelog (v1.4):**
+- **Corrects the v1.3 valve framing (wrong part).** The as-sourced valve is a U.S. Solid 3/4" brass **2-wire auto-return, normally-closed** motorized ball valve (9–36 V AC/DC, ~2 W, 6–10 s, **capacitor** return) — **on/off, not reverse-polarity**. So it drives off a **single low-side FET** (1 GPIO), not an H-bridge. Every actuated valve is this family; **all DRV8871 H-bridges and the never-both-high invariant are gone.** See DEC-011.
+- **Master valve removed.** Fail-dry is now **source control**: the pump sits on the armed 24 V (ATtiny safety relay, DEC-003), powered only during a run → no run / hang / trip / power loss = no pump power = no water. The master's only unique job (block a gravity siphon through a stuck-open zone) doesn't apply here — negligible tank head + the SEAFLO's internal checks block reverse flow. The valves are **not** a safety barrier; their resting-closed state is convenience. See DEC-012.
+- **3-way diverter → two 2-way valves** (DEC-013): a **NO** clean/bypass leg + an **NC** Dosatron leg + a check valve on the Dosatron outlet. Unpowered rest = plain water flows, Dosatron isolated; no deadhead.
+- **Driver / clamp / rails:** IRLZ44N FET per valve; **SMAJ30A TVS** drain-to-source per FET (internal-rectifier valves — a freewheel diode won't clamp). Valves on **raw 24 V**, pump on **armed 24 V**, **24 V LED rings**, **12 V buck dropped**. Adds DEC-014 (auto-return self-test — correctness only) and DEC-015 (flow-check web override).
+
 **Changelog (v1.3):**
 - Zone valves changed to **U.S. Solid 3/4" brass 2-wire reverse-polarity motorized ball valves** (~$34 ea), sitting **downstream of one regulator per tunnel** at ≤15 psi. Replaces the Hunter PGV diaphragm + 458200 latching-solenoid, upstream-of-regulator scheme. Driven by it: the 5-zone Green tunnel needs only one regulator, and **zones + diverter are now one valve family on identical DRV8871 H-bridge channels** (the master stays a de-energize-to-close NC solenoid — see §4). See DEC-011.
 - Zone valve rail is no longer a 12V latching pulse: the ball valves run on the **24V rail**, driven for full travel (~5–15 s) like the diverter, not a 75 ms pulse. Firmware impact (`ValveDriver` pulse→travel rename, `PULSE_MS`→`ZONE_TRAVEL_MS`) is tracked as a task in `PROJECT_PLAN.md`.
@@ -42,43 +48,42 @@ Design principles, inherited from the Soundings discipline and adapted for a sys
 
 ## 2. System Architecture
 
-**Two independent paths, one brain** (at full build). Each tunnel gets its own pump, master valve, accumulator, and flow sensor. A single controller sequences all of them. V1 builds only the Red path.
+**Two independent paths, one brain** (at full build). Each tunnel gets its own pump, valves, accumulator, and flow sensor. A single controller sequences all of them. V1 builds only the Red path.
 
 **Water path (Red, V1):**
 
 ```
 Rainwater tanks (west)
-   → 24V DC diaphragm pump (SEAFLO 51, self-priming, pressure switch, internal bypass)
+   → SEAFLO 51 pump (24V, self-priming, pressure switch, internal bypass, no reverse flow)
    → [ union / camlock — pump serviceable ]
    → accumulator (expansion tank — tames the 5.5 GPM-vs-1.78 GPM short-cycle)
    → filter (100–140 mesh)  → [ union / camlock — filter serviceable ]
-   → manual isolation valve → [ union ] → Dosatron D14MZ2 → [ union ] → manual isolation valve
-        ⌐ motorized 3-way diverter routes flow THROUGH (fertigate) or AROUND (plain) the Dosatron
-   → master valve (WIC 2BCW, direct-acting NC, fail-dry)
+   → TEE ─┬─ clean leg:  NO ball valve ───────────────────────────────┐
+          └─ fert  leg:  NC ball valve → Dosatron D14MZ2 → check valve ─┤
+                 (manual isolation valves + unions on both legs)        → MERGE
    → flow sensor (hall-effect)
-   → pressure regulator (one per tunnel, drop to ≤15 psi for tape)
-   → [ Zone 1 valve (U.S. Solid motorized ball) → beds 1–3 ]
-   → [ Zone 2 valve (U.S. Solid motorized ball) → beds 4–6 ]
+   → pressure regulator (one per tunnel, ≤15 psi for tape)
+   → [ Zone 1 NC ball valve → beds 1–3 ]
+   → [ Zone 2 NC ball valve → beds 4–6 ]
    → AquaTraxx drip tape
 ```
 
-**Zone valves now sit downstream of the regulator (v1.3 flip).** The U.S. Solid motorized ball valves seal at any pressure — zero to full — so they live on the regulated ≤15 psi side, after a *single* regulator per tunnel. The Hunter PGV diaphragm valves they replace needed ~20+ psi to seal and so had to sit upstream on the 45–60 psi pump side, which forced a regulator (or several) on the combined tape output. One regulator ahead of the zone split now serves every zone — decisive for the 5-zone Green tunnel and a unified Red + Green design. The direct-acting WIC master still works at any pressure, so its placement (upstream, gating everything) is unchanged.
+**Zone valves sit downstream of the regulator, and there is no master valve.** The U.S. Solid auto-return ball valves seal at any pressure, so they live on the regulated ≤15 psi side after a *single* regulator per tunnel (the v1.1 Hunter PGV diaphragm valves needed ~20+ psi and had to sit upstream, which forced a regulator on the combined output). One regulator ahead of the zone split serves every zone — decisive for the 5-zone Green tunnel. **The master valve is gone (DEC-012):** the pump, on the watchdog-armed 24 V, is the source gate — no pump power, no water — so a separate gating valve is redundant here (negligible tank head + the pump's internal checks mean no siphon path with the pump off).
 
-The Red header sits at the **east end** of the tunnel, where the entrance, manual shutoffs, and Dosatron already live. The controller mounts here too, so all Red valves, the master, and the flow sensor are within a few feet of the controller — **V1 wiring is short and simple.** (Long buried runs are a future-tunnel concern only.)
+The Red header sits at the **east end** of the tunnel, where the entrance, manual shutoffs, and Dosatron already live. The controller mounts here too, so all Red valves and the flow sensor are within a few feet of the controller — **V1 wiring is short and simple.** (Long buried runs are a future-tunnel concern only.)
 
 **Control path:**
 
 ```
 ESP32 controller (east end of Red)
    ├── Wi-Fi → existing farm mesh (local web UI; MQTT later)
-   ├── H-bridge valve driver  → zone valves (motorized ball, full-travel drive)
-   ├── H-bridge valve driver  → Dosatron 3-way diverter (full-travel drive, same as a zone)
-   ├── low-side switch         → master valve (NC, holding while open)
-   ├── pump-enable output      → pump power (pump self-manages via pressure switch)
-   ├── flow-sensor input       → hall-effect pulse counter
-   ├── TM1637 4-digit LED       → MM:SS countdown of active run (read-only status)
-   ├── 3× momentary button + LED ring (Red live, two spare)
-   └── independent hardware watchdog → hard max-runtime cutoff
+   ├── low-side FET ×N        → zone valves (NC ball, energize-to-open, ~6–10 s travel)
+   ├── low-side FET ×2        → diverter legs (NO clean + NC fert, energize-to-actuate)
+   ├── pump-enable output     → pump power on the armed 24V (pump self-manages via pressure switch)
+   ├── flow-sensor input      → hall-effect pulse counter
+   ├── TM1637 4-digit LED      → MM:SS countdown of active run (read-only status)
+   ├── 3× momentary button + LED ring (one per zone, DEC-006)
+   └── independent hardware watchdog → arms the safety relay feeding the pump (fail-dry source gate)
 ```
 
 ---
@@ -110,7 +115,7 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 **Pump** — SEAFLO 51 Series, 24V (SFDP2-055-060-51). **Selected.**
 - Flow: 5.5 GPM open; zone demand 1.78 GPM. Headroom is deliberate — holds pressure through the Dosatron + filter + regulator without straining at its limit.
 - Pressure: adjustable switch — **set to ~20 psi**, not the 60 max. Tape caps at 15 psi behind the regulator; 20 psi covers filter/Dosatron losses with margin, runs the pump easier, draws less current, and at low pressure the pump delivers near open flow (more effective headroom).
-- Continuous-duty, run-dry safe, self-priming, internal bypass, DC for the no-inverter solar bank.
+- Continuous-duty, run-dry safe, self-priming, internal bypass, DC native (runs straight off the 24V supply).
 - **Mount on its rubber vibration-isolation feet; never hard-plumb the ports.** Use a short flex section on inlet AND outlet (below) — the plastic ports are glass-filled nylon and crack when rigid pipe torques or vibrates them. A prior 51 cracked its output this way.
 - A prior 51 (cracked output) is on the shelf — bench mule for board/valve/flow testing, not deployment.
 - Rejected: model 42 (3.0 GPM, no margin); model 55 (7.0 GPM, more headroom than needed).
@@ -131,30 +136,24 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 
 **Filter** — 100–140 mesh, reuse existing. Sits before the flow sensor and tape to protect both.
 
-**Dosatron automation** — motorized diverter so the once-a-day fert pulse runs unattended.
-- **Motorized 3-way ball valve, 24VDC, L-port** (US Solid or equiv) at the Dosatron inlet. Routes flow through the injector (fertigate) or around it (plain water).
-- Holds position unpowered; draws current only while rotating (~5–10s). Driven by one DRV8871 H-bridge channel for the full travel window — **identical to a zone valve** (same valve family, v1.3).
-- **Manual isolation valves** retained on both Dosatron legs for priming, service, winterizing.
-- **Unions (or camlocks) on each side of the Dosatron** so the injector lifts out without disturbing threaded ports. Recommend unions/camlocks at the pump and filter too — whole serviceable string breaks apart.
-- Fail-mode: a 3-way holds its last position on power loss. Worst case is "fertigated when plain was intended" — an agronomic oops, never a flood (no water moves unless master + pump are live, both fail dry). Rides safely on top of the existing design.
-- *Single 3-way preferred over two 2-way solenoids — avoids the both-closed deadhead risk.*
+**Dosatron automation** — two motorized 2-way valves split the fert/plain choice (DEC-013), replacing the old 3-way.
+- **NO (normally-open) ball valve on the clean/bypass leg** + **NC (normally-closed) ball valve on the Dosatron leg** — both the same U.S. Solid auto-return family as the zones, each on its own low-side FET.
+- **Unpowered rest = plain water flows, Dosatron isolated** (NO open, NC closed): exactly one path open, so no both-closed deadhead and no accidental fertigation. A **plain run powers nothing**; a fert run energizes the NC leg open + the NO leg closed.
+- **Check valve on the Dosatron outlet** (existing GASHER 3/4" brass, 200 psi), between the injector and the rejoin tee — stops bypass flow back-feeding the idle injector.
+- **Manual isolation valves** on both legs for priming/service/winterizing; **unions or camlocks** each side of the Dosatron (and at the pump + filter) so the serviceable string breaks apart.
+- Fail-mode: any diverter state (both-open, both-closed, wrong leg) is at worst a fertigation oops, never a flood — it sits upstream of the source gate, and no water moves unless the pump is powered. A leg switch briefly overlaps during the ~6–10 s travel (harmless: pump rides its internal bypass; brief split just under-injects); firmware may stagger make-before-break (optional).
 
-**Master valve** — WIC 2BCW (or equiv), **direct-acting, normally-closed, 24VDC, continuous-duty coil**. **Selected.**
-- Direct-acting → works from zero pressure, so placement is free and the regulated low-pressure side is irrelevant.
-- True fail-dry guarantee: power dies → spring closes → no water regardless of any zone valve's state. **This is why the master stays a de-energize-to-close NC solenoid even though the zones and diverter are now motorized ball valves** (v1.3): a ball valve holds its last position on power loss, so it can never be the element that guarantees "dry." The master is the one valve that must spring closed.
-- Holding draw ~18W while watering only (pump running anyway). Modest, intermittent, fine on solar.
-- **Continuous-duty coil required.** Reject the U.S. Solid general-purpose units here — they're rated under 8 hours energized and warn of coil burnout on continuous duty.
+**No master valve (DEC-012).** Earlier revisions used a direct-acting NC solenoid (WIC 2BCW) as a global shutoff. It's removed: the **pump on the watchdog-armed 24 V is the source gate** — no pump power, no water — and with NC zones, a reverse-checking pump, and negligible tank head, a separate gating valve guards nothing the source gate doesn't already. See §6 and DEC-012.
 
-**Zone valves** — U.S. Solid 3/4" brass **2-wire reverse-polarity motorized ball valve**, 9–24V DC, standard port (JFMSV-series), ~$34 ea. ×2 (Red Tunnel) + ×1 (Zone 3 hose outlet, wired-now/plumbed-later). **Selected (v1.3 — supersedes Hunter PGV + 458200).**
-- **Zero-pressure operation:** seals at the regulated ≤15 psi, so it sits *downstream* of the regulator (the diaphragm valves it replaces needed ~20+ psi and had to sit upstream).
-- Reverses on polarity flip → drives off a DRV8871 H-bridge, the **same channel type and valve family as the Dosatron diverter**. Holds position with no power once moved; self-stops at its internal limit switch.
-- **~5–15 s travel — driven for the full travel window like the diverter, not a 75 ms pulse.** Runs on the **24V rail** (no separate 12V pulse rail). Bench-confirm the travel time before trusting the firmware's `ZONE_TRAVEL_MS`.
-- **Zone 3** is a general-purpose hose outlet, *separate* from the Red Tunnel's two zones (DEC-006): a third ball valve on its own H-bridge (Z3_IN1/IN2 = GPIO15/12, DEC-007). The board drives it now; the valve is installed when that hose line is plumbed.
-- Fail *as-is* (holds last position) on power loss — but cannot pass water unless the master is also open and the pump live. The NC master + watchdog backstop this; the ball valve is deliberately **not** the fail-dry element (it holds position, it does not spring closed — see the master entry below).
-- Red: 2 valves. Green (future): 5 valves. ~$238 for all seven vs. 5 regulators + fittings + leak points in Green. Source: ussolid.com (3/4" brass standard port, 2-wire reverse-polarity).
+**Zone valves** — U.S. Solid 3/4" brass **2-wire auto-return, normally-closed** motorized ball valve, 9–36 V AC/DC, standard port, NPT. ×2 (Red Tunnel) + ×1 (Zone 3 hose outlet, wired-now/plumbed-later). **Selected (v1.4 — supersedes the v1.1 Hunter scheme and the v1.3 reverse-polarity mis-spec).**
+- **NC on/off:** closed when de-energized, energize (24 V) to drive open; a **capacitor auto-return** drives it closed on de-energize. ~2 W, 6–10 s travel. Switched by a single low-side FET (1 GPIO) — no H-bridge, no reverse polarity.
+- **Downstream of the regulator:** seals fine at the regulated ≤15 psi.
+- **Zone 3** is a general-purpose hose outlet, *separate* from the Red Tunnel's two zones (DEC-006): a third NC valve on its own FET. The board drives it now; the valve is installed when that hose line is plumbed. (This retires the DEC-007 Z3 H-bridge/strapping-pin allocation — a single FET needs only 1 GPIO.)
+- **Not a safety barrier (DEC-012):** the NC resting state is a convenience — a valve passes nothing with the pump unpowered. The auto-return is capacitor-driven (needs ~1 min to charge after opening, ages over years), so the self-test (DEC-014) verifies valves rest closed for *correctness*, not fail-dry.
+- Red: 2 valves. Green (future): 5 valves. Source: ussolid.com (3/4" brass NC 2-wire auto-return; the NO variant covers the clean diverter leg). Bench-confirm travel time before trusting `ZONE_TRAVEL_MS`.
 
-**Flow sensor** — hall-effect, brass, 3/4", ×1 (Red). Placed after the master, before the zone split (one sensor reads whichever zone runs).
-- Cross-check: detects flow when nothing is commanded (stuck valve / burst) and no-flow when a zone is on (clog / dead pump).
+**Flow sensor** — hall-effect, brass, 3/4", ×1 (Red). Placed after the diverter merge, before the zone split (one sensor reads whichever zone runs).
+- Cross-check: detects flow when nothing is commanded (stuck valve / burst) and no-flow when a zone is on (clog / dead pump). A web-UI override (DEC-015) can mute its *faults* so a bad sensor can't block watering — software only, never touches the source gate.
 - **Calibrate empirically** — run a known volume into a bucket, count pulses, derive pulses/gallon. Don't trust the datasheet K-factor at our ~1.78 GPM (low third of the sensor's range).
 - The irrigation equivalent of the Watermark: confirms reality matched intent.
 
@@ -168,18 +167,16 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - Mounted at the east end of Red in a weatherproof enclosure.
 
 **Valve driver:** built for the three-tunnel future, populated for Red.
-- **Zone-valve channels:** **dedicated H-bridge per valve** — one DRV8871 (3.6A) wired straight to each motorized ball valve, no multiplexing. Valves drive ~5–15 s for travel and never run together; dedicated bridges are simple to wire and reason about, the chips are cheap, and it's the **same channel type as the diverter**. Build ~16 channels of headroom; **3 channels wired now** — Z1/Z2 (Red, GPIO13/14, 16/17) + Z3 (hose outlet, GPIO15/12 strapping pins per DEC-007). Valves plumbed: 2 (Red) now, Z3 when its line goes in.
-- **Dosatron diverter channel:** one more H-bridge channel for the 24VDC 3-way motorized valve. Populate **1** (shared across tunnels at full build, or one per tunnel — TBD).
-- **Master-valve channels:** low-side MOSFET switch (logic-level N-FET, e.g. IRLZ44N) for the NC solenoid. Build **3** (one per tunnel); populate **1**.
-- **Pump-enable channels:** relay (clean isolation for the ~5A pump) or MOSFET on pump power. Build **3**; populate **1**.
+- **Valve channels — one low-side N-FET per valve** (IRLZ44N), gate resistor + gate-to-GND pulldown so each valve sits **off** (closed/rest) through ESP32 boot. **No H-bridge, no DRV8871, no never-both-high invariant** — the valves are on/off. A **TVS (SMAJ30A) drain-to-source per FET** clamps the turn-off transient (the valves have an internal bridge rectifier, so a freewheel diode across the valve won't clamp). Build ~8–16 channels; **populate 5** for Red — Z1/Z2/Z3 (zones) + the NO clean leg + the NC Dosatron leg. (Inrush is well within the FET; the cap-inrush spec is moot.)
+- **Pump-enable channel:** relay (clean isolation for the ~5A pump) or MOSFET on pump power, on the **armed 24 V** (the fail-dry source gate). Build **3** (one per tunnel); populate **1**.
 
 **Independent watchdog** — non-negotiable, separate from the ESP32.
-- **ATtiny85**, separate from the ESP32: watches an ESP32 heartbeat *and* enforces a hard max-runtime ceiling. Its output sits in series with master + pump power — trip it and the master loses power and springs closed. Fail-dry cutoff in hardware, regardless of what the ESP32 believes.
+- **ATtiny85**, separate from the ESP32: watches an ESP32 heartbeat *and* enforces a hard max-runtime ceiling. Its output (the safety relay) sits in series with **pump** power — trip it and the pump de-powers → no source → no water. Fail-dry cutoff in hardware (DEC-012), regardless of what the ESP32 believes.
 - This is the automated stand-in for the human who used to watch the hose.
 
 **Manual interface:**
 - **3× IP67 momentary buttons with LED rings** — one per zone, all three live: Z1/Z2 (Red Tunnel) + Z3 (hose outlet). No dedicated stop button (DEC-006).
-- Button is an **input to the ESP32**, never wired across a valve — all watering paths stay under master + watchdog control.
+- Button is an **input to the ESP32**, never wired across a valve — all watering paths stay under the pump-power gate + watchdog control.
 - Press while idle = trigger a **timed run** of that button's zone for a stored default duration; the run auto-stops itself.
 - **Any** button press during an active run = **stop** (cancel the run; no switch, no auto-start). A **≥3 s long-press of any button** clears a latched fault (DEC-006).
 - LED ring = "this tunnel is watering right now." That is the only status needed at the box.
@@ -191,18 +188,18 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - **IP rating:** LRS series is open-frame **IP20** — must live *inside* the sealed enclosure (or its own sealed box). It does not mount in open tunnel air. (IP67 potted alternative: Mean Well LPV-150-24, if separate mounting is wanted.)
 - Confirm mains reaches the east-end header (the HAF fan GFCIs suggest AC is present in the tunnel).
 - Rails off the 24V supply:
-  - **24V raw** → master valve, pump, and the zone + diverter H-bridge motor supply (the ball valves are 9–24V — run them at 24V; no 12V pulse rail).
-  - **24→12V buck** → button LED rings only. (The old zone-valve pulse rail is gone with the move to motorized ball valves; the diverter, formerly listed here, also runs on 24V.)
+  - **24V (armed, via the safety relay)** → pump. The watchdog gates this — the fail-dry source gate (DEC-012).
+  - **24V (raw)** → the valve FETs (zones + both diverter legs; valves are 9–36V) and the 24V button LED rings. **No 12V buck.**
   - **24→5V buck** → flow sensor (level-shift its pulse down to 3.3V for the GPIO).
   - **24→3.3V buck** → ESP32 + logic.
-- Inline fuse (~10A) on 24V output, TVS across 24V, reverse-polarity protection, flyback diodes on every inductive load (brownout insurance — mains here is brownout-prone).
-- **Fail-dry holds on mains loss:** supply dies → 24V drops → master springs closed → no water. A brownout = missed cycle, harmless by design.
+- Inline fuse (~10A) on 24V output, TVS across 24V, reverse-polarity protection, a per-FET TVS (SMAJ30A) on each valve channel, flyback on the pump-relay coil (brownout insurance — mains here is brownout-prone).
+- **Fail-dry holds on mains loss:** supply dies → pump loses power → no source → no water. A brownout = missed cycle, harmless by design.
 - **Build/test:** the same fixed supply powers bench bring-up before tunnel install.
 
 **Wiring (Red, V1):**
 - All valves/sensor are at the east-end header, feet from the controller — short runs.
 - Where any run is buried or exposed: direct-burial / UF irrigation cable, every splice in a gel- or silicone-filled waterproof connector. No bare wire nuts. (Moisture ingress is the classic failure — same lesson as the HAF fan GFCIs.)
-- Conductor count, Red: 2 zone valves ×2 + Dosatron diverter ×2 + master ×2 + flow ×3 + common. Pull burial cable with spares.
+- Conductor count, Red: 3 zone valves (Z1/Z2/Z3) ×2 + 2 diverter legs ×2 + flow ×3 + common. Pull burial cable with spares.
 
 ---
 
@@ -210,23 +207,25 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 
 | Failure | Result | Why it's safe |
 |---|---|---|
-| Power loss | Master shuts (NC) | No water. Fail-dry. |
-| Controller/firmware hang | Watchdog cuts power past time ceiling | No runaway-on. |
-| Zone valve stuck open | No water unless master also open | Two-fault tolerance. |
-| Pump relay welded on | Pump pressurizes, but the NC master is closed (and zone valves hold closed) → no path | Single fault ≠ flood. |
+| Mains loss | Pump dead → no source (valves also rest closed) | No water. Source gone. |
+| Controller/firmware hang | Watchdog opens the safety relay → pump de-powered | No runaway-on; valve state irrelevant to dryness. |
+| Watchdog trip (time ceiling) | Safety relay opens → pump off → no source | A run can't exceed `HARD_MAX_RUNTIME`. |
+| Zone valve stuck open | Between runs the pump is unpowered → no source → no flow; during a run, a bounded amount | Source-gated; runs time-bounded; flow sensor flags idle flow. |
+| Pump relay welded on | Pump only has power while the safety relay is armed (during a run); idle = no power | Safety relay sits in series ahead of the enable. |
 | Lost Wi-Fi / server | Schedule still runs from flash | Local autonomy. |
-| Clog / burst | Flow sensor flags mismatch | Detected, logged. |
-| Dosatron diverter stuck | Wrong fert state (plain vs injected) | Agronomic oops, not a flood — water still gated by master + pump. |
+| Clog / burst | Flow sensor flags mismatch (mute-able, DEC-015) | Detected, logged. |
+| Diverter wrong leg / both open | Wrong fert state | Agronomic oops, not a flood — upstream of the source gate. |
 
-The enemy is *runaway-on*. Every layer above exists to make a single fault unable to flood a bed.
+The enemy is *runaway-on*. The **pump-power gate (DEC-012)** — armed only during a run, killed by the watchdog or any power loss — is the single barrier that makes it impossible. The valves decide *which* beds get water during a bounded run, not whether water runs away.
 
 ---
 
 ## 7. Firmware Behavior
 
 - **Schedule:** stored in flash (time + duration per zone). Runs locally with no network dependency.
-- **Sequencing:** zones run one at a time within a tunnel. Pump-enable on for the active tunnel; pump self-manages run/stop via its pressure switch; master opens for the active zone group.
-- **Fertigation:** each scheduled run carries a **fertigate flag**. On a fert run, set the Dosatron diverter to THROUGH before opening the master; otherwise leave it AROUND. Default policy: one fert run/day even when multiple watering runs fire.
+- **Sequencing:** zones run one at a time within a tunnel. Open the active zone valve, then pump-enable on; the pump self-manages run/stop via its pressure switch. There is no master valve (DEC-012).
+- **Fertigation:** each scheduled run carries a **fertigate flag**. On a fert run, energize the Dosatron leg open + the bypass leg closed before starting the pump; otherwise leave both diverter legs at rest (plain water flows). Default policy: one fert run/day even when multiple watering runs fire.
+- **Flow override + self-test:** the flow-sensor faults are mute-able from the web UI (DEC-015, software-only); the firmware periodically verifies valves rest closed for agronomic correctness (DEC-014).
 - **Manual:** momentary button → timed run at stored default duration → auto-stop. Any button = cancel all.
 - **Display:** TM1637 shows MM:SS countdown of the active run; blank/idle otherwise.
 - **Flow-sensor calibration:** pulses-per-gallon stored in flash, set via a **calibration mode** on the web UI — start a run into a known container, enter the measured volume, firmware divides counted pulses by volume and saves the K-factor. No reflash to recalibrate. Default seeded from datasheet, overwritten by the field value.
@@ -239,10 +238,10 @@ The enemy is *runaway-on*. Every layer above exists to make a single fault unabl
 
 ## 8. Expansion Provisions (build now, populate later)
 
-- Valve driver: ~16 H-bridge channels (3 wired: Z1/Z2/Z3, 2 plumbed) + Dosatron diverter channel(s), 3 master channels (1 used), 3 pump-enable (1 used), 3 flow inputs (1 used).
+- Valve driver: ~8–16 low-side FET valve channels (5 populated: Z1/Z2/Z3 + NO clean leg + NC Dosatron leg), 3 pump-enable (1 used), 3 flow inputs (1 used). No H-bridges, no master channel.
 - 3 button + LED footprints (1 used). TM1637 display populated for Red.
 - Enclosure sized for full three-tunnel wiring and terminal blocks **plus the 24V supply** (the open-frame LRS lives inside the sealed box).
-- Adding a tunnel = mount a pump + master + valves + sensor, pull wire home to the controller, populate channels, update config. No board or firmware redesign.
+- Adding a tunnel = mount a pump + valves + sensor, pull wire home to the controller, populate channels, update config. No board or firmware redesign.
 
 ---
 
@@ -261,15 +260,15 @@ These are the specs to nail during sourcing. Several feed the driver design, so 
 
 1. ~~**Pump**~~ — **DONE:** SEAFLO 51 Series 24V (SFDP2-055-060-51), continuous/run-dry, 5.5 GPM, switch set ~20 psi, internal bypass. (Supersedes the v1.1 model-42 pick — see §4.)
 2. ~~**Accumulator**~~ — **DONE (required, §4):** reuse the shelf expansion tank; the 51's 5.5 GPM against a 1.78 GPM zone short-cycles without it.
-3. ~~**Zone valve**~~ — **DONE (v1.3):** U.S. Solid 3/4" brass 2-wire reverse-polarity motorized ball valve, 24V, driven full-travel off a DRV8871 (same family as the diverter), downstream of one regulator. Bench-confirm travel time before trusting `ZONE_TRAVEL_MS`.
-4. ~~**Master valve**~~ — **DONE:** WIC 2BCW direct-acting NC 24VDC, continuous-duty coil. Confirm port size + holding current.
+3. ~~**Zone valves**~~ — **DONE (v1.4):** U.S. Solid 3/4" brass **2-wire auto-return, NC** motorized ball valve, 9–36V, NPT, standard port (2-indicator-light SKU). On/off via a low-side FET. Bench-confirm travel time before trusting `ZONE_TRAVEL_MS`.
+4. ~~**Master valve**~~ — **DROPPED (DEC-012):** no master; the pump on the armed 24V is the source gate.
 5. **Flow sensor:** pick exact brass 3/4" unit; calibrate pulses-per-gallon empirically.
-6. **Dosatron diverter:** 24VDC 3-way L-port motorized ball valve — make/model, port size, pulse/drive spec. Unions or camlocks each side of the Dosatron (+ pump, filter).
-7. **Valve driver:** H-bridge chip (DRV8871 candidate) + multiplex/select once bench pulse confirmed.
-8. ~~**Watchdog**~~ — **DONE:** ATtiny85, in series with master + pump power.
+6. ~~**Diverter**~~ — **DONE (DEC-013):** two 2-way US Solid auto-return valves — **NO** clean leg + **NC** Dosatron leg — + the existing GASHER check valve on the Dosatron outlet. Unions/camlocks each side of the Dosatron (+ pump, filter).
+7. ~~**Valve driver**~~ — **DONE:** discrete IRLZ44N low-side FET per valve + SMAJ30A TVS drain-to-source. No H-bridge.
+8. ~~**Watchdog**~~ — **DONE:** ATtiny85, safety relay in series with **pump** power (the source gate).
 9. **ESP32 board variant** (DevKitC 38-pin candidate) and GPIO budget against channel count + TM1637.
 10. **Enclosure:** IP65+, sized for three-tunnel terminal blocks **+ the 24V supply inside**, clear/vented lid, DIN rail + glands.
-11. **Buck converters:** 24→12V (button LED rings), 24→5V, 24→3.3V modules.
+11. **Buck converters:** 24→5V, 24→3.3V modules (12V buck dropped — LED rings run on 24V).
 12. **IP67 buttons** with LED rings, ×3. **TM1637 4-digit display**, ×1.
 13. **Burial wire / waterproof connectors:** 18 AWG, conductor count per §5, gel-filled splices, with spares.
 14. ~~**Power dependency**~~ — **RESOLVED:** fixed AC→24V supply in the tunnel (Mean Well LRS-150-24 candidate), not the solar bank. Confirm mains reaches the east-end header.
