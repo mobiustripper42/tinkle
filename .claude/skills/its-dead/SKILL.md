@@ -4,7 +4,7 @@ description: Session end. Stamps `ended:` on the open session file, tallies tota
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
-You are closing the session. Under DEC-S013, this is a one-action skill: stamp `ended:`, write `status: closed`, commit + push to the orphan `sessions` branch. All time math (wall_clock / dev_time / review_time / break inference) and version bumps moved to `/retro`. The session file becomes atomic — never modified after this runs.
+You are closing the session. Under DEC-S013, this is a one-action skill: stamp `ended:`, write `status: closed`, commit + push to the orphan `sessions` branch. All time math (wall_clock and active = wall_clock − breaks, via transcript break inference) and version bumps moved to `/retro`. The session file becomes atomic — never modified after this runs.
 
 ## Step 0 — Locate the open session (on the sessions worktree)
 
@@ -26,7 +26,7 @@ Edit `$SESSION_FILE` frontmatter:
 - `ended: <END_UTC>`
 - `status: closed`
 
-Do **not** write `wall_clock`, `dev_time`, `review_time`, `duration`, or any time-derived field. Those are `/retro`'s job (DEC-S013).
+Do **not** write `wall_clock`, `active`, `breaks`, `duration`, or any time-derived field. Time math is `/retro`'s job (DEC-S013).
 
 ## Step 2 — Tally total points
 
@@ -69,7 +69,7 @@ Total points: <SUM>
 
 **Do not write this to the file.** The user verifies; `/retro` computes the persisted numbers at phase end.
 
-If the wall_clock looks wildly wrong (e.g. user expected 2h, sees 9h because of an overnight gap), the user can record a note in the Context section. The actual `dev_time` will be inferred at retro from transcript break gaps; the displayed wall_clock is just the raw delta.
+If the wall_clock looks wildly wrong (e.g. user expected 2h, sees 9h because of an overnight gap), the user can record a note in the Context section. The actual active time will be inferred at retro (wall_clock minus transcript break gaps); the displayed wall_clock is just the raw delta.
 
 ## Step 5 — Commit + push the sessions branch (from the worktree)
 
@@ -92,7 +92,7 @@ PRs: #N1, #N2, ...            <- still need merging if any are still OPEN
 Points (per-task sum): <S>
 
 The session file is now atomic — no further writes will modify it.
-Time math (dev_time / review_time / break inference) + version bump will run at /retro.
+Time math (active = wall_clock − breaks, via break inference) + version bump will run at /retro.
 ```
 
 If any `pr_numbers` PR is still OPEN, append:

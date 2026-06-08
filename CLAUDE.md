@@ -158,8 +158,9 @@ revisit — not needed now.
 
 - Each task gets a branch: `git checkout -b task/X.Y-short-description`.
 - `/kill-this` opens the PR (`closes #N`), runs @code-review. Keep ≤3 open PRs.
-- No staging branch by default — PRs ship to `main`. Skills auto-detect
-  `origin/staging` if you add one later.
+- No `production` branch by default — PRs ship to `main`. Deployable projects can
+  add a downstream `production` branch and ship with `/promote-production` (ff-merge
+  `main` → `production`); only that skill gates on `origin/production` (DEC-S022).
 
 ## Approach to Action
 
