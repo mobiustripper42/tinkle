@@ -55,7 +55,7 @@ The safety-critical heart. Bench-testable on LEDs/scope; no water.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 1.1 | `ValveDriver` — latching pulse open/close, never-both-high invariant | 5 | [x] [#9](https://github.com/mobiustripper42/tinkle/issues/9) · §5 · *valve scheme superseded by 1.7 (DEC-011); never-both-high invariant still holds* |
+| 1.1 | `ValveDriver` — latching pulse open/close, never-both-high invariant | 5 | [x] [#9](https://github.com/mobiustripper42/tinkle/issues/9) · §5 · *valve scheme superseded by 1.7 (DEC-011/012/013) — on/off FETs, no H-bridge, no never-both-high* |
 | 1.2 | `ValveDriver` — diverter travel, master FET, pump relay, safe state | 3 | [x] [#10](https://github.com/mobiustripper42/tinkle/issues/10) · §5 |
 | 1.3 | `RunController` state machine (IDLE→…→SETTLE, fault unwind) | 8 | [x] [#11](https://github.com/mobiustripper42/tinkle/issues/11) · §4; src/core, fake clock/GPIO |
 | 1.4 | Non-blocking cooperative loop scaffold (tick ≤10ms, per-actuator timers) | 3 | [x] [#12](https://github.com/mobiustripper42/tinkle/issues/12) · §2 |
@@ -71,15 +71,17 @@ The safety-critical heart. Bench-testable on LEDs/scope; no water.
 
 **Deferred design item:** [#23](https://github.com/mobiustripper42/tinkle/issues/23) — 3-zone button model (each button runs its own zone, any-button-cancels, long-press fault-clear; DEC-006). Needs @architect + resolve **before** Phase 2 Persistence locks an NVS schema around zone count.
 
-**Reopened by DEC-011 (v1.3 ball-valve change) — not in the original Phase 1 total, needs a GitHub issue:**
+**Reopened by the v1.4 valve re-architecture (DEC-011/012/013) — not in the original Phase 1 total; needs GitHub issues:**
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 1.7 | `ValveDriver` pulse→travel rework — rename `pulseOpen`/`pulseClose`→`driveOpen`/`driveClose`, `PULSE_MS`/`pulseMs`→`ZONE_TRAVEL_MS`/`zoneTravelMs` (default ~6000ms, bench-confirm), update comments + `pins.h` notes + native tests | 3 | [ ] · §5; DEC-011 |
+| 1.7 | `ValveDriver` + `RunController` + `pins.h` to the on/off model — one FET per valve (no H-bridge, no `IN1/IN2`, no never-both-high), **master removed**, diverter = two leg FETs, `pulseOpen/Close`→`openZone/closeZone` + `setDiverter(fertigate)`, drop `MASTER_FET`/`div_pos` cache, `ZONE_TRAVEL_MS`≈10s, re-map pins, update native tests | 8 | [ ] · §3/§4/§5; DEC-011/012/013 |
+| 3.x | Flow-fault manual override (DEC-015) — settings flag + `/api/settings` + SPA banner; `FlowMonitor` honors it | 3 | [ ] · §7/§10; lands with Phase 3/4 |
+| 5.x | Auto-return self-test (DEC-014) — periodic valve-rests-closed check; flags a stuck/degraded valve | 3 | [ ] · §14; correctness, not a safety barrier |
 
-Scope note: zones are now motorized ball valves driven full-travel (~5–15s), not a 75ms latching pulse. The mechanism (drive bridge for a window, then coast) and the run sequence are **already correct** — `RunController` advances OPEN_ZONE→START_PUMP only once the zone is no longer busy (§4), so this is a rename + a raised constant + comment/test cleanup, not a state-machine redesign. The hardware/firmware specs already describe the target; this task lands it in `src/core` + `src/esp32`. Docs-only pass deferred the code per Eric's call.
+Scope note: v1.4 sourcing settled on a 2-wire **auto-return on/off** valve (not the reverse-polarity hold-position part v1.3 assumed), so 1.7 is a real `ValveDriver` re-architecture, not the rename it was first scoped as (3→8). The §4 run sequence already gates on `zoneBusy()`, so the `RunController` seam mostly survives; the driver + pin map underneath change, and the master open/close states drop. The hardware / firmware / wiring specs + DECISIONS already describe the target; this lands it in `src/core` + `src/esp32`. Docs-only pass per Eric's call.
 
-**Ejection point:** A simulated/bench run sequences master→zone→pump and unwinds
+**Ejection point:** A simulated/bench run sequences zone→pump and unwinds
 to safe state, driven by a button, with a live countdown.
 
 ---
@@ -141,7 +143,7 @@ Parts-gated (Winter 2026–27). Does not block Phases 1–5.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 6.1 | Breadboard bring-up — real ESP32 + ATtiny + DRV8871, LED/pulse stand-ins | 5 | |
+| 6.1 | Breadboard bring-up — real ESP32 + ATtiny + IRLZ44N valve FETs, LED/pulse stand-ins | 5 | |
 | 6.2 | Confirm `ZONE_TRAVEL_MS` / `DIVERTER_TRAVEL_MS` against real parts | 3 | §15 |
 | 6.3 | Calibrate flow K empirically (bucket test) | 3 | §7 |
 | 6.4 | Wet confirm — full water run, all faults, fail-dry chain | 5 | §17 |

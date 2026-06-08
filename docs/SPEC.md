@@ -31,8 +31,8 @@ scope guardrail.
 - **Watchdog:** ATtiny85 (separate binary) — independent hardware fail-dry backstop.
 - **UI:** vanilla HTML/CSS/JS SPA, gzipped into flash, served by ESPAsyncWebServer.
 - **Persistence:** NVS / Preferences.
-- **Power:** fixed AC→24V supply (Mean Well LRS-150-24 candidate) with 12/5/3.3V
-  bucks. Solar optional/future on the same rail.
+- **Power:** fixed AC→24V supply (Mean Well LRS-150-24) — valves + pump on 24V, with
+  5/3.3V bucks for sensor + logic. Pump on the watchdog-armed 24V (the fail-dry source gate).
 - **Dev/test tiers:** native unit tests (host) → Wokwi sim → breadboard bench
   (LED/pulse stand-ins) → wet hardware (final gate). See DEC-004.
 
@@ -52,7 +52,7 @@ Repo, seeds workflow, PlatformIO skeleton (esp32/attiny85/native), `pins.h` from
 the wiring doc, native test harness + Wokwi sim config, docs.
 
 ### Phase 1 — Actuation core
-`ValveDriver` (motorized-valve travel for zones + diverter, master FET, pump relay, safe state),
+`ValveDriver` (on/off FET per valve — zones + two diverter legs, no master, pump relay, safe state),
 `RunController` state machine (§4), non-blocking loop, buttons, TM1637 display.
 
 ### Phase 2 — Persistence + Scheduler + Clock

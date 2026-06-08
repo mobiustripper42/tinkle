@@ -120,7 +120,7 @@ duration}) resolves with no ambiguity — in FAULT only the long-press acts.
 the *surface* for an accidental hold but not its *probability* (a 3 s hold is
 deliberate), and §14's re-fault-on-next-run makes a premature clear harmless. The button
 only *requests* a guarded state transition — it can never command water — so the
-fail-dry chain (sw ceiling → ATtiny → NC master) is untouched. The web `/api/fault/clear`
+fail-dry chain (sw ceiling → ATtiny → pump-power gate, DEC-012) is untouched. The web `/api/fault/clear`
 (§10) stays as the parallel path; the button preserves local autonomy at the enclosure.
 **Status:** Implemented Phase 1.7 (#23). The "unresolved-hold visible no-op" feedback
 branch is **gated on the FaultManager resolved-condition signal (Phase 3/5)** — until

@@ -59,13 +59,15 @@ path, target tick ≤ 10 ms. Long actions (valve travel, run durations) time aga
 allowed to command `ValveDriver` actuators** — every actuation flows through one
 auditable sequence (§4).
 
-**Two-key fail-dry chain:**
-- **ESP32** *commands* each actuator (drives the master FET, drives the zone ball
-  valves for travel, enables the pump, sets the diverter).
+**Two-key fail-dry chain (source control, no master — DEC-012):**
+- **ESP32** *commands* each actuator (energizes the zone + diverter-leg FETs, enables
+  the pump). There is no master valve.
 - **ATtiny85** *arms* the safety relay (NO, energize-to-pass) that feeds 24V to the
-  master and pump. It commands nothing — it can only gate power.
-- Water moves only when **both keys agree**. Lose either — power, heartbeat, the NC
-  master's coil drive — and the master springs closed. See DEC-003.
+  **pump** (the water source), armed only during a run. It commands nothing — it can
+  only gate the pump's power.
+- Water moves only when **both keys agree**. Lose either — power, heartbeat, the relay
+  — and the pump de-powers → no source → no water, whatever the valves do. The valves
+  rest closed (NC) as a convenience, not a safety barrier. See DEC-003/DEC-012.
 
 Source layout: `src/esp32` (firmware), `src/attiny` (watchdog), `src/core`
 (platform-independent logic, host-testable), `web/` (SPA source), `test/` (native).
@@ -92,12 +94,14 @@ Code) runs the firmware in simulation without hardware (Phase 0.7).
   diverter travel never blocks a zone's travel.
 - **`pins.h` is the single pin source**, mirroring `docs/tinkle_wiring.html`. The
   wiring doc wins on pins; this doc wins on behavior.
-- **`ValveDriver` invariant:** never both H-bridge inputs HIGH. Assert/guard it.
-  Motorized ball valves hold position with zero current between moves (both inputs LOW = coast).
+- **`ValveDriver` is on/off — one FET per valve** (no H-bridges, no never-both-high). The
+  safe/rest level is LOW (off): NC zones closed, NC fert-leg closed, NO bypass open (plain),
+  pump off. Energize to actuate; an NC valve cap-returns closed on de-energize.
 - **`RunController` is the sole actuator commander.** Everything else requests runs
   through it.
 - **Fail dry on every fault and on power loss.** Entering any fault commands the
-  safe state (pump off → zones closed → master closed) and latches.
+  safe state (pump off → all valve FETs de-energized) and latches. The pump-power gate
+  (not a valve) is what makes it dry.
 - **Platform-independent logic lives in `src/core`** so it compiles for both the
   ESP32 and the native test runner. ESP32-only code stays in `src/esp32`.
 - **Constants in one place; bench-confirm the physical ones** (`ZONE_TRAVEL_MS`,
@@ -112,7 +116,7 @@ Code) runs the firmware in simulation without hardware (Phase 0.7).
   GPIO** and injected faults. `pio test -e native`.
 - **Sim (Wokwi):** full-firmware integration — virtual GPIO, TM1637, buttons, an
   injectable flow-pulse source.
-- **Bench:** breadboard, LEDs standing in for valves/master/pump, a square-wave
+- **Bench:** breadboard, LEDs standing in for valves/pump, a square-wave
   source faking the flow sensor. Runs the firmware spec **§17 acceptance checklist**.
 - **Wet confirm:** real parts, real water — the final gate (Phase 6).
 
