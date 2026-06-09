@@ -238,10 +238,9 @@ static void test_millis_rollover() {
 }
 
 // ----------------------------------------------------------------------------
-// RunController (firmware spec §4). Same FakeGpio (so the never-both-high
-// invariant is policed across whole runs), a real ValveDriver, and an explicit
-// clock. Faults are injected via raiseFault(), matching how FlowMonitor/Watchdog
-// will notify it later.
+// RunController (firmware spec §4). The same FakeGpio (so FET levels are observable
+// across whole runs), a real ValveDriver, and an explicit clock. Faults are injected
+// via raiseFault(), matching how FlowMonitor/Watchdog will notify it later.
 // ----------------------------------------------------------------------------
 
 using tinkle::Fault;
@@ -363,7 +362,7 @@ static void test_rc_first_plain_run_skips_diverter() {
     TEST_ASSERT_FALSE(vd.diverterFert());
 }
 
-// Graceful stop() mid-run unwinds to IDLE with pump+master off; logged Stopped.
+// Graceful stop() mid-run unwinds to IDLE with the pump off; logged Stopped.
 static void test_rc_stop_unwinds() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
@@ -488,8 +487,8 @@ static void test_rc_watchdog_pre_open_gate() {
     (void)now;
 }
 
-// A fault landing while the diverter is mid-travel (before the master ever opens)
-// still slams the safe state, never opens the master, and holds the invariant.
+// A fault landing while the diverter is mid-travel (before the zone ever energizes)
+// still slams the safe state and never starts the pump.
 static void test_rc_fault_during_prep() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
@@ -507,7 +506,7 @@ static void test_rc_fault_during_prep() {
 }
 
 // stop() during PREP_DIVERTER unwinds to IDLE while the diverter coasts in the
-// background — no both-high, pump+master safe.
+// background — pump + valves safe.
 static void test_rc_stop_during_prep() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
