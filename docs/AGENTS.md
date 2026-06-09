@@ -73,11 +73,10 @@ Several agents and slash-command skills support the development workflow. All ru
 
 **Purpose:** Cross-references factual claims across the project's doc set and flags mismatches and unfilled template placeholders. Report-only.
 
-**When to invoke:**
+**When to invoke:** ad-hoc only — there is no scheduled or phase-boundary trigger. Reach for it when the docs *feel* like they've drifted apart, or after a session that churned several docs at once. It is not a ritual; don't run it on a calendar.
 - Mid-project, anytime the docs feel like they've drifted apart
-- Before a phase boundary (clean-state check)
 - After a session that touched multiple docs at once
-- Via `/doc-consistency-check` (the manual surface)
+- Via `/doc-consistency-check` (the only surface)
 
 **Spec:** `.claude/agents/doc-consistency.md`
 
@@ -197,7 +196,7 @@ Slash commands manage session lifecycle. Time tracking is automatic.
 | @code-review | Sonnet | After commits, optional | Catch issues early |
 | @pm | Sonnet | Start/end of sessions | Track progress, flag risks |
 | @ui-reviewer | Sonnet | After UI work, phase boundaries | Design quality |
-| @doc-consistency | Sonnet | Via `/doc-consistency-check`, mid-project, before phase boundaries | Cross-reference facts across docs; flag mismatches + placeholders. Report-only |
+| @doc-consistency | Sonnet | Via `/doc-consistency-check`, ad-hoc when docs feel drifted | Cross-reference facts across docs; flag mismatches + placeholders. Report-only |
 | /its-alive | — | Session start | Timestamp + open session file + briefing |
 | /pause-this | — | Mid-session break | Safe pause with commit |
 | /restart-this | — | Resume from pause | Reload context |
@@ -207,7 +206,7 @@ Slash commands manage session lifecycle. Time tracking is automatic.
 | /retro | — | Phase boundary (end) | Close out phase, write retro, bump minor version |
 | /bump-major | — | Breaking change | Manual major version bump |
 | /promote-production | — | Ship trunk to prod | ff-merge `main` → `production` (deploy-only), push |
-| /doc-consistency-check | — | Mid-project, before phase boundaries | Invokes @doc-consistency; cross-refs `docs/*.md` + root `CLAUDE.md` |
+| /doc-consistency-check | — | Ad-hoc, when docs feel drifted | Invokes @doc-consistency; cross-refs `docs/*.md` + root `CLAUDE.md` |
 | /push-seeds | — | After workflow improvements | Backport project-side improvements to seeds templates |
 | /pull-seeds | — | After seeds gets new improvements | Pull template changes into this project |
 | /read-the-tape | — | After a session worth learning from | Audit session JSONL for anti-patterns |

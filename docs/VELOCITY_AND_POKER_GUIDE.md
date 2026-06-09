@@ -8,44 +8,37 @@ A lightweight solo-dev process for tracking effort, estimating work, and knowing
 
 ### What it measures
 
-**Velocity = hours per effort point (hrs/pt).** Lower is faster. Track it per session, watch the trend.
+**Velocity = active hours per effort point (active h/pt).** Active time is wall-clock minus idle: `active = wall_clock - breaks`. Lower is faster. It's the time you were actually at the keyboard on the work — and it's the only velocity number you forecast on.
 
-### The workflow
+### Where it comes from — you don't log anything
 
-**During a CC session:**
-1. Note your start time (or let session-log.md track it)
-2. Work on one or more tasks
-3. At session end, record: date, phase, tasks completed, total effort points, actual hours
+There is no tracker to maintain and no "log your hours" step. The numbers are extracted after the fact from data you keep anyway:
 
-**After the session:**
-- @pm updates PROJECT_PLAN.md velocity table (source of truth)
-- Open the velocity tracker artifact in Claude → click "+ log session" → enter the numbers
-- Or just tell Claude: "log session: Phase 1, Xola client, 3 pts, 1.25 hrs"
+- Each session file records `started` and `ended` (stamped by `/its-alive` and `/its-dead`) plus the path to its transcript.
+- `/retro` does the math at phase close: `wall_clock = ended - started`; `breaks` = idle gaps > 15 min inferred from the transcript; `active = wall_clock - breaks`; `active / points` = the velocity.
+- Results land in two places: **`docs/RETROSPECTIVES.md`** (the source of truth — one block per phase, carrying the raw active hours + points so the number is always recomputable) and the **velocity table at the top of `docs/PROJECT_PLAN.md`** (an at-a-glance mirror).
 
-### What the tracker shows you
+If a number ever feels off, it's recomputable from `started`/`ended` + the transcript. Nothing depends on you remembering to write hours down — that's the whole point. The moment velocity becomes a logging chore it gets abandoned; here it's a read, not a chore.
 
-| Metric | What it means |
-|--------|---------------|
-| **Logged** | Total points and hours completed |
-| **Remaining** | Points left across all phases |
-| **Lifetime Velocity** | Your average hrs/pt across all sessions |
-| **Recent Velocity** | Your avg over the last 5 sessions (more responsive to current pace) |
-| **Projected** | Hours remaining at recent velocity (your realistic forecast) |
-| **Phase Progress** | Bar chart showing completion per phase |
+### Your overall number, and across projects
+
+For one phase, read RETROSPECTIVES.md. For your lifetime number — or a combined number across several repos — run the **velocity extractor** (`dev/claude/scripts/velocity.py`): it reads points off closed issues + active hours out of each repo's retros and prints lifetime active h/pt, a per-phase breakdown, and how much your per-session pace scatters.
+
+**Do not average the per-phase h/pt numbers.** Correct overall velocity is `Σ active-hours ÷ Σ points`, not the mean of each phase's ratio — averaging ratios silently overweights small phases. The extractor sums them properly. Grep for a quick eyeball; run the extractor for the real number.
 
 ### Reading the numbers
 
-- **Lifetime velocity** is your stable baseline. Use it for long-range planning.
-- **Recent velocity** catches changes — are you speeding up (learning the codebase) or slowing down (hitting complexity)?
-- If recent is significantly higher than lifetime, you might be in a harder phase — normal for polish/integration work.
-- If projected hours exceed your available hours before deadline, it's time to cut scope. The tracker doesn't lie.
+- **`active / point` is the forecast number.** That's it. `wall_clock` is kept as raw bookkeeping (it includes overnight gaps and idle), but `wall / point` is *not* a velocity — don't quote it as one.
+- **Ignore `Dev` / `Review` columns in older retros.** They came from a retired per-PR split that mis-attributed time on multi-PR sessions (it once reported more "review" hours than the session was even long). The `Active` figure in those same retros was always the real headline.
+- **Velocity is project-shape-specific.** A Supabase CRUD app and an agent pipeline have very different active h/pt. Don't forecast one from the other's history.
+- **Use the ramp, not your best-ever.** Early phases on a new project run high (dialing in the workflow) and settle later; a new project starts at the high end again, so quote the early band, not your record phase. (Phases predating the active-time model carry only a legacy `Velocity: X hrs/pt` — a different, older metric; don't blend it with active h/pt.)
 
 ### Rules of thumb
 
-- Log every session, even short ones (0.25 hrs counts)
-- Don't fudge hours to look good — the point is accurate forecasting, not performance review
-- Re-estimate tasks that turn out to be bigger than expected — update PROJECT_PLAN.md, note the change
-- Velocity stabilizes after ~10 sessions. Before that, take projections with a grain of salt.
+- **It only works if your pointing is consistent.** Velocity is a conversion factor between your estimate and clock time; if you point the same task a 3 on Tuesday and an 8 on Friday, velocity is measuring estimation noise, not speed. Consistent-but-biased pointing is fine — the bias is in both the history and the forecast, so it cancels. Random pointing is not. The extractor's per-session h/pt spread is the test: tight = your pointing holds; scattered = it doesn't.
+- **Don't fudge.** The point is accurate forecasting, not looking fast.
+- **Re-estimate when surprised** — if a 3 turns into an 8, update the plan. That's data, not failure.
+- **Velocity stabilizes after ~10 sessions.** Before that, take projections with a grain of salt.
 
 ---
 
@@ -104,31 +97,18 @@ Claude: "Agreed — 8. I'll note the merge complexity in the task description."
 
 ## Part 3: Putting It Together
 
-### Weekly rhythm (when actively building)
+### Rhythm
 
-**Monday (or first session of the week):**
-- Open velocity tracker — check projected hours remaining
-- Check PROJECT_PLAN.md — what phase are you in, what's next?
-- If starting a new phase, do estimation poker on its tasks
+**Per session:** run `/its-alive` at the start and `/its-dead` at the end. That's the entire time-tracking obligation — those two stamps plus the transcript are everything `/retro` needs. No timer, no logging.
 
-**Each session:**
-- Start timer (or note the time)
-- Work
-- Log session to tracker + PROJECT_PLAN.md
+**Per phase boundary:** run `/retro`. It computes the per-session and phase active h/pt, writes RETROSPECTIVES.md, and updates the PROJECT_PLAN.md velocity table. If you're starting a new phase, do estimation poker (Part 2) on its tasks.
 
-**End of week (or end of phase):**
-- Review velocity trend — speeding up or slowing down?
-- If behind projection, identify what to cut (PROJECT_PLAN.md has a cuttable tasks list)
-- If ahead, resist the urge to add scope. Ship early.
+**When you want the big picture:** run the velocity extractor (Part 1) for your lifetime or cross-repo number. Check it against your remaining points — if projected active hours exceed the time you've got before a deadline, cut scope (PROJECT_PLAN.md has a cuttable-tasks list). The number doesn't lie.
 
 ### Cross-project tracking
 
-If running multiple projects (Sailbook V2 + BrewBoat):
-- Each project has its own tab in the velocity tracker
-- Each project has its own PROJECT_PLAN.md in its repo
-- At the end of a session, update whichever project you worked on
-- Velocity is per-project — don't mix them. A Supabase CRUD app and an AI agent pipeline have very different hrs/pt profiles.
+Each project keeps its own RETROSPECTIVES.md and PROJECT_PLAN.md velocity table. Velocity is per-project and per-shape — don't average a CRUD app against an agent pipeline. When you want a combined view, the extractor takes multiple repo paths and reports each repo plus the properly-summed total (`Σ active ÷ Σ points`).
 
 ### The one thing that matters
 
-**Log your sessions honestly.** Everything else — the projections, the poker, the phase progress bars — is downstream of accurate data. Fifteen seconds of logging after each session gives you a forecasting system that actually works.
+**Point consistently and run the two stamps.** Everything downstream — the per-phase velocity, the forecasts, the cross-repo rollup — is recomputed from `started`/`ended` + the transcript, so there's nothing to log and nothing to forget. The only input that can quietly poison the number is inconsistent pointing, because velocity can't tell "I got slower" from "I pointed it lower." Keep your pointing honest and the system does the rest.
