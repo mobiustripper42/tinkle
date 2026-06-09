@@ -180,7 +180,7 @@ store with its own keys, deliberately not pre-carved here.
 gains runtime config (Phase 4).
 **Update (DEC-011/013):** the two-2-way diverter has **no hold-position to cache** — fert state
 is set per-run by energizing the correct leg (legs rest by their NO/NC type). The `div_pos` key
-and the `assumeDiverter()` boot-seed are removed in the task 1.7 rework; the per-zone duration +
+and the `assumeDiverter()` boot-seed were removed in the task 1.8 rework; the per-zone duration +
 `swMaxRuntimeSec` keys are unaffected.
 
 ---
@@ -271,13 +271,13 @@ the valves' resting states are a convenience, not the safety mechanism.
 resistor + gate-to-GND pulldown (boot-off), and a **TVS (SMAJ30A) drain-to-source per FET** —
 the valves have an internal bridge rectifier, so a freewheel diode won't clamp; clamp the FET.
 Valves on **raw 24 V**; button LED rings are 24 V (12 V buck dropped).
-**Firmware impact (tracked, not done — re-scoped task 1.7):** `ValveDriver` still ships the
-H-bridge/latching-pulse API (`pulseOpen`/`pulseClose`, IN1/IN2 pairs, `PULSE_MS`). The rework is
-now a real re-architecture — on/off channels with per-valve travel timers (`driveOpen`/
-`driveClose` = set/clear a FET), `ZONE_TRAVEL_MS` ≈ 10 s, drop the never-both-high invariant,
-`pins.h` re-map (1 pin/valve, master pin removed), and the native tests. The run state machine
-already gates on `zoneBusy()`, so the sequencing seam survives; the driver underneath changes.
-~5–8 pts (was a 3-pt rename). Travel time is a bench-confirmed seed (DEC-004).
+**Firmware impact (done — task 1.8):** `ValveDriver` and `pins.h` are now the on/off model —
+`openZone`/`closeZone` set/clear one low-side FET per valve, per-valve travel timers
+(`ZONE_TRAVEL_MS`/`DIVERTER_TRAVEL_MS` = 10 s seeds), the never-both-high invariant and the
+`MASTER_FET` are gone, the diverter is two leg FETs, and the native tests were rewritten. The
+run state machine kept its `zoneBusy()`/`diverterBusy()` gates; only the master open/close
+states dropped. 8 pts (was first scoped as a 3-pt rename). Travel time is a bench-confirmed
+seed (DEC-004 / §15).
 
 ## DEC-012: No master valve — fail-dry by source control
 **Decision:** V1 has **no master valve**. The fail-dry barrier is **source control**: the pump

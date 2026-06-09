@@ -7,12 +7,18 @@
 // the ESP32 firmware and the native host test runner. It touches no Arduino API
 // directly — all pin I/O goes through an injected IGpio. The ESP32 build wraps
 // digitalWrite/pinMode (src/esp32/arduino_gpio.h); the host test runner records
-// writes and polices the never-both-high invariant.
+// writes.
 //
-// Drives latching zone valves (pulse open/close, then coast), the motorized
-// Dosatron diverter (timed travel), the master FET, and the pump relay. Per §4,
-// RunController is the ONLY module allowed to command these — everything else
-// requests runs through it.
+// v1.4 model (DEC-011/012/013): every valve is a 2-wire on/off motorized ball
+// valve driven by a SINGLE low-side FET — one GPIO each. Energize the FET to
+// actuate (the valve travels ~6-10 s, self-cuts at its limit, then holds open
+// while energized); de-energize and a capacitor auto-returns it to rest. There is
+// no master valve — the pump on the armed 24V is the source gate (DEC-012) — and
+// no H-bridge / never-both-high invariant. The Dosatron diverter is two 2-way legs
+// (a NO clean/bypass leg + a NC fert leg) driven together (DEC-013).
+//
+// Per §4, RunController is the ONLY module allowed to command these — everything
+// else requests runs through it.
 
 namespace tinkle {
 
@@ -23,67 +29,59 @@ struct IGpio {
     virtual ~IGpio() = default;
 };
 
-// One DRV8871 H-bridge driving a latching valve. IN1 = open, IN2 = close.
-// The never-both-high invariant is a property of how this pair is driven.
-struct Bridge { uint8_t in1; uint8_t in2; };
-
-// Static wiring + timing the driver needs. Built from pins.h on the ESP32,
-// from synthetic pins in tests. Sized for three tunnels (build-for-three).
+// Static wiring + timing the driver needs. Built from pins.h on the ESP32, from
+// synthetic pins in tests. Sized for three tunnels (build-for-three).
 struct ValveConfig {
     static constexpr uint8_t MAX_ZONES = 3;
 
-    Bridge   zones[MAX_ZONES] = {};
-    uint8_t  zoneCount        = 0;
-    Bridge   diverter         = {};   // in1 = THROUGH (fertigate), in2 = AROUND (plain)
-    uint8_t  masterFet        = 0;
-    uint8_t  pumpRelay        = 0;
+    uint8_t  zoneFet[MAX_ZONES] = {};   // one low-side FET per NC zone valve
+    uint8_t  zoneCount          = 0;
+    uint8_t  divCleanFet        = 0;    // NO bypass leg  (de-energized = open  = plain)
+    uint8_t  divFertFet         = 0;    // NC Dosatron leg (de-energized = closed)
+    uint8_t  pumpRelay          = 0;
 
-    uint16_t pulseMs          = 75;    // §15 PULSE_MS — bench-confirm against real parts
-    uint16_t diverterTravelMs = 6000;  // §15 DIVERTER_TRAVEL_MS — bench-confirm
+    // Travel windows (§15 — bench-confirm against real parts; datasheet 6-10 s). A
+    // 2-wire ball valve drives full travel; there is no 75 ms latch pulse anymore.
+    uint16_t zoneTravelMs     = 10000;  // §15 ZONE_TRAVEL_MS
+    uint16_t diverterTravelMs = 10000;  // §15 DIVERTER_TRAVEL_MS
 };
 
 class ValveDriver {
 public:
     ValveDriver(IGpio& gpio, const ValveConfig& cfg);
 
-    // Configure every pin as an output and force the safe levels: bridges coast,
-    // master closed, pump off. Call once at boot.
+    // Configure every FET pin as an output and force the safe/rest levels: all FETs
+    // off — NC zones closed, NC fert-leg closed, NO bypass open (plain), pump off.
+    // Call once at boot.
     void begin();
 
-    // Latching zone valves. Start a pulse now; tick() releases to coast after
-    // pulseMs. Out-of-range zone is a no-op. Re-issuing before the pulse expires
-    // re-drives the bridge and restarts the timer (one pulse per intent — the
-    // caller, RunController, owns de-duplication).
-    void pulseOpen(uint8_t zone, uint32_t nowMs);
-    void pulseClose(uint8_t zone, uint32_t nowMs);
+    // Zone valves (NC). openZone energizes the FET — the valve drives open and holds
+    // open while energized; closeZone de-energizes — the capacitor auto-return drives
+    // it closed. Either transition takes ~zoneTravelMs; zoneBusy() gates the §4
+    // sequence until then. Out-of-range zone is a no-op.
+    void openZone(uint8_t zone, uint32_t nowMs);
+    void closeZone(uint8_t zone, uint32_t nowMs);
 
-    // Motorized diverter. through=true => fertigate (THROUGH). Drives for
-    // diverterTravelMs, then coasts; the valve self-stops at its limit. The
-    // commanded position is cached in memory here; persisting it to NVS is
-    // Persistence's job (§8).
-    void setDiverter(bool through, uint32_t nowMs);
+    // Diverter — two legs driven together (DEC-013). fertigate => both leg FETs HIGH
+    // (NC fert-leg opens, NO bypass closes); !fertigate => both LOW (rest: bypass
+    // open, fert-leg closed). Holds diverterTravelMs busy. No NVS cache — the rest
+    // state is defined by the NO/NC valve types, so the boot/rest position is known
+    // to be plain (fertigate=false).
+    void setDiverter(bool fertigate, uint32_t nowMs);
 
-    // Seed the cached diverter position WITHOUT driving the motor — for restoring the
-    // last-known position from NVS at boot (§8). A motorized ball valve holds its position
-    // mechanically with no power, so the cache is physically true across a clean reboot;
-    // trusting it lets the first run skip the 6 s travel when the position already matches.
-    // (A wrong cache only mis-routes one run; the master FET, not the diverter, gates water
-    // — so this never holds water on.) No-op on the actuator pins.
-    void assumeDiverter(bool through) { diverterThrough_ = through; diverterKnown_ = true; }
-
-    // Master FET + pump relay — immediate level sets, no travel window.
-    void masterOpen();
-    void masterClose();
+    // Pump relay (the source gate, DEC-012) — immediate level set, no travel window.
     void pumpOn();
     void pumpOff();
 
-    // Safe state (§5/§14): pump off -> zones close-pulsed -> master closed.
-    // Diverter is left as-is. Commanded immediately; the close pulses complete
-    // over pulseMs via tick().
+    // Safe state (§5/§14): pump off first, then de-energize every valve FET — zones
+    // cap-close, the diverter returns to plain. Commanded immediately (no travel
+    // gating: the caller either latches FAULT or boots to IDLE). The fail-dry barrier
+    // is pump-off (the source), not the valves.
     void safeState(uint32_t nowMs);
 
-    // Cooperative, non-blocking. Call every loop tick; releases expired pulses
-    // and the diverter travel window. Never blocks.
+    // Cooperative, non-blocking. Call every loop tick; clears expired travel timers.
+    // The FET levels themselves HOLD — an open valve stays energized; tick() only
+    // releases the busy flag once travel completes. Never blocks.
     void tick(uint32_t nowMs);
 
     // Introspection for status/display/tests.
@@ -91,27 +89,18 @@ public:
     bool zoneBusy(uint8_t zone) const;
     bool diverterBusy() const;
     bool busy() const;                            // any actuator mid-travel
-    bool masterIsOpen()    const { return masterOpen_; }
     bool pumpIsOn()        const { return pumpOn_; }
-    bool diverterThrough() const { return diverterThrough_; }
-    bool diverterKnown()   const { return diverterKnown_; }
+    bool diverterFert()    const { return diverterFert_; }   // commanded leg state
 
 private:
-    // Both-high is unrepresentable: a bridge is only ever Coast, Open, or Close.
-    enum class Cmd : uint8_t { Coast, Open, Close };
-
     struct Timer { bool active; uint32_t startMs; uint16_t durMs; };
-
-    void applyBridge(const Bridge& b, Cmd cmd);   // writes LOW side first => no transient both-high
 
     IGpio&      g_;
     ValveConfig cfg_;
     Timer       zoneTimer_[ValveConfig::MAX_ZONES] = {};
-    Timer       divTimer_       = {};
-    bool        masterOpen_     = false;
-    bool        pumpOn_         = false;
-    bool        diverterThrough_ = false;   // commanded position (cache to NVS in Persistence)
-    bool        diverterKnown_  = false;
+    Timer       divTimer_     = {};
+    bool        pumpOn_       = false;
+    bool        diverterFert_ = false;   // commanded: false = plain (boot/rest state)
 };
 
 } // namespace tinkle
