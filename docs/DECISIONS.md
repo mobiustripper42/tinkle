@@ -341,3 +341,18 @@ bounded, never a runaway (consistent with firmware spec §10.1: the SPA has no r
 While active, every screen shows a persistent "⚠ FLOW CHECK DISABLED" banner + a status flag + a
 fault-log entry. V1 = single toggle (mute both); granular (keep the leak detector always on) is a
 later refinement.
+
+## DEC-016: Phase 5 (watchdog) runs before Phase 4 (web)
+**Decision:** Implement the watchdog/fail-dry chain (5.1–5.3) before the web API + SPA. Batches:
+**Unit B** = 5.1+5.2+5.3-software as one PR (~16 pts) — both sides of the heartbeat contract, with
+the ATtiny trip logic as a platform-independent unit compiled into both the `attiny85` and `native`
+envs so host tests exercise both halves against the same §15 constants; the DEC-014 self-test ships
+as a separate follow-on PR (~3 pts), not bundled. **Unit C** = 4.1+4.2+DEC-015 (web API layer);
+**Unit D** = 4.3+4.4 (SPA + gzip pipeline). Task 5.4 (§17 bench pass) stays parts-gated.
+**Why:** Phase 5 is the critical path (PROJECT_PLAN: fail-dry proven on the bench before any wet
+run); FaultManager (5.3) shapes the fault surface `/api/status`, `/api/fault/clear`, and the SPA
+Faults screen consume (firmware spec §10/§10.1, DEC-006's resolved-condition gate), so
+watchdog-first is strictly less rework. Bench work needs no UI — buttons + TM1637 suffice
+(DEC-006).
+**Tradeoff:** The phone UI arrives last among software phases; acceptable because wet validation
+(the only consumer that *needs* it) is parts-gated to Winter 2026–27.
