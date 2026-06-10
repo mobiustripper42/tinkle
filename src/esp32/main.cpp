@@ -10,6 +10,7 @@
 #include "../core/clock.h"
 #include "../core/scheduler.h"
 #include "../core/flow_monitor.h"
+#include "../core/flow_fault_detector.h"
 #include "display_tm1637.h"
 #include "preferences_store.h"
 #include "system_clock.h"
@@ -75,6 +76,12 @@ static Scheduler         scheduler(runController, wallClock);
 static FlowSensor        flowSensor;
 static FlowMonitor       flowMonitor(Persistence::DEFAULT_PULSES_PER_GALLON);
 
+// Flow fault detection (§7/§14 / #35). Reads FlowMonitor's rate + the cumulative pulse
+// count against the run state and pushes FAULT_NO_FLOW / FAULT_UNEXPECTED_FLOW through
+// RunController::raiseFault (the sole commander), which slams the safe state and latches.
+static const FlowFaultDetector::Config flowFaultCfg;   // §15 seeds
+static FlowFaultDetector flowFault(flowFaultCfg);
+
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
 // loop(); the panel module only produces clean debounced edges.
@@ -136,6 +143,7 @@ void setup() {
     flowSensor.begin();
     flowMonitor.setK(persistence.pulsesPerGallon());
     flowMonitor.begin(flowSensor.pulses(), millis());
+    flowFault.begin(flowSensor.pulses(), millis());   // seed the idle window past boot
 
     buttons.begin();              // configure the panel pins as inputs (§11)
     display.begin();              // TM1637 init + clear (§12)
@@ -202,6 +210,14 @@ void loop() {
         Serial.printf("[tinkle] run flow: %.2f gal @ %.2f GPM\n",
                       flowMonitor.gallons(), flowMonitor.rateGPM());
     prevRunState = runState;
+
+    // Flow faults (§7/§14 / #35): no-flow during RUNNING (post-grace) / unexpected flow
+    // during IDLE. The detector reads the post-tick rate + cumulative count against the
+    // run state and returns the fault to raise; raiseFault is the sole actuator commander
+    // and no-ops once latched, so calling it every tick is safe.
+    const Fault flowVerdict = flowFault.update(runState, flowMonitor.rateGPM(),
+                                               flowSensor.pulses(), now);
+    if (flowVerdict != Fault::None) runController.raiseFault(flowVerdict, now);
 
     // §12 panel. Render the frame from controller state; the shim pushes to the
     // TM1637 only when it changes (bit-bang cost vs the tick budget). The idle clock

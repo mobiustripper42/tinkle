@@ -12,6 +12,7 @@
 #include "clock.h"
 #include "scheduler.h"
 #include "flow_monitor.h"
+#include "flow_fault_detector.h"
 
 // Native unit tests for ValveDriver (firmware spec §5, v1.4). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -1329,6 +1330,114 @@ void test_flow_full_ring_steady_rate() {
     TEST_ASSERT_FLOAT_WITHIN(1.0f, 60.0f, fm.rateGPM());
 }
 
+// --- FlowFaultDetector (firmware spec §7/§14 / #35) ------------------------------
+using tinkle::FlowFaultDetector;
+
+namespace {
+FlowFaultDetector::Config ffCfg() {
+    FlowFaultDetector::Config c;
+    c.graceMs        = 2000;     // short windows so the tests run fast
+    c.minRunningGPM  = 0.1f;
+    c.idleFaultPulses = 50;
+    c.idleWindowMs   = 1000;
+    return c;
+}
+} // namespace
+
+// No-flow arms only AFTER the grace window, and only while RUNNING at ~0 GPM.
+void test_ff_no_flow_after_grace() {
+    FlowFaultDetector d(ffCfg());
+    TEST_ASSERT_EQUAL(Fault::None,   d.update(RunState::Running, 0.0f, 0, 0));      // run start
+    TEST_ASSERT_EQUAL(Fault::None,   d.update(RunState::Running, 0.0f, 0, 1999));   // pre-grace
+    TEST_ASSERT_EQUAL(Fault::NoFlow, d.update(RunState::Running, 0.0f, 0, 2000));   // grace elapsed
+}
+
+// Healthy flow during RUNNING never trips, even well past the grace window.
+void test_ff_no_flow_healthy_rate() {
+    FlowFaultDetector d(ffCfg());
+    d.update(RunState::Running, 5.0f, 0, 0);
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Running, 5.0f, 1000, 5000));
+}
+
+// Unexpected flow: pulses climbing past the threshold over an idle window -> fault.
+void test_ff_unexpected_idle_flow() {
+    FlowFaultDetector d(ffCfg());
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 100, 0));         // baseline 100
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 200, 500));       // window not up
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow,
+                      d.update(RunState::Idle, 0.0f, 200, 1000));                   // delta 100 > 50
+}
+
+// Sub-threshold idle drift never faults; the window slides so it can't accumulate across windows.
+void test_ff_idle_subthreshold_no_fault() {
+    FlowFaultDetector d(ffCfg());
+    d.update(RunState::Idle, 0.0f, 0, 0);                                           // baseline 0
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 10, 1000));       // +10 < 50, slide
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 20, 2000));       // +10 from slid base
+}
+
+// Transition states arm NEITHER check — flow legitimately ramps/trails there (S6 carry-forward).
+void test_ff_transition_states_never_fault() {
+    FlowFaultDetector d(ffCfg());
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::StartPump, 0.0f, 0, 99999));   // zero flow, late
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::StopPump,  0.0f, 0, 99999));
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::CloseZone, 0.0f, 9000, 99999));// high flow, fine
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Settle,    0.0f, 9000, 99999));
+}
+
+// The grace clock restarts on each RUNNING entry — a second run gets its own grace window.
+void test_ff_grace_resets_per_run() {
+    FlowFaultDetector d(ffCfg());
+    d.update(RunState::Running, 5.0f, 0, 0);
+    d.update(RunState::Running, 5.0f, 100, 3000);          // run 1, flowing
+    d.update(RunState::Idle,    0.0f, 100, 5000);          // back to idle
+    d.update(RunState::Running, 0.0f, 100, 10000);         // run 2 starts -> grace clock = 10000
+    TEST_ASSERT_EQUAL(Fault::None,   d.update(RunState::Running, 0.0f, 100, 11999)); // <2 s into run 2
+    TEST_ASSERT_EQUAL(Fault::NoFlow, d.update(RunState::Running, 0.0f, 100, 12000)); // grace elapsed
+}
+
+// begin() seeds the idle window past boot: a slow setup() (> idleWindowMs) with pulses
+// counted during it must NOT read as unexpected flow on the first tick.
+void test_ff_begin_seeds_boot_window() {
+    FlowFaultDetector d(ffCfg());
+    d.begin(500, 3000);                                                             // late boot, 500 pulses
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 500, 3000));      // first tick: no boot pseudo-window
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 500, 4000));      // quiet window from the seed
+}
+
+// Pulses accrued through the close sequence (trailing flow in StopPump/Settle) are excluded
+// from the first idle window by the Idle-edge re-baseline — no false UnexpectedFlow after a run.
+void test_ff_post_run_idle_rebaseline() {
+    FlowFaultDetector d(ffCfg());
+    d.update(RunState::Running,  5.0f, 1000, 0);
+    d.update(RunState::StopPump, 1.0f, 1200, 5000);                                 // flow trailing off
+    d.update(RunState::Settle,   0.2f, 1300, 5500);                                 // +300 since run > threshold
+    d.update(RunState::Idle,     0.0f, 1300, 6000);                                 // edge: re-baseline at 1300
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 1300, 7000));     // full window, flat -> clean
+}
+
+// End-to-end: a no-flow verdict routed to RunController slams the safe state and latches (§14).
+void test_ff_integration_no_flow_faults_rc() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    FlowFaultDetector d(ffCfg());
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 60; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+
+    Fault f = Fault::None;
+    for (uint32_t t = now; t <= now + 3000 && f == Fault::None; t += 100) {
+        f = d.update(rc.state(), 0.0f, 0, t);            // zero flow throughout
+        if (f != Fault::None) rc.raiseFault(f, t);
+    }
+    TEST_ASSERT_EQUAL(Fault::NoFlow, f);
+    TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
+    TEST_ASSERT_EQUAL(Fault::NoFlow, rc.activeFault());
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_FALSE(g.level[ZF0]);                     // safe state: zone de-energized
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -1412,5 +1521,15 @@ int main() {
     RUN_TEST(test_flow_single_sample_zero_rate);
     RUN_TEST(test_flow_subhz_ticks_update_gallons);
     RUN_TEST(test_flow_full_ring_steady_rate);
+
+    RUN_TEST(test_ff_no_flow_after_grace);
+    RUN_TEST(test_ff_no_flow_healthy_rate);
+    RUN_TEST(test_ff_unexpected_idle_flow);
+    RUN_TEST(test_ff_idle_subthreshold_no_fault);
+    RUN_TEST(test_ff_transition_states_never_fault);
+    RUN_TEST(test_ff_grace_resets_per_run);
+    RUN_TEST(test_ff_begin_seeds_boot_window);
+    RUN_TEST(test_ff_post_run_idle_rebaseline);
+    RUN_TEST(test_ff_integration_no_flow_faults_rc);
     return UNITY_END();
 }

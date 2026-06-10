@@ -154,7 +154,8 @@ The travel timers must be independent per actuator so a diverter travel doesn't 
 - **During IDLE**: if accumulated pulses exceed `IDLE_FLOW_FAULT_PULSES` over a window → `FAULT_UNEXPECTED_FLOW` (stuck-open valve, burst). On this fault, re-assert safe state immediately (pump off, valves de-energized) and latch.
 - All runs log measured gallons.
 - **Manual override (DEC-015):** a stored flag disables both flow faults (web UI). When set, `FlowMonitor` still measures and reports flow but never raises `FAULT_NO_FLOW` / `FAULT_UNEXPECTED_FLOW`, and enabling it clears any latched flow fault. Software-only — it cannot touch the watchdog or the pump-power source gate. Default off; a status flag + a persistent "⚠ FLOW CHECK DISABLED" UI banner show when it's active.
-- **Implemented (#34):** `FlowMonitor` (core) consumes a monotonic pulse count (ESP32 ISR + counter in `src/esp32/flow_sensor.h` via `attachInterruptArg`; injected in host tests). `gallons = (pulses − baseline)/K`; `rateGPM` from a ~1 Hz rolling ring that decays to 0 when flow stops (the signal #35's no-flow check keys on). K (`pulsesPerGallon`) loads from NVS via `Persistence` (float key, datasheet seed, overwritten by calibration #36). `main` re-baselines on the RUNNING edge and logs per-run gallons. The no-flow / unexpected-flow **faults** (#35) and the calibration state machine (#36) build on this.
+- **Implemented (#34):** `FlowMonitor` (core) consumes a monotonic pulse count (ESP32 ISR + counter in `src/esp32/flow_sensor.h` via `attachInterruptArg`; injected in host tests). `gallons = (pulses − baseline)/K`; `rateGPM` from a ~1 Hz rolling ring that decays to 0 when flow stops (the signal #35's no-flow check keys on). K (`pulsesPerGallon`) loads from NVS via `Persistence` (float key, datasheet seed, overwritten by calibration #36). `main` re-baselines on the RUNNING edge and logs per-run gallons. The calibration state machine (#36) builds on this.
+- **Implemented (#35):** `FlowFaultDetector` (core, `flow_fault_detector.{h,cpp}`) is the §7/§14 policy on top of `FlowMonitor`. Each tick `main` calls `update(runState, rateGPM, pulses, now)`; a non-`None` verdict is routed to `RunController::raiseFault` (the sole commander — the detector never actuates). The two checks are tied **explicitly** to run state, not the per-run tally edge: `FAULT_NO_FLOW` only during `RUNNING` after `graceMs` (`FLOW_GRACE_S`) at `rateGPM ≤ minRunningGPM`; `FAULT_UNEXPECTED_FLOW` only during `IDLE` when pulses over a tumbling `idleWindowMs` exceed `IDLE_FLOW_FAULT_PULSES`. Every transition state (Prep/Open/Start/Stop/Close/Settle) arms neither check, since flow legitimately ramps/trails there. Host-tested with injected pulse patterns + a fake clock (grace arming, no-flow trip, idle-flow trip, per-run grace reset, transition-state immunity, end-to-end raiseFault→safe-state). The manual override (DEC-015, above) is a separate task that will gate the verdict.
 
 ### Calibration mode
 - `POST /api/calibrate/start {zoneIndex}` → opens that zone's path (diverter plain, zone open, pump on), zeroes the pulse counter, enters a bounded calibration run (own max-runtime).
@@ -348,7 +349,7 @@ struct ScheduleEntry {
 | `HARD_MAX_RUNTIME` | 30 min | ATtiny ceiling (own clock) |
 | `swMaxRuntimeSec` | 1200 | ESP32 per-run ceiling, configurable |
 | `FLOW_GRACE_S` | 20 | settle before no-flow check |
-| `IDLE_FLOW_FAULT_PULSES` | tune | unexpected-flow threshold |
+| `IDLE_FLOW_FAULT_PULSES` | 50 (seed, tune) | unexpected-flow threshold over one idle window (`FlowFaultDetector`, #35) |
 | button debounce | 30 ms | on top of RC |
 
 Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
