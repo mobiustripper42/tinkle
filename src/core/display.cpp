@@ -11,7 +11,9 @@ constexpr uint32_t BLINK_HALF_MS = 500;   // 1 Hz colon blink / fault flash (§1
 bool phaseOn(uint32_t nowMs) { return (nowMs / BLINK_HALF_MS) % 2u == 0u; }
 
 // §12 fault codes: E1 no-flow, E2 unexpected flow, E3 watchdog. CalRange/Clock get
-// E4/E5 so every latchable fault shows something rather than a blank.
+// E4/E5 so every latchable fault shows something rather than a blank. E6 (valve
+// rest, DEC-014) is log-only and never latches, so the panel won't show it — the
+// digit exists so the code renders sanely wherever it surfaces.
 char faultDigit(Fault f) {
     switch (f) {
         case Fault::NoFlow:         return '1';
@@ -19,6 +21,7 @@ char faultDigit(Fault f) {
         case Fault::Watchdog:       return '3';
         case Fault::CalRange:       return '4';
         case Fault::Clock:          return '5';
+        case Fault::ValveRest:      return '6';
         default:                    return '0';
     }
 }

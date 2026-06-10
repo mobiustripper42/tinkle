@@ -14,6 +14,7 @@
 #include "../core/calibration_controller.h"
 #include "../core/watchdog.h"
 #include "../core/fault_manager.h"
+#include "../core/valve_rest_monitor.h"
 #include "display_tm1637.h"
 #include "preferences_store.h"
 #include "system_clock.h"
@@ -105,6 +106,14 @@ static Watchdog watchdog(gpio, HEARTBEAT_OUT, wdCfg);
 // goes through requestClear(), which refuses while the active fault's underlying
 // condition still holds — detectors push that truth in each tick below.
 static FaultManager faultManager(runController);
+
+// Auto-return self-test (DEC-014 / #52). Watches the post-close rest window on
+// the flow meter and flags a zone valve that fails to rest closed — a maintenance
+// heads-up (cap aging), NOT a safety layer (the pump-power gate is the barrier).
+// Non-latching: a flag becomes a FaultManager::note() + serial line, never a
+// raiseFault. flaggedMask() feeds the Phase 4 status API.
+static const ValveRestMonitor::Config restCfg;           // §15 seeds
+static ValveRestMonitor valveRest(restCfg);
 
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
@@ -272,6 +281,17 @@ void loop() {
     faultManager.setConditionActive(Fault::Watchdog, wdTrip);
     faultManager.setConditionActive(Fault::UnexpectedFlow, flowMonitor.rateGPM() > 0.0f);
     faultManager.tick(now);
+
+    // Auto-return self-test (DEC-014 / #52): fresh state read — a fault latching
+    // this pass must abort the rest window, not get measured by it.
+    const int restFlagged = valveRest.tick(runController.state(),
+                                           runController.lastRun().zone,
+                                           flowSensor.pulses(), now);
+    if (restFlagged >= 0) {
+        faultManager.note(Fault::ValveRest, now);
+        Serial.printf("[tinkle] DEC-014 flag: zone %d still passing flow after close"
+                      " — auto-return cap suspect, service the valve\n", restFlagged);
+    }
 
     // §12 panel. Render the frame from controller state; the shim pushes to the
     // TM1637 only when it changes (bit-bang cost vs the tick budget). The idle clock

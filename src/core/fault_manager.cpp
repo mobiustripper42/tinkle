@@ -6,13 +6,20 @@ void FaultManager::tick(uint32_t nowMs) {
     // First-fault-wins in RunController means the only edges are None -> X
     // (latch) and X -> None (clear); log the latch edge.
     const Fault f = rc_.activeFault();
-    if (f != Fault::None && f != prevFault_) {
-        log_[logHead_].code = f;
-        log_[logHead_].atMs = nowMs;
-        logHead_ = (uint8_t)((logHead_ + 1) % LOG_SIZE);
-        if (logCount_ < LOG_SIZE) ++logCount_;
-    }
+    if (f != Fault::None && f != prevFault_) append(f, nowMs);
     prevFault_ = f;
+}
+
+void FaultManager::note(Fault code, uint32_t nowMs) {
+    if (code == Fault::None) return;
+    append(code, nowMs);
+}
+
+void FaultManager::append(Fault code, uint32_t nowMs) {
+    log_[logHead_].code = code;
+    log_[logHead_].atMs = nowMs;
+    logHead_ = (uint8_t)((logHead_ + 1) % LOG_SIZE);
+    if (logCount_ < LOG_SIZE) ++logCount_;
 }
 
 void FaultManager::setConditionActive(Fault code, bool active) {

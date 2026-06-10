@@ -17,6 +17,7 @@
 #include "watchdog_trip.h"
 #include "watchdog.h"
 #include "fault_manager.h"
+#include "valve_rest_monitor.h"
 
 // Native unit tests for ValveDriver (firmware spec §5, v1.4). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -1998,6 +1999,169 @@ static void test_fm_log_edges_and_ring_wrap() {
                       fm.logEntry(FaultManager::LOG_SIZE - 1).code);  // oldest kept
 }
 
+// ----------------------------------------------------------------------------
+// ValveRestMonitor (DEC-014 / #52): the auto-return self-test. Real RunController
+// + ValveDriver drive the states; pulses are injected like the flow tests.
+// ----------------------------------------------------------------------------
+
+using tinkle::ValveRestMonitor;
+
+namespace {
+
+ValveRestMonitor::Config makeRestCfg() {
+    ValveRestMonitor::Config c;
+    c.windowMs      = 2000;     // short for tests; real seed 10 s (§15)
+    c.maxRestPulses = 5;
+    return c;
+}
+
+} // namespace
+
+// A healthy close: run flow stops with the pump, the rest window stays quiet,
+// no flag — and the verdict is -1 on every single tick.
+static void test_rest_clean_close_no_flag() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    ValveRestMonitor vr(makeRestCfg());
+    uint32_t pulses = 0;
+
+    RunRequest req; req.zoneIndex = 1; req.durationSec = 1;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
+    for (uint32_t now = 0; now < 15000; now += 50) {
+        rc.tick(now);
+        if (rc.state() == RunState::Running) pulses += 10;     // healthy run flow
+        TEST_ASSERT_EQUAL_INT(-1, vr.tick(rc.state(), rc.lastRun().zone, pulses, now));
+    }
+    TEST_ASSERT_TRUE(rc.isIdle());
+    TEST_ASSERT_FALSE(vr.zoneFlagged(1));
+    TEST_ASSERT_EQUAL_UINT8(0, vr.flaggedMask());
+}
+
+// A stuck-open valve dribbles through the rest window: the just-closed zone gets
+// flagged exactly once, other zones stay clean.
+static void test_rest_stuck_valve_flags_zone() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    ValveRestMonitor vr(makeRestCfg());
+    uint32_t pulses = 0;
+
+    RunRequest req; req.zoneIndex = 1; req.durationSec = 1;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
+    int flaggedZone = -1;
+    int verdicts    = 0;
+    for (uint32_t now = 0; now < 15000; now += 50) {
+        rc.tick(now);
+        const RunState s = rc.state();
+        if (s == RunState::Running) pulses += 10;
+        if (s == RunState::Settle || s == RunState::Idle) pulses += 1;   // dribble
+        const int v = vr.tick(s, rc.lastRun().zone, pulses, now);
+        if (v >= 0) { flaggedZone = v; ++verdicts; }
+    }
+    TEST_ASSERT_EQUAL_INT(1, flaggedZone);
+    TEST_ASSERT_EQUAL_INT(1, verdicts);                 // newly-flagged fires once
+    TEST_ASSERT_TRUE(vr.zoneFlagged(1));
+    TEST_ASSERT_FALSE(vr.zoneFlagged(0));
+    TEST_ASSERT_EQUAL_UINT8(1u << 1, vr.flaggedMask());
+}
+
+// The flag self-heals: a later run on the same zone whose rest window stays
+// quiet un-flags it (a re-seated valve clears its own flag).
+static void test_rest_flag_self_heals_on_clean_close() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    ValveRestMonitor vr(makeRestCfg());
+    uint32_t pulses = 0;
+    uint32_t now = 0;
+
+    // First run: dribble at rest -> flagged.
+    RunRequest req; req.zoneIndex = 1; req.durationSec = 1;
+    TEST_ASSERT_TRUE(rc.requestRun(req, now));
+    for (; now < 15000; now += 50) {
+        rc.tick(now);
+        const RunState s = rc.state();
+        if (s == RunState::Settle || s == RunState::Idle) pulses += 1;
+        vr.tick(s, rc.lastRun().zone, pulses, now);
+    }
+    TEST_ASSERT_TRUE(vr.zoneFlagged(1));
+
+    // Second run: quiet rest window -> the same zone un-flags.
+    TEST_ASSERT_TRUE(rc.requestRun(req, now));
+    for (uint32_t end = now + 15000; now < end; now += 50) {
+        rc.tick(now);
+        vr.tick(rc.state(), rc.lastRun().zone, pulses, now);   // no new pulses
+    }
+    TEST_ASSERT_TRUE(rc.isIdle());
+    TEST_ASSERT_FALSE(vr.zoneFlagged(1));
+}
+
+// A queued run chaining SETTLE -> next aborts the check: the next run's own flow
+// must never be read as rest flow. The dribble here would exceed the threshold
+// if the window survived the chain — no flag may appear.
+static void test_rest_chained_run_aborts_check() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    ValveRestMonitor vr(makeRestCfg());
+    uint32_t pulses = 0;
+
+    RunRequest first;  first.zoneIndex = 0;  first.durationSec = 1;
+    RunRequest second; second.zoneIndex = 1; second.durationSec = 1;
+    TEST_ASSERT_TRUE(rc.requestRun(first, 0));
+    TEST_ASSERT_TRUE(rc.requestRun(second, 0));        // queues behind the first
+
+    bool inSecondRun = false;
+    for (uint32_t now = 0; now < 25000; now += 50) {
+        rc.tick(now);
+        const RunState s = rc.state();
+        if (s == RunState::Running && rc.activeZone() == 1) inSecondRun = true;
+        // Line noise from the first settle through the second run's staging —
+        // exactly the span a surviving window would mismeasure.
+        if (!inSecondRun && (s == RunState::Settle || s == RunState::PrepDiverter ||
+                             s == RunState::OpenZone || s == RunState::StartPump))
+            pulses += 1;
+        TEST_ASSERT_EQUAL_INT(-1, vr.tick(s, rc.lastRun().zone, pulses, now));
+    }
+    TEST_ASSERT_TRUE(rc.isIdle());
+    TEST_ASSERT_EQUAL_UINT8(0, vr.flaggedMask());      // zone 1's clean final window
+}
+
+// Threshold boundary, synthetic states: exactly maxRestPulses is rest-quiet
+// (no flag, window completes clean); one more flags.
+static void test_rest_threshold_boundary() {
+    ValveRestMonitor vr(makeRestCfg());
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 2, 100, 0));      // window opens
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 2, 105, 500));    // == threshold
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   2, 105, 1999));
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   2, 105, 2000));   // closes clean
+    TEST_ASSERT_FALSE(vr.zoneFlagged(2));
+
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Running, 2, 200, 3000));  // next run
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle,  2, 200, 4000));  // new window
+    TEST_ASSERT_EQUAL_INT( 2, vr.tick(RunState::Idle,    2, 206, 4500));  // threshold + 1
+    TEST_ASSERT_TRUE(vr.zoneFlagged(2));
+}
+
+// FaultManager::note() is log-only: the entry lands in the ring, nothing
+// latches, and runs are still accepted.
+static void test_fm_note_is_nonlatching() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    FaultManager fm(rc);
+
+    fm.note(Fault::ValveRest, 123);
+    TEST_ASSERT_EQUAL_UINT8(1, fm.logCount());
+    TEST_ASSERT_EQUAL(Fault::ValveRest, fm.logEntry(0).code);
+    TEST_ASSERT_EQUAL_UINT32(123, fm.logEntry(0).atMs);
+    TEST_ASSERT_FALSE(rc.isFaulted());
+
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 1;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 200));          // not blocked by the note
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -2119,5 +2283,12 @@ int main() {
     RUN_TEST(test_fm_clear_blocked_until_condition_resolves);
     RUN_TEST(test_fm_not_faulted_and_unconditioned_codes);
     RUN_TEST(test_fm_log_edges_and_ring_wrap);
+
+    RUN_TEST(test_rest_clean_close_no_flag);
+    RUN_TEST(test_rest_stuck_valve_flags_zone);
+    RUN_TEST(test_rest_flag_self_heals_on_clean_close);
+    RUN_TEST(test_rest_chained_run_aborts_check);
+    RUN_TEST(test_rest_threshold_boundary);
+    RUN_TEST(test_fm_note_is_nonlatching);
     return UNITY_END();
 }
