@@ -58,7 +58,7 @@ public:
     Entry   logEntry(uint8_t i) const;
 
 private:
-    static constexpr uint8_t CODE_COUNT = 6;   // Fault::None..Fault::Clock
+    static constexpr uint8_t CODE_COUNT = (uint8_t)Fault::Count;   // sized off the enum
     static uint8_t idx(Fault code) { return (uint8_t)code; }
 
     RunController& rc_;

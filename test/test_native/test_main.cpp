@@ -1720,6 +1720,12 @@ uint32_t hbQuiet(WatchdogTrip& wt, bool level, uint32_t now, uint32_t spanMs) {
 
 constexpr uint8_t HB_PIN = 21;   // synthetic heartbeat pin, distinct from valve pins
 
+// The two halves of the protocol live in separate headers; tie their §15 defaults
+// here, where both are visible. The toggle period must sit well under the quiet
+// timeout (4x margin) or the relay chatters mid-run on ordinary loop jitter.
+static_assert(Watchdog::Config{}.heartbeatMs * 4 <= WatchdogTrip::Config{}.hbTimeoutMs,
+              "HEARTBEAT_MS must stay well under HB_TIMEOUT_MS (4x margin)");
+
 } // namespace
 
 // Power-up default is DISARMED, and a line frozen at any level never arms — only

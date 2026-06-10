@@ -256,17 +256,21 @@ void loop() {
     const bool wdTrip = digitalRead(WD_TRIPPED_IN) == LOW;
 #endif
     runController.setWatchdogTripped(wdTrip);             // §4 pre-open gate
-    const Fault wdVerdict = watchdog.tick(runState, wdTrip, now);
+    // Re-read the state: a flow fault above may have latched THIS pass, and the
+    // heartbeat must not outlive the pump command by even one tick.
+    const Fault wdVerdict = watchdog.tick(runController.state(), wdTrip, now);
     if (wdVerdict != Fault::None) runController.raiseFault(wdVerdict, now);
 
     // Fault surface (§14 / #5.3): push each detector's CURRENT condition truth,
     // then let the manager log any newly latched fault. Watchdog resolved = trip
-    // line released; unexpected-flow resolved = no flow while idle (the rolling
-    // rate decays to 0 once pulses stop). NoFlow/CalRange are one-shot events with
-    // no live condition — they clear freely.
+    // line released. Unexpected-flow resolved = the rolling rate decayed to 0 —
+    // deliberately UNQUALIFIED by run state: the condition is only consulted while
+    // that fault is latched (safe state, nothing should flow), and qualifying it
+    // with isIdle() would read "resolved" the moment the fault latched (state =
+    // Fault, not Idle), letting a clear through while water still moves.
+    // NoFlow/CalRange are one-shot events with no live condition — they clear freely.
     faultManager.setConditionActive(Fault::Watchdog, wdTrip);
-    faultManager.setConditionActive(Fault::UnexpectedFlow,
-                                    runController.isIdle() && flowMonitor.rateGPM() > 0.0f);
+    faultManager.setConditionActive(Fault::UnexpectedFlow, flowMonitor.rateGPM() > 0.0f);
     faultManager.tick(now);
 
     // §12 panel. Render the frame from controller state; the shim pushes to the
