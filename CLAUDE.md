@@ -154,19 +154,19 @@ tasks are GitHub Issues; a phase ends when its issues close.
 
 ## Model Selection
 
-Three tiers. Default low; escalate by **task length and complexity** — Fable 5's lead over Sonnet/Opus is smallest on short scoped tasks and widens the longer and more complex the work (migrations, schema design, cross-cutting refactors, long autonomous runs).
+Three tiers. Default low; escalate by **task length and complexity** — Fable 5's lead over Sonnet/Opus is smallest on short scoped tasks and widens the longer and more complex the work (state-machine reworks, cross-cutting refactors, long autonomous runs).
 
 | Tier | Model | Use for |
 |------|-------|---------|
 | Workhorse | `claude-sonnet-4-6` | Default main session and most agents. Single-file edits, scoped tasks, reviews. |
-| Hard | `claude-opus-4-8` | The "stuck" escalation; RLS/schema work; anything where being wrong is expensive but the task is bounded. |
+| Hard | `claude-opus-4-8` | The "stuck" escalation; fail-dry/safety-chain logic; anything where being wrong is expensive but the task is bounded. |
 | Frontier | `claude-fable-5` | Long-horizon, multi-file, high-autonomy work where holding coherence across the whole change is the bottleneck — and architecture decisions (see `@architect`). $10/$50 per MTok, 2× Opus both directions; reserve accordingly. |
 
 - **Reach for `effort` before reaching for a tier.** `effort` (`low`/`medium`/`high`/`xhigh`/`max`, set via `output_config`) buys quality more cheaply than a model jump on a task the current model can already do. `xhigh` is the floor for coding/agentic work, `high` for intelligence-sensitive work, `max` only when correctness must beat cost. Fable 5 reaches production-quality code at *medium* effort and is more token-efficient than prior models — frontier quality does **not** require max effort.
-- **Spec up front, then let it run.** Front-load the full task spec in one turn and let the model work long at high effort rather than over-decomposing a coherent task into tiny issues — Fable holds coherence across millions of tokens, and chopping the task throws that away. The Micro Workflow's *Spec it / Plan it* steps and the `design/` mockups **are** the spec; point the model at them.
-- **File memory is a force multiplier — ~3× more effective on Fable than Opus 4.8.** Session files, `design/`, `docs/DECISIONS.md`, and acceptance criteria are exactly the persistent notes Fable exploits to improve its own output. Keep them current; reference them explicitly in the task.
-- **Vision is a first-class input.** Fable 5 is state-of-the-art at vision and rebuilds UI from screenshots with minimal scaffolding — lean on `design/*.jsx` mockups and screenshot-vs-build diffs (see `@ui-reviewer`).
-- **Silent fallback caveat.** Fable routes <5% of sessions (cyber / bio-chem / distillation classifiers, conservatively tuned) to Opus 4.8 automatically and tells you when it does. Defensive RLS/auth work won't trip it in normal use — but if a session unexpectedly feels a tier weaker, check for a fallback notice before chasing a phantom regression.
+- **Spec up front, then let it run.** Front-load the full task spec in one turn and let the model work long at high effort rather than over-decomposing a coherent task into tiny issues — Fable holds coherence across millions of tokens, and chopping the task throws that away. The firmware spec (`docs/tinkle_firmware_spec.md`) plus the GitHub Issue's acceptance criteria **are** the spec; point the model at them.
+- **File memory is a force multiplier — ~3× more effective on Fable than Opus 4.8.** Session files, `docs/DECISIONS.md`, and acceptance criteria are exactly the persistent notes Fable exploits to improve its own output. Keep them current; reference them explicitly in the task.
+- **Vision is a first-class input.** Fable 5 is state-of-the-art at vision — lean on it for the wiring doc, bench/breadboard photos, and datasheet figures instead of describing them in prose.
+- **Silent fallback caveat.** Fable routes <5% of sessions (cyber / bio-chem / distillation classifiers, conservatively tuned) to Opus 4.8 automatically and tells you when it does. Defensive watchdog/fail-safe work won't trip it in normal use — but if a session unexpectedly feels a tier weaker, check for a fallback notice before chasing a phantom regression.
 - **Agents:** model in agent frontmatter. `@architect` pins `claude-fable-5` — architecture decisions are where being wrong compounds, so they get the frontier tier. Reviewers (`@code-review`, `@pm`, `@doc-consistency`, `@tape-reader`) stay Sonnet.
 - **New agents:** default to Sonnet. Add a `model:` line only when the agent's job is architecture- or vision-level reasoning.
 
