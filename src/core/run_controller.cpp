@@ -77,6 +77,10 @@ void RunController::stop(uint32_t nowMs) {
 
 void RunController::raiseFault(Fault code, uint32_t nowMs) {
     if (code == Fault::None) return;                // "no fault" is a caller bug, not a latch
+    if (code == Fault::ValveRest) return;           // DEC-014 is log-only (FaultManager::note)
+                                                    // — a maintenance flag must never halt
+                                                    // irrigation. Structural, not convention.
+    if (code >= Fault::Count) return;               // sentinel/garbage is a caller bug
     if (state_ == RunState::Fault) return;          // first fault wins
     valve_.safeState(nowMs);                        // pump off -> zones de-energized -> diverter plain
     fault_ = code;

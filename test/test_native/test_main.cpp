@@ -2144,6 +2144,27 @@ static void test_rest_threshold_boundary() {
     TEST_ASSERT_TRUE(vr.zoneFlagged(2));
 }
 
+// A fault latching mid-window aborts the check — even with a dribble already
+// past the threshold's worth of pulses pending, the Fault state must produce
+// no verdict and no flag (the fault owns the story; the window measured a
+// fault transient, not rest flow). Also locks the raiseFault firewall: a
+// stray raiseFault(ValveRest) must be a no-op, never a latch.
+static void test_rest_fault_aborts_window_and_valverest_cannot_latch() {
+    ValveRestMonitor vr(makeRestCfg());
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 1, 100, 0));     // window opens
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Fault,  1, 120, 500));   // dribble + fault
+    TEST_ASSERT_FALSE(vr.zoneFlagged(1));
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Fault,  1, 200, 1000));  // stays aborted
+    TEST_ASSERT_EQUAL_UINT8(0, vr.flaggedMask());
+
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    rc.raiseFault(Fault::ValveRest, 100);            // DEC-014: log-only, must not latch
+    TEST_ASSERT_FALSE(rc.isFaulted());
+    TEST_ASSERT_TRUE(rc.isIdle());
+}
+
 // FaultManager::note() is log-only: the entry lands in the ring, nothing
 // latches, and runs are still accepted.
 static void test_fm_note_is_nonlatching() {
@@ -2289,6 +2310,7 @@ int main() {
     RUN_TEST(test_rest_flag_self_heals_on_clean_close);
     RUN_TEST(test_rest_chained_run_aborts_check);
     RUN_TEST(test_rest_threshold_boundary);
+    RUN_TEST(test_rest_fault_aborts_window_and_valverest_cannot_latch);
     RUN_TEST(test_fm_note_is_nonlatching);
     return UNITY_END();
 }
