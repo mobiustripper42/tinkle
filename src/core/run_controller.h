@@ -27,9 +27,10 @@ enum class RunState : uint8_t {
     StopPump, CloseZone, Settle, Fault
 };
 
-// §14 fault codes. None = no latched fault.
+// §14 fault codes. None = no latched fault. Count is a sentinel (keep last) —
+// FaultManager sizes its condition table off it.
 enum class Fault : uint8_t {
-    None, NoFlow, UnexpectedFlow, Watchdog, CalRange, Clock
+    None, NoFlow, UnexpectedFlow, Watchdog, CalRange, Clock, Count
 };
 
 // A run request: which zone, how long, and whether to fertigate (diverter THROUGH).
@@ -92,7 +93,9 @@ public:
 
     // Clear a latched fault and return to IDLE. Only valid in FAULT; the caller
     // is responsible for confirming the underlying condition is resolved (§14).
-    // Returns false if not currently faulted.
+    // Returns false if not currently faulted. FaultManager::requestClear() is the
+    // only sanctioned caller — it owns the resolved-condition gate. Don't wire
+    // new clear paths (e.g. /api/fault/clear) here directly.
     bool clearFault();
 
     // Latest ATtiny trip-line state, pushed in by the Watchdog module (§9). Used
