@@ -13,8 +13,9 @@
 // SCOPE (DEC-008): this module persists the scalar config that exists today —
 //   - per-zone manual default run durations (retires the BUTTON_RUN_SEC placeholder)
 //   - swMaxRuntimeSec (software run ceiling, RunConfig)
-//   - cached diverter position (§8; ValveDriver flags Persistence as its owner)
 //   - pulsesPerGallon (flow K, §7; loaded by FlowMonitor #34, written by calibration #36)
+// No cached diverter position: the v1.4 two-leg NO/NC diverter has no hold-state to
+// remember — the rest position is plain by construction, set per-run (DEC-013).
 // The remaining §8 state is owned by modules not yet built; each fills the SAME store
 // through its own keys when it lands — they are deliberately NOT pre-carved here:
 //   - schedule entries        -> Scheduler (#27, §13 model)
@@ -68,19 +69,14 @@ public:
     uint8_t  zoneCount()             const { return zoneCount_; }
     uint32_t zoneDefaultSec(uint8_t zone) const;   // out-of-range -> DEFAULT_RUN_SEC
     uint32_t swMaxRuntimeSec()       const { return swMaxRuntimeSec_; }
-    bool     diverterKnown()         const { return divPos_ != DivPos::Unknown; }
-    bool     diverterThrough()       const { return divPos_ == DivPos::Through; }
     float    pulsesPerGallon()       const { return pulsesPerGallon_; }   // flow K (§7, #34)
 
     // --- writes (write-on-change: a set to the current value touches no flash) ---
     void setZoneDefaultSec(uint8_t zone, uint32_t sec);
     void setSwMaxRuntimeSec(uint32_t sec);
-    void setDiverterPosition(bool through);   // called by the run/fert path on actuation (#28)
     void setPulsesPerGallon(float k);         // written by calibration (#36); ignores k <= 0
 
 private:
-    enum class DivPos : uint8_t { Unknown = 0, Around = 1, Through = 2 };
-
     // Build the per-zone key "z<N>_dur" into buf (capacity must be >= 8; NVS keys cap at
     // 15 chars and the longest this yields is "z15_dur" = 7). Returns buf.
     static const char* zoneKey(char* buf, uint8_t zone);
@@ -90,7 +86,6 @@ private:
 
     uint32_t zoneDefaultSec_[ValveConfig::MAX_ZONES];
     uint32_t swMaxRuntimeSec_;
-    DivPos   divPos_;
     float    pulsesPerGallon_;
 };
 

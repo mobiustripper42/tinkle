@@ -2,11 +2,11 @@
 
 // Tinkle — ATtiny85 safety watchdog. Independent fail-dry backstop.
 //
-// It arms the SAFETY RELAY (normally-open, energize-to-pass) that feeds 24V to
-// BOTH the master valve and the pump. The ATtiny never commands anything — it
-// can only gate power. Drop ARM and the master spring-closes, the pump dies,
-// no water. This is the hardware stand-in for the human who used to watch the
-// hose.
+// It arms the SAFETY RELAY (normally-open, energize-to-pass) that feeds the armed
+// 24V to the PUMP — the water source (there is no master valve, DEC-012). The
+// ATtiny never commands anything — it can only gate the pump's power. Drop ARM and
+// the pump dies → no source → no water, whatever the valves do. This is the
+// hardware stand-in for the human who used to watch the hose.
 //
 // ENCODING (DEC-004 / firmware spec §9):
 //   The ESP32 emits a heartbeat square wave ONLY while a watering run is active.

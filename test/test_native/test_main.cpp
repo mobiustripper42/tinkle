@@ -13,15 +13,13 @@
 #include "scheduler.h"
 #include "flow_monitor.h"
 
-// Native unit tests for ValveDriver (firmware spec §5). Fake GPIO + an explicit
+// Native unit tests for ValveDriver (firmware spec §5, v1.4). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
 //
-// The fake doesn't just record writes — it knows the H-bridge pairs and trips a
-// violation flag the instant any registered pair is driven both-HIGH. That makes
-// the never-both-high invariant a tested property at write granularity, not an
-// assertion checked only after the dust settles.
+// v1.4 (DEC-011/012/013): every valve is a single low-side FET — no H-bridges, no
+// never-both-high invariant. The fake just records writes (level, ordered log) so the
+// tests can assert FET levels and write ordering directly.
 
-using tinkle::Bridge;
 using tinkle::IGpio;
 using tinkle::ValveConfig;
 using tinkle::ValveDriver;
@@ -32,24 +30,12 @@ struct FakeGpio : IGpio {
     std::map<uint8_t, bool> level;        // current commanded level per pin
     std::map<uint8_t, bool> configured;   // pins set as outputs
     std::vector<std::pair<uint8_t, bool>> log;  // ordered write history
-    std::vector<Bridge> bridges;          // pairs to police
-    bool bothHighViolation = false;
-
-    void watch(Bridge b) { bridges.push_back(b); }
 
     void configureOutput(uint8_t pin) override { configured[pin] = true; }
 
     void write(uint8_t pin, bool high) override {
         level[pin] = high;
         log.push_back({pin, high});
-        for (const auto& b : bridges) {
-            if (pin == b.in1 || pin == b.in2) {
-                if (level.count(b.in1) && level.count(b.in2) &&
-                    level[b.in1] && level[b.in2]) {
-                    bothHighViolation = true;
-                }
-            }
-        }
     }
 
     int writesTo(uint8_t pin) const {
@@ -65,22 +51,24 @@ struct FakeGpio : IGpio {
     }
 };
 
-// Synthetic pin map — values are arbitrary, just distinct.
-constexpr Bridge Z0{2, 3};
-constexpr Bridge Z1{4, 5};
-constexpr Bridge DIV{6, 7};   // in1 = THROUGH (fertigate), in2 = AROUND (plain)
-constexpr uint8_t MASTER = 8;
-constexpr uint8_t PUMP   = 9;
+// Synthetic pin map — values are arbitrary, just distinct. One FET per valve.
+constexpr uint8_t ZF0       = 2;   // zone 0 FET
+constexpr uint8_t ZF1       = 3;   // zone 1 FET
+constexpr uint8_t DIV_CLEAN = 6;   // NO bypass leg  (low = open = plain)
+constexpr uint8_t DIV_FERT  = 7;   // NC Dosatron leg (high = open = fert)
+constexpr uint8_t PUMP      = 9;
 
+// Synthetic travel windows kept short so the cooperative-loop tests run fast — the
+// real ZONE_TRAVEL_MS / DIVERTER_TRAVEL_MS (10 s, §15) live in ValveConfig's defaults.
 ValveConfig makeConfig() {
     ValveConfig c;
-    c.zones[0] = Z0;
-    c.zones[1] = Z1;
+    c.zoneFet[0] = ZF0;
+    c.zoneFet[1] = ZF1;
     c.zoneCount = 2;
-    c.diverter = DIV;
-    c.masterFet = MASTER;
+    c.divCleanFet = DIV_CLEAN;
+    c.divFertFet  = DIV_FERT;
     c.pumpRelay = PUMP;
-    c.pulseMs = 75;
+    c.zoneTravelMs = 75;
     c.diverterTravelMs = 6000;
     return c;
 }
@@ -88,176 +76,141 @@ ValveConfig makeConfig() {
 FakeGpio g;
 ValveConfig cfg;
 
-void watchAll() { g.watch(Z0); g.watch(Z1); g.watch(DIV); }
-
 } // namespace
 
 void setUp() {
     g = FakeGpio{};
     cfg = makeConfig();
-    watchAll();
 }
 void tearDown() {}
 
-// begin() forces the safe state: bridges coast, master closed, pump off.
+// begin() forces the safe/rest state: every valve FET off (NC zones closed, NC fert
+// closed, NO bypass open => plain), pump off.
 static void test_begin_safe_levels() {
     ValveDriver vd(g, cfg);
     vd.begin();
-    TEST_ASSERT_FALSE(g.level[Z0.in1]); TEST_ASSERT_FALSE(g.level[Z0.in2]);
-    TEST_ASSERT_FALSE(g.level[Z1.in1]); TEST_ASSERT_FALSE(g.level[Z1.in2]);
-    TEST_ASSERT_FALSE(g.level[DIV.in1]); TEST_ASSERT_FALSE(g.level[DIV.in2]);
-    TEST_ASSERT_FALSE(g.level[MASTER]);
+    TEST_ASSERT_FALSE(g.level[ZF0]); TEST_ASSERT_FALSE(g.level[ZF1]);
+    TEST_ASSERT_FALSE(g.level[DIV_CLEAN]); TEST_ASSERT_FALSE(g.level[DIV_FERT]);
     TEST_ASSERT_FALSE(g.level[PUMP]);
-    TEST_ASSERT_TRUE(g.configured[Z0.in1] && g.configured[PUMP] && g.configured[MASTER]);
-    TEST_ASSERT_FALSE(g.bothHighViolation);
-    TEST_ASSERT_FALSE(vd.masterIsOpen());
+    TEST_ASSERT_TRUE(g.configured[ZF0] && g.configured[ZF1]);
+    TEST_ASSERT_TRUE(g.configured[DIV_CLEAN] && g.configured[DIV_FERT] && g.configured[PUMP]);
     TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_FALSE(vd.diverterFert());           // rest = plain
 }
 
-// pulseOpen drives IN1 high / IN2 low, holds for pulseMs, then coasts both low.
-static void test_pulse_open_then_coast() {
+// openZone energizes the zone FET; the valve HOLDS open (FET stays high) while
+// energized, busy until the travel window elapses — no coast-back.
+static void test_open_zone_holds() {
     ValveDriver vd(g, cfg);
     vd.begin();
-    vd.pulseOpen(0, 1000);
-    TEST_ASSERT_TRUE(g.level[Z0.in1]);
-    TEST_ASSERT_FALSE(g.level[Z0.in2]);
+    vd.openZone(0, 1000);
+    TEST_ASSERT_TRUE(g.level[ZF0]);
     TEST_ASSERT_TRUE(vd.zoneBusy(0));
     TEST_ASSERT_TRUE(vd.busy());
 
-    vd.tick(1000 + 74);                 // one ms short of pulseMs — still driving
-    TEST_ASSERT_TRUE(g.level[Z0.in1]);
+    vd.tick(1000 + 74);                 // one ms short of travel — still traveling
+    TEST_ASSERT_TRUE(g.level[ZF0]);
     TEST_ASSERT_TRUE(vd.zoneBusy(0));
 
-    vd.tick(1000 + 75);                 // pulseMs elapsed — coast
-    TEST_ASSERT_FALSE(g.level[Z0.in1]);
-    TEST_ASSERT_FALSE(g.level[Z0.in2]);
+    vd.tick(1000 + 75);                 // travel done — busy clears, FET STAYS high (held open)
+    TEST_ASSERT_TRUE(g.level[ZF0]);
     TEST_ASSERT_FALSE(vd.zoneBusy(0));
     TEST_ASSERT_FALSE(vd.busy());
-    TEST_ASSERT_FALSE(g.bothHighViolation);
 }
 
-// pulseClose is the mirror: IN2 high / IN1 low, then coast.
-static void test_pulse_close_then_coast() {
+// closeZone de-energizes the FET (cap auto-return drives the valve closed); busy for
+// the travel window, FET held low.
+static void test_close_zone_deenergizes() {
     ValveDriver vd(g, cfg);
     vd.begin();
-    vd.pulseClose(1, 500);
-    TEST_ASSERT_FALSE(g.level[Z1.in1]);
-    TEST_ASSERT_TRUE(g.level[Z1.in2]);
+    vd.openZone(1, 0);
+    vd.tick(75);                        // open travel done, FET held high
+    TEST_ASSERT_TRUE(g.level[ZF1]);
+    vd.closeZone(1, 500);
+    TEST_ASSERT_FALSE(g.level[ZF1]);
+    TEST_ASSERT_TRUE(vd.zoneBusy(1));
     vd.tick(500 + 75);
-    TEST_ASSERT_FALSE(g.level[Z1.in2]);
+    TEST_ASSERT_FALSE(g.level[ZF1]);
     TEST_ASSERT_FALSE(vd.zoneBusy(1));
-    TEST_ASSERT_FALSE(g.bothHighViolation);
 }
 
-// Re-pulsing the opposite direction without coasting first must never put both
-// inputs HIGH — the LOW-side-first ordering guards the reversal.
-static void test_never_both_high_on_reversal() {
-    ValveDriver vd(g, cfg);
-    vd.begin();
-    vd.pulseOpen(0, 0);     // IN1 high
-    vd.pulseClose(0, 10);   // immediate reversal: IN1 must drop before IN2 rises
-    TEST_ASSERT_FALSE(g.level[Z0.in1]);
-    TEST_ASSERT_TRUE(g.level[Z0.in2]);
-    TEST_ASSERT_FALSE(g.bothHighViolation);
-}
-
-// Independent per-actuator timers: a 6 s diverter travel must not hold up a
-// 75 ms zone pulse, and the zone releasing must not cut the diverter short.
+// Independent per-actuator timers: a 6 s diverter travel must not hold up a zone's
+// travel, and the zone finishing must not cut the diverter short.
 static void test_independent_timers() {
     ValveDriver vd(g, cfg);
     vd.begin();
-    vd.pulseOpen(0, 0);
-    vd.setDiverter(true, 10);          // THROUGH, 6000 ms travel
-    TEST_ASSERT_TRUE(g.level[DIV.in1]);
-    TEST_ASSERT_TRUE(vd.diverterThrough());
+    vd.openZone(0, 0);                  // zone travel 0..75
+    vd.setDiverter(true, 10);          // fert, 10..6010
+    TEST_ASSERT_TRUE(g.level[DIV_FERT]); TEST_ASSERT_TRUE(g.level[DIV_CLEAN]);
+    TEST_ASSERT_TRUE(vd.diverterFert());
 
-    vd.tick(80);                       // zone pulse done; diverter still traveling
+    vd.tick(80);                       // zone travel done; diverter still traveling
     TEST_ASSERT_FALSE(vd.zoneBusy(0));
-    TEST_ASSERT_FALSE(g.level[Z0.in1]);
+    TEST_ASSERT_TRUE(g.level[ZF0]);    // zone held open
     TEST_ASSERT_TRUE(vd.diverterBusy());
-    TEST_ASSERT_TRUE(g.level[DIV.in1]);
 
     vd.tick(10 + 6000);                // travel window elapsed
     TEST_ASSERT_FALSE(vd.diverterBusy());
-    TEST_ASSERT_FALSE(g.level[DIV.in1]);
-    TEST_ASSERT_FALSE(g.level[DIV.in2]);
+    TEST_ASSERT_TRUE(g.level[DIV_FERT]);   // legs HELD at fert (high) — no coast-back
+    TEST_ASSERT_TRUE(g.level[DIV_CLEAN]);
     TEST_ASSERT_FALSE(vd.busy());
 }
 
-// Reversing the diverter mid-travel must never drive its bridge both-HIGH. (The
-// electrical dead-time question for a motor reversed mid-travel is separate and
-// flagged to @architect — this guards only the logical invariant.)
-static void test_diverter_reversal_never_both_high() {
+// safeState landing while a zone is mid-open-travel (the §14 fault case): the FET
+// drops to LOW immediately (cap-return closes the valve), busy clears.
+static void test_safe_state_during_open() {
     ValveDriver vd(g, cfg);
     vd.begin();
-    vd.setDiverter(true, 0);            // THROUGH, IN1 high
-    vd.setDiverter(false, 100);         // reverse to AROUND mid-travel
-    TEST_ASSERT_FALSE(g.level[DIV.in1]);
-    TEST_ASSERT_TRUE(g.level[DIV.in2]);
-    TEST_ASSERT_FALSE(vd.diverterThrough());
-    TEST_ASSERT_FALSE(g.bothHighViolation);
-}
-
-// safeState landing while a zone is mid-open-pulse (the §14 fault case): the open
-// is overridden by a close pulse, with no transient both-high.
-static void test_safe_state_during_open_pulse() {
-    ValveDriver vd(g, cfg);
-    vd.begin();
-    vd.pulseOpen(0, 0);                 // zone 0 mid-open
-    TEST_ASSERT_TRUE(g.level[Z0.in1]);
-    vd.safeState(30);                  // fault unwind before the open pulse expires
-    TEST_ASSERT_FALSE(g.level[Z0.in1]);
-    TEST_ASSERT_TRUE(g.level[Z0.in2]);  // now driving closed
+    vd.openZone(0, 0);                  // zone 0 mid-open
+    TEST_ASSERT_TRUE(g.level[ZF0]);
     TEST_ASSERT_TRUE(vd.zoneBusy(0));
-    TEST_ASSERT_FALSE(g.bothHighViolation);
-    vd.tick(30 + 75);                   // close pulse completes -> coast
-    TEST_ASSERT_FALSE(g.level[Z0.in2]);
-    TEST_ASSERT_FALSE(vd.busy());
+    vd.safeState(30);                  // fault unwind before the travel completes
+    TEST_ASSERT_FALSE(g.level[ZF0]);
+    TEST_ASSERT_FALSE(vd.zoneBusy(0));
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
 }
 
-// Diverter direction mapping: through => IN1 (THROUGH), !through => IN2 (AROUND).
-static void test_diverter_direction() {
+// Diverter leg mapping (DEC-013): fertigate => both legs HIGH (fert opens, bypass
+// closes); plain => both LOW (bypass open, fert closed). Legs hold their level.
+static void test_diverter_legs() {
     ValveDriver vd(g, cfg);
     vd.begin();
-    vd.setDiverter(false, 0);          // AROUND
-    TEST_ASSERT_FALSE(g.level[DIV.in1]);
-    TEST_ASSERT_TRUE(g.level[DIV.in2]);
-    TEST_ASSERT_FALSE(vd.diverterThrough());
-    TEST_ASSERT_TRUE(vd.diverterKnown());
+    vd.setDiverter(true, 0);           // fertigate
+    TEST_ASSERT_TRUE(g.level[DIV_FERT]);
+    TEST_ASSERT_TRUE(g.level[DIV_CLEAN]);
+    TEST_ASSERT_TRUE(vd.diverterFert());
+    vd.setDiverter(false, 100);        // back to plain
+    TEST_ASSERT_FALSE(g.level[DIV_FERT]);
+    TEST_ASSERT_FALSE(g.level[DIV_CLEAN]);
+    TEST_ASSERT_FALSE(vd.diverterFert());
 }
 
-// Master FET + pump relay are immediate level sets with matching state getters.
-static void test_master_and_pump() {
+// Pump relay is an immediate level set with a matching state getter (no master in v1.4).
+static void test_pump() {
     ValveDriver vd(g, cfg);
     vd.begin();
-    vd.masterOpen(); TEST_ASSERT_TRUE(g.level[MASTER]); TEST_ASSERT_TRUE(vd.masterIsOpen());
-    vd.pumpOn();     TEST_ASSERT_TRUE(g.level[PUMP]);   TEST_ASSERT_TRUE(vd.pumpIsOn());
-    vd.pumpOff();    TEST_ASSERT_FALSE(g.level[PUMP]);  TEST_ASSERT_FALSE(vd.pumpIsOn());
-    vd.masterClose();TEST_ASSERT_FALSE(g.level[MASTER]);TEST_ASSERT_FALSE(vd.masterIsOpen());
+    vd.pumpOn();  TEST_ASSERT_TRUE(g.level[PUMP]);  TEST_ASSERT_TRUE(vd.pumpIsOn());
+    vd.pumpOff(); TEST_ASSERT_FALSE(g.level[PUMP]); TEST_ASSERT_FALSE(vd.pumpIsOn());
 }
 
-// safeState: pump off, both zones close-pulsed, master closed — and the pump is
-// commanded off BEFORE the master is closed (§14 unwind order). Diverter untouched.
+// safeState: pump off, every valve FET de-energized (zones cap-close, diverter to
+// plain) — and the pump is commanded off BEFORE the valves (§14 unwind order).
 static void test_safe_state() {
     ValveDriver vd(g, cfg);
     vd.begin();
-    vd.masterOpen();
+    vd.openZone(0, 0); vd.openZone(1, 0);
+    vd.setDiverter(true, 0);
     vd.pumpOn();
-    int divWritesBefore = g.writesTo(DIV.in1) + g.writesTo(DIV.in2);
 
     vd.safeState(2000);
 
     TEST_ASSERT_FALSE(vd.pumpIsOn());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());
-    TEST_ASSERT_TRUE(g.level[Z0.in2]);   // zones driven closed
-    TEST_ASSERT_TRUE(g.level[Z1.in2]);
-    TEST_ASSERT_TRUE(vd.zoneBusy(0));
-    TEST_ASSERT_TRUE(vd.zoneBusy(1));
-    // pump-off precedes master-close in the write log
-    TEST_ASSERT_TRUE(g.lastIndexOf(PUMP) < g.lastIndexOf(MASTER));
-    // diverter not commanded by safeState
-    TEST_ASSERT_EQUAL_INT(divWritesBefore, g.writesTo(DIV.in1) + g.writesTo(DIV.in2));
-    TEST_ASSERT_FALSE(g.bothHighViolation);
+    TEST_ASSERT_FALSE(g.level[ZF0]); TEST_ASSERT_FALSE(g.level[ZF1]);   // zones de-energized
+    TEST_ASSERT_FALSE(g.level[DIV_CLEAN]); TEST_ASSERT_FALSE(g.level[DIV_FERT]);
+    TEST_ASSERT_FALSE(vd.diverterFert());           // returned to plain (§5)
+    TEST_ASSERT_FALSE(vd.zoneBusy(0));
+    // pump-off precedes the zone de-energize in the write log
+    TEST_ASSERT_TRUE(g.lastIndexOf(PUMP) < g.lastIndexOf(ZF0));
 }
 
 // Out-of-range zone is a no-op (no writes, no crash).
@@ -265,30 +218,29 @@ static void test_zone_bounds() {
     ValveDriver vd(g, cfg);
     vd.begin();
     int before = (int)g.log.size();
-    vd.pulseOpen(7, 0);
-    vd.pulseClose(7, 0);
+    vd.openZone(7, 0);
+    vd.closeZone(7, 0);
     TEST_ASSERT_EQUAL_INT(before, (int)g.log.size());
     TEST_ASSERT_FALSE(vd.zoneBusy(7));
 }
 
-// A millis() rollover mid-pulse must still release on time (unsigned math).
+// A millis() rollover mid-travel must still release the busy flag on time (unsigned math).
 static void test_millis_rollover() {
     ValveDriver vd(g, cfg);
     vd.begin();
     const uint32_t start = 0xFFFFFFF0;   // 16 ms before wrap
-    vd.pulseOpen(0, start);
+    vd.openZone(0, start);
     vd.tick(start + 40);                 // 40 ms elapsed (wrapped past 0) — still < 75
     TEST_ASSERT_TRUE(vd.zoneBusy(0));
-    vd.tick(start + 75);                 // 75 ms elapsed across the wrap — release
+    vd.tick(start + 75);                 // 75 ms elapsed across the wrap — travel done
     TEST_ASSERT_FALSE(vd.zoneBusy(0));
-    TEST_ASSERT_FALSE(g.level[Z0.in1]);
+    TEST_ASSERT_TRUE(g.level[ZF0]);      // held open
 }
 
 // ----------------------------------------------------------------------------
-// RunController (firmware spec §4). Same FakeGpio (so the never-both-high
-// invariant is policed across whole runs), a real ValveDriver, and an explicit
-// clock. Faults are injected via raiseFault(), matching how FlowMonitor/Watchdog
-// will notify it later.
+// RunController (firmware spec §4). The same FakeGpio (so FET levels are observable
+// across whole runs), a real ValveDriver, and an explicit clock. Faults are injected
+// via raiseFault(), matching how FlowMonitor/Watchdog will notify it later.
 // ----------------------------------------------------------------------------
 
 using tinkle::Fault;
@@ -333,21 +285,19 @@ static void test_rc_begin_idle_safe() {
     rc.begin(0);
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
     TEST_ASSERT_FALSE(rc.isFaulted());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
     TEST_ASSERT_EQUAL_INT(-1, rc.activeZone());
     // begin() must configure every actuator pin as an output — fail-dry depends on
-    // the master/pump/bridges being driven, not floating, from boot. Regression
-    // guard: RunController::begin() now calls ValveDriver::begin(), not just
-    // safeState() (which writes levels but configures nothing).
-    TEST_ASSERT_TRUE(g.configured[MASTER] && g.configured[PUMP]);
-    TEST_ASSERT_TRUE(g.configured[Z0.in1] && g.configured[Z0.in2]);
-    TEST_ASSERT_TRUE(g.configured[Z1.in1] && g.configured[Z1.in2]);
-    TEST_ASSERT_TRUE(g.configured[DIV.in1] && g.configured[DIV.in2]);
+    // the pump + valve FETs being driven, not floating, from boot. Regression guard:
+    // RunController::begin() calls ValveDriver::begin(), not just safeState() (which
+    // writes levels but configures nothing).
+    TEST_ASSERT_TRUE(g.configured[PUMP]);
+    TEST_ASSERT_TRUE(g.configured[ZF0] && g.configured[ZF1]);
+    TEST_ASSERT_TRUE(g.configured[DIV_CLEAN] && g.configured[DIV_FERT]);
 }
 
-// Full happy-path run: PREP -> ... -> RUNNING for the duration -> back to IDLE,
-// pump and master off, logged Completed, invariant never violated.
+// Full happy-path run: PREP -> OPEN_ZONE -> START_PUMP -> RUNNING for the duration
+// -> STOP_PUMP -> CLOSE_ZONE -> SETTLE -> IDLE, pump off at the end, logged Completed.
 static void test_rc_full_sequence_completes() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
@@ -356,11 +306,11 @@ static void test_rc_full_sequence_completes() {
     RunRequest req; req.zoneIndex = 0; req.durationSec = 2; req.fertigate = false;
     TEST_ASSERT_TRUE(rc.requestRun(req, 0));
 
-    // Reach RUNNING (first run travels the diverter — position unknown).
+    // Reach RUNNING (plain run: the diverter is already at rest=plain, so no travel).
     uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
     TEST_ASSERT_EQUAL(RunState::Running, rc.state());
-    TEST_ASSERT_TRUE(vd.masterIsOpen());
     TEST_ASSERT_TRUE(vd.pumpIsOn());
+    TEST_ASSERT_TRUE(g.level[ZF0]);                  // zone valve energized open
     TEST_ASSERT_EQUAL_INT(0, rc.activeZone());
     TEST_ASSERT_TRUE(rc.remainingSec(now) >= 1 && rc.remainingSec(now) <= 2);
 
@@ -368,14 +318,13 @@ static void test_rc_full_sequence_completes() {
     now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());
+    TEST_ASSERT_FALSE(g.level[ZF0]);                 // zone de-energized closed
     TEST_ASSERT_EQUAL(RunSummary::Result::Completed, rc.lastRun().result);
     TEST_ASSERT_EQUAL_UINT8(0, rc.lastRun().zone);
-    TEST_ASSERT_FALSE(g.bothHighViolation);
 }
 
-// The diverter only travels when the position must change (§6). A first fert run
-// establishes THROUGH; a second fert run must NOT re-drive the diverter.
+// The diverter only travels when the leg state must change (§6). A first fert run
+// establishes fert; a second fert run must NOT re-drive the legs.
 static void test_rc_diverter_skip_when_unchanged() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
@@ -384,17 +333,36 @@ static void test_rc_diverter_skip_when_unchanged() {
     RunRequest req; req.zoneIndex = 0; req.durationSec = 1; req.fertigate = true;
     rc.requestRun(req, 0);
     uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
-    TEST_ASSERT_TRUE(vd.diverterThrough());
+    TEST_ASSERT_TRUE(vd.diverterFert());
     now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
 
-    int divWritesBefore = g.writesTo(DIV.in1) + g.writesTo(DIV.in2);
+    int divWritesBefore = g.writesTo(DIV_FERT) + g.writesTo(DIV_CLEAN);
     rc.requestRun(req, now);    // same fert state -> no travel
     now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Running; });
-    TEST_ASSERT_EQUAL_INT(divWritesBefore, g.writesTo(DIV.in1) + g.writesTo(DIV.in2));
-    TEST_ASSERT_TRUE(vd.diverterThrough());
+    TEST_ASSERT_EQUAL_INT(divWritesBefore, g.writesTo(DIV_FERT) + g.writesTo(DIV_CLEAN));
+    TEST_ASSERT_TRUE(vd.diverterFert());
 }
 
-// Graceful stop() mid-run unwinds to IDLE with pump+master off; logged Stopped.
+// v1.4 boot state is known to be plain (both legs de-energized), so a first PLAIN run
+// skips the diverter travel entirely — it never commands the legs and reaches RUNNING
+// far inside the diverter-travel window. (DEC-013: no NVS cache, the rest state is by
+// construction.)
+static void test_rc_first_plain_run_skips_diverter() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    int divWritesBefore = g.writesTo(DIV_FERT) + g.writesTo(DIV_CLEAN);
+
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 1; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 2000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL(RunState::Running, rc.state());
+    TEST_ASSERT_TRUE(now < 6000);                    // diverter travel skipped, not waited out
+    TEST_ASSERT_EQUAL_INT(divWritesBefore, g.writesTo(DIV_FERT) + g.writesTo(DIV_CLEAN));
+    TEST_ASSERT_FALSE(vd.diverterFert());
+}
+
+// Graceful stop() mid-run unwinds to IDLE with the pump off; logged Stopped.
 static void test_rc_stop_unwinds() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
@@ -407,9 +375,7 @@ static void test_rc_stop_unwinds() {
     now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());
     TEST_ASSERT_EQUAL(RunSummary::Result::Stopped, rc.lastRun().result);
-    TEST_ASSERT_FALSE(g.bothHighViolation);
 }
 
 // A fault mid-run slams the safe state and latches (§14). Further runs are
@@ -427,7 +393,6 @@ static void test_rc_fault_latches_and_clears() {
     TEST_ASSERT_TRUE(rc.isFaulted());
     TEST_ASSERT_EQUAL(Fault::NoFlow, rc.activeFault());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());
     TEST_ASSERT_EQUAL(RunSummary::Result::Faulted, rc.lastRun().result);
 
     // Refused while latched.
@@ -439,7 +404,6 @@ static void test_rc_fault_latches_and_clears() {
     TEST_ASSERT_TRUE(rc.requestRun(req, now));
     now = pump(rc, now, 5, 8000, [&]{ return rc.state() == RunState::Running; });
     TEST_ASSERT_EQUAL(RunState::Running, rc.state());
-    TEST_ASSERT_FALSE(g.bothHighViolation);
 }
 
 // Unexpected flow during IDLE faults straight to safe state (§14 idle case).
@@ -450,7 +414,7 @@ static void test_rc_fault_from_idle() {
     rc.raiseFault(Fault::UnexpectedFlow, 500);
     TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
     TEST_ASSERT_EQUAL(Fault::UnexpectedFlow, rc.activeFault());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());
+    TEST_ASSERT_FALSE(vd.pumpIsOn());
 }
 
 // Queued requests run sequentially: zone 0 then zone 1.
@@ -475,7 +439,6 @@ static void test_rc_queue_runs_sequentially() {
 
     now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
-    TEST_ASSERT_FALSE(g.bothHighViolation);
 }
 
 // Bad requests are rejected: out-of-range zone, zero duration.
@@ -507,8 +470,8 @@ static void test_rc_sw_max_runtime_clamps() {
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
 }
 
-// §4 step 2: a watchdog trip asserted before OPEN_MASTER aborts to FAULT and the
-// master is NEVER energized.
+// §4 step 2: a watchdog trip asserted before OPEN_ZONE aborts to FAULT — the zone is
+// NEVER energized and the pump (the source) never starts.
 static void test_rc_watchdog_pre_open_gate() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
@@ -519,13 +482,13 @@ static void test_rc_watchdog_pre_open_gate() {
     uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.isFaulted(); });
     TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
     TEST_ASSERT_EQUAL(Fault::Watchdog, rc.activeFault());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());        // never opened water
-    TEST_ASSERT_FALSE(vd.pumpIsOn());
+    TEST_ASSERT_FALSE(g.level[ZF0]);             // zone valve never energized
+    TEST_ASSERT_FALSE(vd.pumpIsOn());            // pump never started
     (void)now;
 }
 
-// A fault landing while the diverter is mid-travel (before the master ever opens)
-// still slams the safe state, never opens the master, and holds the invariant.
+// A fault landing while the diverter is mid-travel (before the zone ever energizes)
+// still slams the safe state and never starts the pump.
 static void test_rc_fault_during_prep() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
@@ -538,13 +501,12 @@ static void test_rc_fault_during_prep() {
 
     rc.raiseFault(Fault::NoFlow, 100);
     TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());        // master never opened during prep
+    TEST_ASSERT_FALSE(g.level[ZF0]);             // zone never energized during prep
     TEST_ASSERT_FALSE(vd.pumpIsOn());
-    TEST_ASSERT_FALSE(g.bothHighViolation);
 }
 
 // stop() during PREP_DIVERTER unwinds to IDLE while the diverter coasts in the
-// background — no both-high, pump+master safe.
+// background — pump + valves safe.
 static void test_rc_stop_during_prep() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
@@ -558,8 +520,6 @@ static void test_rc_stop_during_prep() {
     uint32_t now = pump(rc, 100, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
-    TEST_ASSERT_FALSE(vd.masterIsOpen());
-    TEST_ASSERT_FALSE(g.bothHighViolation);
     (void)now;
 }
 
@@ -892,7 +852,6 @@ void test_persist_defaults_on_empty_nvs() {
     TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, p.zoneDefaultSec(0));
     TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, p.zoneDefaultSec(2));
     TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_SW_MAX_SEC, p.swMaxRuntimeSec());
-    TEST_ASSERT_FALSE(p.diverterKnown());
 }
 
 void test_persist_schema_stamped_once() {
@@ -914,7 +873,6 @@ void test_persist_roundtrip_across_reboot() {
     p.begin();
     p.setZoneDefaultSec(1, 450);
     p.setSwMaxRuntimeSec(900);
-    p.setDiverterPosition(true);
 
     // New instance on the same backing store == reboot: values survive.
     Persistence p2(s, 3);
@@ -922,8 +880,6 @@ void test_persist_roundtrip_across_reboot() {
     TEST_ASSERT_EQUAL_UINT32(450, p2.zoneDefaultSec(1));
     TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, p2.zoneDefaultSec(0));  // untouched
     TEST_ASSERT_EQUAL_UINT32(900, p2.swMaxRuntimeSec());
-    TEST_ASSERT_TRUE(p2.diverterKnown());
-    TEST_ASSERT_TRUE(p2.diverterThrough());
 }
 
 void test_persist_write_on_change() {
@@ -938,22 +894,6 @@ void test_persist_write_on_change() {
     TEST_ASSERT_EQUAL_INT(1, s.writesTo("z0_dur"));
     p.setZoneDefaultSec(0, 300);
     TEST_ASSERT_EQUAL_INT(1, s.writesTo("z0_dur"));
-}
-
-void test_persist_diverter_tristate() {
-    FakeKvStore s;
-    Persistence p(s, 3);
-    p.begin();
-    TEST_ASSERT_FALSE(p.diverterKnown());        // unknown until first actuation
-    p.setDiverterPosition(false);                // AROUND
-    TEST_ASSERT_TRUE(p.diverterKnown());
-    TEST_ASSERT_FALSE(p.diverterThrough());
-    TEST_ASSERT_EQUAL_INT(1, s.writesTo("div_pos"));
-    p.setDiverterPosition(false);                // no change -> no write
-    TEST_ASSERT_EQUAL_INT(1, s.writesTo("div_pos"));
-    p.setDiverterPosition(true);                 // THROUGH
-    TEST_ASSERT_TRUE(p.diverterThrough());
-    TEST_ASSERT_EQUAL_INT(2, s.writesTo("div_pos"));
 }
 
 void test_persist_zone_bounds() {
@@ -1274,51 +1214,18 @@ void test_sched_rc_fert_routing() {
     s.add(mkEntry(0, 6, 0, DAILY, 60));                   // first auto run of the day -> fert
     s.add(mkEntry(1, 6, 5, DAILY, 60));                   // later auto run -> no fert
 
-    // 06:00 — scheduler enqueues the fert run; RunController commands the diverter THROUGH.
+    // 06:00 — scheduler enqueues the fert run; RunController commands the legs to fert.
     s.tick(0);
     TEST_ASSERT_FALSE(rc.isIdle());
-    TEST_ASSERT_TRUE(vd.diverterThrough());               // routed through the Dosatron
+    TEST_ASSERT_TRUE(vd.diverterFert());                  // routed through the Dosatron
     uint32_t now = pump(rc, 0, 5, 80000, [&]{ return rc.isIdle(); });
     TEST_ASSERT_TRUE(rc.isIdle());
 
-    // 06:05 — second auto run of the same day: no fert, diverter travels back AROUND.
+    // 06:05 — second auto run of the same day: no fert, diverter travels back to plain.
     now = 300000;                                         // 06:05 in free-run ms
     s.tick(now);
     TEST_ASSERT_FALSE(rc.isIdle());
-    TEST_ASSERT_FALSE(vd.diverterThrough());              // bypassed
-}
-
-void test_diverter_persist_roundtrip() {
-    // Persist a THROUGH position, then "reboot": a fresh ValveDriver seeded from NVS must
-    // know the position WITHOUT traveling, so a matching fert run skips the 6 s travel.
-    FakeKvStore kv;
-    Persistence p(kv, 3);
-    p.begin();
-    p.setDiverterPosition(true);                          // last run left it THROUGH
-
-    ValveDriver vd(g, cfg);
-    RunController rc(vd, makeRunCfg());
-    rc.begin(0);
-    if (p.diverterKnown()) vd.assumeDiverter(p.diverterThrough());   // boot-seed (mirrors main.cpp)
-    TEST_ASSERT_TRUE(vd.diverterKnown());
-    TEST_ASSERT_TRUE(vd.diverterThrough());
-    TEST_ASSERT_FALSE(vd.diverterBusy());                 // seeding drove no motor
-
-    // A fert (THROUGH) run now skips travel: it reaches Running far under the 6 s window.
-    RunRequest req; req.zoneIndex = 0; req.durationSec = 30; req.fertigate = true;
-    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
-    uint32_t now = pump(rc, 0, 5, 2000, [&]{ return rc.state() == RunState::Running; });
-    TEST_ASSERT_EQUAL_INT((int)RunState::Running, (int)rc.state());
-    TEST_ASSERT_TRUE(now < 6000);                         // travel skipped, not waited out
-
-    // persist-on-travel: a non-fert run travels AROUND; the main-loop poll records it.
-    rc.stop(now);
-    now = pump(rc, now, 5, 4000, [&]{ return rc.isIdle(); });
-    req.fertigate = false;
-    rc.requestRun(req, now);                              // -> diverter AROUND
-    p.setDiverterPosition(vd.diverterThrough());          // mirrors main's write-on-change poll
-    TEST_ASSERT_FALSE(p.diverterThrough());
-    TEST_ASSERT_TRUE(p.diverterKnown());
+    TEST_ASSERT_FALSE(vd.diverterFert());                 // bypassed (plain)
 }
 
 // --- Persistence: flow K (§7 / #34) ----------------------------------------------
@@ -1425,14 +1332,12 @@ void test_flow_full_ring_steady_rate() {
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
-    RUN_TEST(test_pulse_open_then_coast);
-    RUN_TEST(test_pulse_close_then_coast);
-    RUN_TEST(test_never_both_high_on_reversal);
+    RUN_TEST(test_open_zone_holds);
+    RUN_TEST(test_close_zone_deenergizes);
     RUN_TEST(test_independent_timers);
-    RUN_TEST(test_diverter_reversal_never_both_high);
-    RUN_TEST(test_safe_state_during_open_pulse);
-    RUN_TEST(test_diverter_direction);
-    RUN_TEST(test_master_and_pump);
+    RUN_TEST(test_safe_state_during_open);
+    RUN_TEST(test_diverter_legs);
+    RUN_TEST(test_pump);
     RUN_TEST(test_safe_state);
     RUN_TEST(test_zone_bounds);
     RUN_TEST(test_millis_rollover);
@@ -1440,6 +1345,7 @@ int main() {
     RUN_TEST(test_rc_begin_idle_safe);
     RUN_TEST(test_rc_full_sequence_completes);
     RUN_TEST(test_rc_diverter_skip_when_unchanged);
+    RUN_TEST(test_rc_first_plain_run_skips_diverter);
     RUN_TEST(test_rc_stop_unwinds);
     RUN_TEST(test_rc_fault_latches_and_clears);
     RUN_TEST(test_rc_fault_from_idle);
@@ -1475,7 +1381,6 @@ int main() {
     RUN_TEST(test_persist_schema_stamped_once);
     RUN_TEST(test_persist_roundtrip_across_reboot);
     RUN_TEST(test_persist_write_on_change);
-    RUN_TEST(test_persist_diverter_tristate);
     RUN_TEST(test_persist_zone_bounds);
 
     RUN_TEST(test_clock_invalid_until_sync);
@@ -1497,7 +1402,6 @@ int main() {
     RUN_TEST(test_sched_add_capacity);
 
     RUN_TEST(test_sched_rc_fert_routing);
-    RUN_TEST(test_diverter_persist_roundtrip);
 
     RUN_TEST(test_persist_pulses_per_gallon);
     RUN_TEST(test_flow_gallons_from_k);

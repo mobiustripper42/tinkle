@@ -14,14 +14,17 @@
 // Decoupling: the fault detectors that don't exist yet (FlowMonitor §7,
 // Watchdog §9) push faults in via raiseFault() rather than RunController pulling
 // from them. That keeps Phase 1 free of Phase 3/5 dependencies while honoring
-// §14: entering any fault commands the safe state (pump off -> zones closed ->
-// master closed) and latches until an explicit clear.
+// §14: entering any fault commands the safe state (pump off -> zones de-energized
+// -> diverter to plain) and latches until an explicit clear.
 
 namespace tinkle {
 
+// v1.4 sequence (DEC-012): there is no master valve, so no OPEN_MASTER/CLOSE_MASTER
+// steps — the pump (the source) gates water. PREP_DIVERTER -> OPEN_ZONE -> START_PUMP
+// -> RUNNING -> STOP_PUMP -> CLOSE_ZONE -> SETTLE -> IDLE (§4).
 enum class RunState : uint8_t {
-    Idle, PrepDiverter, OpenMaster, OpenZone, StartPump, Running,
-    StopPump, CloseZone, CloseMaster, Settle, Fault
+    Idle, PrepDiverter, OpenZone, StartPump, Running,
+    StopPump, CloseZone, Settle, Fault
 };
 
 // §14 fault codes. None = no latched fault.
@@ -80,7 +83,7 @@ public:
     bool requestRun(const RunRequest& req, uint32_t nowMs) override;
 
     // Graceful cancel of the active run + queue: unwind STOP_PUMP -> CLOSE_ZONE
-    // -> CLOSE_MASTER -> SETTLE -> IDLE from any active step (§4). No-op if idle.
+    // -> SETTLE -> IDLE from any active step (§4). No-op if idle.
     void stop(uint32_t nowMs);
 
     // Emergency fault entry (§14): immediately command the safe state and latch
@@ -93,8 +96,8 @@ public:
     bool clearFault();
 
     // Latest ATtiny trip-line state, pushed in by the Watchdog module (§9). Used
-    // as the §4 step-2 pre-open gate: if asserted when OPEN_MASTER is reached, the
-    // run aborts to FAULT(Watchdog) instead of energizing the master. (A trip that
+    // as the §4 step-2 pre-open gate: if asserted when OPEN_ZONE is reached, the
+    // run aborts to FAULT(Watchdog) instead of energizing the path. (A trip that
     // arrives mid-run still comes in via raiseFault().)
     void setWatchdogTripped(bool tripped) { watchdogTripped_ = tripped; }
 

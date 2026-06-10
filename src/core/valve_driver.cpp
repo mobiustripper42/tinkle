@@ -5,88 +5,71 @@ namespace tinkle {
 ValveDriver::ValveDriver(IGpio& gpio, const ValveConfig& cfg)
     : g_(gpio), cfg_(cfg) {}
 
-// Drive a bridge to Coast / Open / Close while guaranteeing the pair is never
-// both HIGH — not even transiently. We write the side(s) that must be LOW first,
-// then the single side (if any) that goes HIGH. Cmd has no both-high state, so
-// the invariant is also unrepresentable at the call site.
-void ValveDriver::applyBridge(const Bridge& b, Cmd cmd) {
-    const bool h1 = (cmd == Cmd::Open);
-    const bool h2 = (cmd == Cmd::Close);
-    if (!h1) g_.write(b.in1, false);
-    if (!h2) g_.write(b.in2, false);
-    if (h1)  g_.write(b.in1, true);
-    if (h2)  g_.write(b.in2, true);
-}
-
-// Safety contract for this routine: LOW must be the safe/de-asserted level for
-// every output pin. `configureOutput` (pinMode OUTPUT) drives a pin to its
-// default before the explicit write lands, so any pin whose safe state is HIGH
-// would glitch unsafe during boot. Today every actuator is LOW=safe — master FET
-// LOW = NC master closed, pump relay LOW = off, bridge inputs LOW = coast. A pin
-// remap that breaks this must change begin(), not just pins.h.
+// Safety contract for boot: LOW is the safe/rest level for every FET — NC zones
+// closed, NC fert-leg closed, NO bypass open (plain), pump off. configureOutput
+// (pinMode OUTPUT) drives a pin to its default before the explicit write lands, so
+// every actuator being LOW=safe is what makes boot fail-dry. There are no HIGH-safe
+// pins to glitch. (The hardware gate-to-GND pulldowns hold the FETs off through the
+// boot strap window regardless — see the wiring doc.)
 void ValveDriver::begin() {
     for (uint8_t z = 0; z < cfg_.zoneCount; ++z) {
-        g_.configureOutput(cfg_.zones[z].in1);
-        g_.configureOutput(cfg_.zones[z].in2);
-        applyBridge(cfg_.zones[z], Cmd::Coast);
+        g_.configureOutput(cfg_.zoneFet[z]);
+        g_.write(cfg_.zoneFet[z], false);
         zoneTimer_[z] = Timer{false, 0, 0};
     }
-    g_.configureOutput(cfg_.diverter.in1);
-    g_.configureOutput(cfg_.diverter.in2);
-    applyBridge(cfg_.diverter, Cmd::Coast);
-    divTimer_ = Timer{false, 0, 0};
-
-    g_.configureOutput(cfg_.masterFet);
+    g_.configureOutput(cfg_.divCleanFet);
+    g_.configureOutput(cfg_.divFertFet);
     g_.configureOutput(cfg_.pumpRelay);
-    masterClose();
     pumpOff();
+    g_.write(cfg_.divCleanFet, false);   // both legs to rest => plain
+    g_.write(cfg_.divFertFet,  false);
+    diverterFert_ = false;
+    divTimer_ = Timer{false, 0, 0};
 }
 
-void ValveDriver::pulseOpen(uint8_t zone, uint32_t nowMs) {
+void ValveDriver::openZone(uint8_t zone, uint32_t nowMs) {
     if (zone >= cfg_.zoneCount) return;
-    applyBridge(cfg_.zones[zone], Cmd::Open);
-    zoneTimer_[zone] = Timer{true, nowMs, cfg_.pulseMs};
+    g_.write(cfg_.zoneFet[zone], true);                 // energize -> NC valve drives open
+    zoneTimer_[zone] = Timer{true, nowMs, cfg_.zoneTravelMs};
 }
 
-void ValveDriver::pulseClose(uint8_t zone, uint32_t nowMs) {
+void ValveDriver::closeZone(uint8_t zone, uint32_t nowMs) {
     if (zone >= cfg_.zoneCount) return;
-    applyBridge(cfg_.zones[zone], Cmd::Close);
-    zoneTimer_[zone] = Timer{true, nowMs, cfg_.pulseMs};
+    g_.write(cfg_.zoneFet[zone], false);                // de-energize -> cap auto-return closes
+    zoneTimer_[zone] = Timer{true, nowMs, cfg_.zoneTravelMs};
 }
 
-void ValveDriver::setDiverter(bool through, uint32_t nowMs) {
-    diverterThrough_ = through;
-    diverterKnown_   = true;
-    applyBridge(cfg_.diverter, through ? Cmd::Open : Cmd::Close);
+void ValveDriver::setDiverter(bool fertigate, uint32_t nowMs) {
+    diverterFert_ = fertigate;
+    g_.write(cfg_.divFertFet,  fertigate);   // NC fert leg:  high = open
+    g_.write(cfg_.divCleanFet, fertigate);   // NO bypass leg: high = closed
     divTimer_ = Timer{true, nowMs, cfg_.diverterTravelMs};
 }
 
-void ValveDriver::masterOpen()  { g_.write(cfg_.masterFet, true);  masterOpen_ = true;  }
-void ValveDriver::masterClose() { g_.write(cfg_.masterFet, false); masterOpen_ = false; }
-void ValveDriver::pumpOn()      { g_.write(cfg_.pumpRelay, true);  pumpOn_ = true;  }
-void ValveDriver::pumpOff()     { g_.write(cfg_.pumpRelay, false); pumpOn_ = false; }
+void ValveDriver::pumpOn()  { g_.write(cfg_.pumpRelay, true);  pumpOn_ = true;  }
+void ValveDriver::pumpOff() { g_.write(cfg_.pumpRelay, false); pumpOn_ = false; }
 
-void ValveDriver::safeState(uint32_t nowMs) {
-    pumpOff();                                                  // pump off first
-    for (uint8_t z = 0; z < cfg_.zoneCount; ++z)
-        pulseClose(z, nowMs);                                   // then close zones
-    masterClose();                                              // then master closed
-    // Diverter left as-is (§5).
+void ValveDriver::safeState(uint32_t /*nowMs*/) {
+    pumpOff();                                          // source off first — the fail-dry gate
+    for (uint8_t z = 0; z < cfg_.zoneCount; ++z) {      // then de-energize the zones (cap-close)
+        g_.write(cfg_.zoneFet[z], false);
+        zoneTimer_[z].active = false;
+    }
+    g_.write(cfg_.divCleanFet, false);                  // diverter returns to plain (§5)
+    g_.write(cfg_.divFertFet,  false);
+    diverterFert_ = false;
+    divTimer_.active = false;
 }
 
 void ValveDriver::tick(uint32_t nowMs) {
-    // Unsigned subtraction so a millis() rollover doesn't strand a pulse HIGH.
+    // Unsigned subtraction so a millis() rollover doesn't strand a timer. Only the
+    // busy flag clears here — the FET level holds (an open valve stays energized).
     for (uint8_t z = 0; z < cfg_.zoneCount; ++z) {
         Timer& t = zoneTimer_[z];
-        if (t.active && (uint32_t)(nowMs - t.startMs) >= t.durMs) {
-            applyBridge(cfg_.zones[z], Cmd::Coast);
-            t.active = false;
-        }
+        if (t.active && (uint32_t)(nowMs - t.startMs) >= t.durMs) t.active = false;
     }
-    if (divTimer_.active && (uint32_t)(nowMs - divTimer_.startMs) >= divTimer_.durMs) {
-        applyBridge(cfg_.diverter, Cmd::Coast);
+    if (divTimer_.active && (uint32_t)(nowMs - divTimer_.startMs) >= divTimer_.durMs)
         divTimer_.active = false;
-    }
 }
 
 bool ValveDriver::zoneBusy(uint8_t zone) const {

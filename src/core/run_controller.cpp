@@ -21,7 +21,7 @@ RunController::RunController(ValveDriver& valve, const RunConfig& cfg)
 
 void RunController::begin(uint32_t nowMs) {
     valve_.begin();             // configure every actuator pin as an output + safe levels
-    valve_.safeState(nowMs);    // then close-pulse zones to a known-closed boot state
+    valve_.safeState(nowMs);    // then force the fail-dry rest state (pump off, all FETs off)
     state_  = RunState::Idle;
     fault_  = Fault::None;
     qHead_ = qCount_ = 0;
@@ -67,8 +67,8 @@ bool RunController::startNext(uint32_t nowMs) {
 
 void RunController::stop(uint32_t nowMs) {
     // Graceful cancel from any active step. Drop the queue and unwind through the
-    // normal shutdown path. Closing an already-closed zone/master is a harmless
-    // no-op, so this is safe to enter from PREP/OPEN_* as well.
+    // normal shutdown path. Closing an already-closed zone is a harmless no-op, so
+    // this is safe to enter from PREP/OPEN_ZONE as well.
     if (state_ == RunState::Idle || state_ == RunState::Fault) return;
     qHead_ = qCount_ = 0;
     stopping_ = true;
@@ -78,7 +78,7 @@ void RunController::stop(uint32_t nowMs) {
 void RunController::raiseFault(Fault code, uint32_t nowMs) {
     if (code == Fault::None) return;                // "no fault" is a caller bug, not a latch
     if (state_ == RunState::Fault) return;          // first fault wins
-    valve_.safeState(nowMs);                        // pump off -> zones closed -> master closed
+    valve_.safeState(nowMs);                        // pump off -> zones de-energized -> diverter plain
     fault_ = code;
     qHead_ = qCount_ = 0;
     lastRun_ = makeSummary(RunSummary::Result::Faulted, current_, fault_);
@@ -98,28 +98,22 @@ void RunController::enter(RunState s, uint32_t nowMs) {
     stateStartMs_ = nowMs;
     switch (s) {
         case RunState::PrepDiverter:
-            // Only spend the 6 s travel when the position actually needs to
-            // change (§6). First run (position unknown) always travels.
-            if (!(valve_.diverterKnown() &&
-                  valve_.diverterThrough() == current_.fertigate)) {
+            // Only spend the travel when the leg state actually needs to change (§6).
+            // The rest/boot state is plain (both legs de-energized), so a first plain
+            // run skips travel; a first fert run travels.
+            if (valve_.diverterFert() != current_.fertigate)
                 valve_.setDiverter(current_.fertigate, nowMs);
-            }
             break;
-        case RunState::OpenMaster:
-            // §4 step 2: never open water if the hardware backstop reports tripped.
+        case RunState::OpenZone:
+            // §4 step 2: never energize the path if the hardware backstop reports
+            // tripped — abort before the zone opens and the pump (the source) starts.
             if (watchdogTripped_) { raiseFault(Fault::Watchdog, nowMs); return; }
-            valve_.masterOpen();
-            // OpenMaster -> OpenZone -> StartPump are instantaneous (advance one
-            // tick each, ≤~30 ms total). Zero inter-state dwell is intentional for
-            // now; bench-confirm whether the NC master + latch want a settle beat
-            // before the pump loads (§15 — physical constants confirmed on parts).
+            valve_.openZone(current_.zoneIndex, nowMs);
             break;
-        case RunState::OpenZone:    valve_.pulseOpen(current_.zoneIndex, nowMs); break;
-        case RunState::StartPump:   valve_.pumpOn();                           break;
-        case RunState::Running:     runStartMs_ = nowMs;                       break;
-        case RunState::StopPump:    valve_.pumpOff();                          break;
-        case RunState::CloseZone:   valve_.pulseClose(current_.zoneIndex, nowMs); break;
-        case RunState::CloseMaster: valve_.masterClose();                      break;
+        case RunState::StartPump:   valve_.pumpOn();                            break;
+        case RunState::Running:     runStartMs_ = nowMs;                        break;
+        case RunState::StopPump:    valve_.pumpOff();                           break;
+        case RunState::CloseZone:   valve_.closeZone(current_.zoneIndex, nowMs);break;
         case RunState::Settle:
             // Log the run outcome (§4 step 9). Diverter left as-is.
             lastRun_ = makeSummary(
@@ -139,14 +133,13 @@ void RunController::tick(uint32_t nowMs) {
             return;                                  // nothing advances on its own
 
         case RunState::PrepDiverter:
-            if (!valve_.diverterBusy()) enter(RunState::OpenMaster, nowMs);
-            return;
-
-        case RunState::OpenMaster:                   // instantaneous; advance next tick
-            enter(RunState::OpenZone, nowMs);
+            if (!valve_.diverterBusy()) enter(RunState::OpenZone, nowMs);
             return;
 
         case RunState::OpenZone:
+            // Wait out the zone valve's travel so the pump never loads against a
+            // closed/mid-travel valve (§4 step 2). (The watchdog pre-open gate fired
+            // on OpenZone entry; a trip mid-travel still arrives via raiseFault().)
             if (!valve_.zoneBusy(current_.zoneIndex)) enter(RunState::StartPump, nowMs);
             return;
 
@@ -164,11 +157,7 @@ void RunController::tick(uint32_t nowMs) {
             return;
 
         case RunState::CloseZone:
-            if (!valve_.zoneBusy(current_.zoneIndex)) enter(RunState::CloseMaster, nowMs);
-            return;
-
-        case RunState::CloseMaster:
-            enter(RunState::Settle, nowMs);
+            if (!valve_.zoneBusy(current_.zoneIndex)) enter(RunState::Settle, nowMs);
             return;
 
         case RunState::Settle:

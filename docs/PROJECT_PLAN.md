@@ -75,11 +75,11 @@ The safety-critical heart. Bench-testable on LEDs/scope; no water.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 1.7 | `ValveDriver` + `RunController` + `pins.h` to the on/off model — one FET per valve (no H-bridge, no `IN1/IN2`, no never-both-high), **master removed**, diverter = two leg FETs, `pulseOpen/Close`→`openZone/closeZone` + `setDiverter(fertigate)`, drop `MASTER_FET`/`div_pos` cache, `ZONE_TRAVEL_MS`≈10s, re-map pins, update native tests | 8 | [ ] · §3/§4/§5; DEC-011/012/013 |
+| 1.8 | `ValveDriver` + `RunController` + `pins.h` to the on/off model — one FET per valve (no H-bridge, no `IN1/IN2`, no never-both-high), **master removed**, diverter = two leg FETs, `pulseOpen/Close`→`openZone/closeZone` + `setDiverter(fertigate)`, drop `MASTER_FET`/`div_pos` cache, `ZONE_TRAVEL_MS`≈10s, re-map pins, update native tests | 8 | [x] · §3/§4/§5; DEC-011/012/013 |
 | 3.x | Flow-fault manual override (DEC-015) — settings flag + `/api/settings` + SPA banner; `FlowMonitor` honors it | 3 | [ ] · §7/§10; lands with Phase 3/4 |
 | 5.x | Auto-return self-test (DEC-014) — periodic valve-rests-closed check; flags a stuck/degraded valve | 3 | [ ] · §14; correctness, not a safety barrier |
 
-Scope note: v1.4 sourcing settled on a 2-wire **auto-return on/off** valve (not the reverse-polarity hold-position part v1.3 assumed), so 1.7 is a real `ValveDriver` re-architecture, not the rename it was first scoped as (3→8). The §4 run sequence already gates on `zoneBusy()`, so the `RunController` seam mostly survives; the driver + pin map underneath change, and the master open/close states drop. The hardware / firmware / wiring specs + DECISIONS already describe the target; this lands it in `src/core` + `src/esp32`. Docs-only pass per Eric's call.
+Scope note: v1.4 sourcing settled on a 2-wire **auto-return on/off** valve (not the reverse-polarity hold-position part v1.3 assumed), so 1.8 was a real `ValveDriver` re-architecture, not the rename it was first scoped as (3→8). The §4 run sequence already gated on `zoneBusy()`, so the `RunController` seam survived; the driver + pin map underneath changed, and the master open/close states dropped. Done: `src/core/valve_driver.*`, `run_controller.*`, `persistence.*` (div_pos cache out), `src/esp32/pins.h` + `main.cpp`, the ATtiny comment, the Wokwi `diagram.json`, and the native tests (72 green). (Renumbered from 1.7 — Phase 1.7 was the 3-zone button model, #23.)
 
 **Ejection point:** A simulated/bench run sequences zone→pump and unwinds
 to safe state, driven by a button, with a live countdown.

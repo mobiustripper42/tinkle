@@ -7,7 +7,6 @@ namespace tinkle {
 // keys, which would alias siblings). The per-zone key is generated in zoneKey().
 static constexpr const char* KEY_SCHEMA  = "schema_ver";  // 10
 static constexpr const char* KEY_SW_MAX  = "sw_max_sec";  // 10
-static constexpr const char* KEY_DIV_POS = "div_pos";     //  7
 static constexpr const char* KEY_K_PPG   = "k_ppg";       //  5  flow K, pulses/gallon (§7)
 
 const char* Persistence::zoneKey(char* buf, uint8_t zone) {
@@ -23,7 +22,6 @@ Persistence::Persistence(IKeyValueStore& store, uint8_t zoneCount)
     : store_(store),
       zoneCount_(zoneCount > ValveConfig::MAX_ZONES ? ValveConfig::MAX_ZONES : zoneCount),
       swMaxRuntimeSec_(DEFAULT_SW_MAX_SEC),
-      divPos_(DivPos::Unknown),
       pulsesPerGallon_(DEFAULT_PULSES_PER_GALLON) {
     for (uint8_t z = 0; z < ValveConfig::MAX_ZONES; ++z) {
         zoneDefaultSec_[z] = DEFAULT_RUN_SEC;
@@ -53,11 +51,6 @@ void Persistence::begin() {
     }
     swMaxRuntimeSec_ = store_.getU32(KEY_SW_MAX, DEFAULT_SW_MAX_SEC);
 
-    uint8_t raw = store_.getU8(KEY_DIV_POS, static_cast<uint8_t>(DivPos::Unknown));
-    divPos_ = (raw == static_cast<uint8_t>(DivPos::Around))  ? DivPos::Around
-            : (raw == static_cast<uint8_t>(DivPos::Through)) ? DivPos::Through
-            : DivPos::Unknown;
-
     pulsesPerGallon_ = store_.getFloat(KEY_K_PPG, DEFAULT_PULSES_PER_GALLON);
 }
 
@@ -78,13 +71,6 @@ void Persistence::setSwMaxRuntimeSec(uint32_t sec) {
     if (swMaxRuntimeSec_ == sec) return;
     swMaxRuntimeSec_ = sec;
     store_.putU32(KEY_SW_MAX, sec);
-}
-
-void Persistence::setDiverterPosition(bool through) {
-    DivPos next = through ? DivPos::Through : DivPos::Around;
-    if (divPos_ == next) return;
-    divPos_ = next;
-    store_.putU8(KEY_DIV_POS, static_cast<uint8_t>(next));
 }
 
 void Persistence::setPulsesPerGallon(float k) {

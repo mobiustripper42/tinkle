@@ -17,8 +17,8 @@
 
 // Tinkle ESP32 firmware — entry point and the cooperative non-blocking loop
 // (firmware spec §2). On boot RunController::begin forces the fail-dry safe state
-// through ValveDriver (pump off -> zones closed -> master closed) and parks the
-// actuation core at IDLE. The loop then ticks that core every pass off a single
+// through ValveDriver (pump off -> all valve FETs de-energized -> diverter plain) and
+// parks the actuation core at IDLE. The loop then ticks that core every pass off a single
 // millis() read, with no delay() anywhere, and instruments each tick against the
 // 10 ms budget.
 //
@@ -36,10 +36,10 @@ static ValveConfig makeValveConfig() {
     ValveConfig cfg;
     cfg.zoneCount = ZONE_COUNT;
     for (uint8_t i = 0; i < ZONE_COUNT; ++i)
-        cfg.zones[i] = Bridge{ ZONES[i].in1, ZONES[i].in2 };
-    cfg.diverter  = Bridge{ DIV_IN1, DIV_IN2 };   // in1 = THROUGH (fertigate), in2 = AROUND
-    cfg.masterFet = MASTER_FET;
-    cfg.pumpRelay = PUMP_RELAY;
+        cfg.zoneFet[i] = ZONES[i].fetPin;         // one low-side FET per zone (v1.4, DEC-011)
+    cfg.divCleanFet = DIV_CLEAN_FET;              // NO bypass leg (DEC-013)
+    cfg.divFertFet  = DIV_FERT_FET;              // NC Dosatron leg
+    cfg.pumpRelay   = PUMP_RELAY;                // the source gate (DEC-012); no master
     return cfg;
 }
 
@@ -49,9 +49,10 @@ static ValveDriver       valve(gpio, valveCfg);
 static const RunConfig   runCfg;                  // firmware spec §15 defaults
 static RunController      runController(valve, runCfg);
 
-// Persistence (§8 / DEC-008). Owns the per-zone manual default durations, swMaxRuntimeSec,
-// and cached diverter position in NVS, keyed for forward-compat as zones grow. begin()
-// runs in setup() after the store opens; reads fall back to defaults on empty NVS.
+// Persistence (§8 / DEC-008). Owns the per-zone manual default durations and
+// swMaxRuntimeSec in NVS, keyed for forward-compat as zones grow. begin() runs in
+// setup() after the store opens; reads fall back to defaults on empty NVS. (No cached
+// diverter position — the two-leg diverter rests plain by construction, DEC-013.)
 static PreferencesStore  prefsStore;
 static Persistence       persistence(prefsStore, ZONE_COUNT);
 
@@ -117,20 +118,13 @@ void setup() {
 
     // Safe state before anything can command water, then arm the core at IDLE.
     // begin() configures every actuator pin as an output and drives the fail-dry
-    // safe sequence through ValveDriver (pump off -> zones closed -> master closed).
+    // safe sequence through ValveDriver (pump off -> all valve FETs off -> diverter plain).
     runController.begin(millis());
 
     // Open NVS and load stored config (§8 / DEC-008) before the loop can act on it:
     // per-zone default durations feed manual-button runs; empty NVS falls back to defaults.
     prefsStore.begin();
     persistence.begin();
-
-    // Restore the last-known diverter position from NVS (§6/§8). A motorized ball valve
-    // holds position with no power, so seeding the cache lets the first run skip the 6 s
-    // travel when it already matches. Must follow runController.begin() (which ran
-    // valve.begin()/safeState(), both of which leave the diverter as-is).
-    if (persistence.diverterKnown())
-        valve.assumeDiverter(persistence.diverterThrough());
 
     // Configure TZ + SNTP and take the first sync attempt (§13). No network yet, so this
     // stays invalid until Phase 4 brings up WiFi; the call is harmless until then.
@@ -236,16 +230,9 @@ void loop() {
         digitalWrite(ZONES[z].ledPin, ledLevel(m, blinkOn) ? HIGH : LOW);
     }
 
-    // Persist the diverter position once travel COMPLETES (§6/§8). Observing it here keeps
-    // the run path free of a Persistence dependency (RunController is the sole commander).
-    // Gating on !diverterBusy() records the position the valve actually *reached*, not the
-    // one merely commanded — so a power loss mid-travel doesn't leave NVS claiming a
-    // destination the valve never made. Write-on-change down in Persistence guards flash, so
-    // this is a no-op write every settled tick. (Residual edge: a power loss mid-travel
-    // strands the valve mid-stroke regardless of NVS; the next matching run may skip travel
-    // and mis-route once. Never holds water on — the master FET gates water. Accepted, V1.)
-    if (valve.diverterKnown() && !valve.diverterBusy())
-        persistence.setDiverterPosition(valve.diverterThrough());
+    // (No diverter-position persistence in v1.4: the two-leg NO/NC diverter rests plain
+    // by construction, so there is no hold-state to cache — RunController sets the legs
+    // per-run in PREP_DIVERTER, DEC-013.)
 
     // (flow / web / watchdog tick here as they land)
 

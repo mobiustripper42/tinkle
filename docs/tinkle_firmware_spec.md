@@ -128,12 +128,11 @@ Every channel is a **single on/off output** (a low-side FET). The safe/rest leve
 
 The travel timers must be independent per actuator so a diverter travel doesn't block a zone's travel. `zoneBusy(zone)` / `diverterBusy()` gate the §4 sequence.
 
-> **Implementation note (pending — task 1.7):** the shipped code still implements the v1.1
-> H-bridge/latching model — `pulseOpen`/`pulseClose` over `IN1/IN2` pairs, `PULSE_MS`, a
-> `MASTER_FET`, and the never-both-high invariant. The rework to the on/off model above
-> (one FET per valve, master removed, diverter as two leg FETs, `pins.h` re-map, native
-> tests) is tracked in `PROJECT_PLAN.md`. The §4 sequence already gates on `zoneBusy()`, so
-> the `RunController` seam survives; `ValveDriver` and `pins.h` underneath change.
+> **Implemented (task 1.8):** `ValveDriver` and `pins.h` are the on/off model above — one
+> low-side FET per valve (`openZone`/`closeZone`), no `MASTER_FET`, the diverter as two leg
+> FETs, the `pins.h` re-map, and the native tests rewritten. The §4 sequence kept its
+> `zoneBusy()`/`diverterBusy()` gates; only the master open/close states were dropped
+> (DEC-011/012/013).
 
 ---
 
@@ -142,7 +141,7 @@ The travel timers must be independent per actuator so a diverter travel doesn't 
 - Each schedule entry has a `fertigate` bool. Default scheduler **policy:** the first enabled run of each calendar day is marked `fertigate=true`, all others `false`. Policy is overridable per entry (`fertOverride: auto|on|off`).
 - `RunController` sets the diverter legs per `fertigate` at run start (PREP_DIVERTER), skipping the travel when the legs are already in the wanted state (avoids needless ~6 s travel + wear). No cached position — the rest state is defined by the NO/NC valve types.
 - Manual runs default `fertigate=false` unless explicitly requested.
-- **Implemented (#27 policy / #28 actuation):** the one-fert-run/day policy + `auto|on|off` per-entry override live in the `Scheduler` (`resolveFert`, day boundary off the `Clock`); `RunController` sets the diverter in the §4 `PrepDiverter` step from `RunRequest::fertigate`. Fail-dry holds with no master: the diverter is set *before* `START_PUMP`, and the **pump** (the source) gates water, so a fert decision never holds water on. (The v1.4 two-leg diverter + the drop of the cached-position machinery land with the task 1.7 rework — DEC-013.)
+- **Implemented (#27 policy / #28 actuation):** the one-fert-run/day policy + `auto|on|off` per-entry override live in the `Scheduler` (`resolveFert`, day boundary off the `Clock`); `RunController` sets the diverter in the §4 `PrepDiverter` step from `RunRequest::fertigate`. Fail-dry holds with no master: the diverter is set *before* `START_PUMP`, and the **pump** (the source) gates water, so a fert decision never holds water on. (The v1.4 two-leg diverter + the drop of the cached-position machinery landed in the task 1.8 rework — DEC-013.)
 
 ---
 
@@ -193,7 +192,7 @@ store as that module lands.
 diverter position (`assumeDiverter()` boot-seed + write-on-change) for the hold-position
 3-way. The two-leg NO/NC diverter has no hold-state to remember — each run sets the legs from
 the fert flag and the unpowered rest is plain water — so `div_pos` and the boot-seed are
-dropped in the task 1.7 rework. (`swMaxRuntimeSec` is still stored-not-read-back until
+dropped in the task 1.8 rework. (`swMaxRuntimeSec` is still stored-not-read-back until
 RunController gains runtime config in Phase 4.)
 
 ---
@@ -342,7 +341,7 @@ struct ScheduleEntry {
 
 | Constant | Default | Notes |
 |---|---|---|
-| `ZONE_TRAVEL_MS` | 10000 | NC valve open/close travel; bench-confirm (datasheet 6–10 s). Replaces `PULSE_MS` — task 1.7 |
+| `ZONE_TRAVEL_MS` | 10000 | NC valve open/close travel; bench-confirm (datasheet 6–10 s). Replaces `PULSE_MS` — task 1.8 |
 | `DIVERTER_TRAVEL_MS` | 10000 | diverter-leg travel (same valve family) |
 | `HEARTBEAT_MS` | 250 | ESP32 → ATtiny toggle |
 | `HB_TIMEOUT_MS` | 2000 | ATtiny trip on lost heartbeat |
