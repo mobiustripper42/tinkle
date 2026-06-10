@@ -28,9 +28,10 @@ enum class RunState : uint8_t {
 };
 
 // §14 fault codes. None = no latched fault. Count is a sentinel (keep last) —
-// FaultManager sizes its condition table off it.
+// FaultManager sizes its condition table off it. ValveRest (DEC-014) is
+// log-only: it reaches the ring via FaultManager::note(), never raiseFault.
 enum class Fault : uint8_t {
-    None, NoFlow, UnexpectedFlow, Watchdog, CalRange, Clock, Count
+    None, NoFlow, UnexpectedFlow, Watchdog, CalRange, Clock, ValveRest, Count
 };
 
 // A run request: which zone, how long, and whether to fertigate (diverter THROUGH).

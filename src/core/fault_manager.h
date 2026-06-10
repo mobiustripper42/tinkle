@@ -40,6 +40,11 @@ public:
     // Call every loop tick: edge-detects a newly latched fault into the log.
     void tick(uint32_t nowMs);
 
+    // Append a NON-LATCHING entry to the log ring — maintenance findings (the
+    // DEC-014 valve-rest flag) that deserve the §10 Faults surface without
+    // commanding the safe state or blocking runs. None is ignored.
+    void note(Fault code, uint32_t nowMs);
+
     // Detectors push the current truth of their fault's underlying condition.
     // Out-of-range codes are ignored.
     void setConditionActive(Fault code, bool active);
@@ -60,6 +65,7 @@ public:
 private:
     static constexpr uint8_t CODE_COUNT = (uint8_t)Fault::Count;   // sized off the enum
     static uint8_t idx(Fault code) { return (uint8_t)code; }
+    void append(Fault code, uint32_t nowMs);
 
     RunController& rc_;
     Fault          prevFault_ = Fault::None;

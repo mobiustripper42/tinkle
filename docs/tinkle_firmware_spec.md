@@ -343,6 +343,7 @@ struct ScheduleEntry {
 - Fault codes: `FAULT_NO_FLOW`, `FAULT_UNEXPECTED_FLOW`, `FAULT_WATCHDOG`, `FAULT_CAL_RANGE`, `FAULT_CLOCK` (optional/non-blocking).
 - Hierarchy of trust: software stops first; the ATtiny + safety relay **cutting pump power** is the hardware backstop (the source gate, DEC-012). Firmware must never assume it is the only thing keeping water off.
 - **Implemented (#50, software half).** `FaultManager` (core, `fault_manager.{h,cpp}`) on top of `RunController`'s latch: a fixed ring of recent fault entries (code + millis timestamp — the §10 status/Faults surface), and the **resolved-condition clear gate**. Detectors push their condition's current truth in each tick (`setConditionActive`): watchdog resolved = trip line released; unexpected-flow resolved = no flow while idle (the rolling rate decayed to 0). One-shot codes nobody pushes (`FAULT_CAL_RANGE`) clear freely. Every clear path — button long-press now, `POST /api/fault/clear` in Phase 4 — goes through `requestClear()`, so a latched-but-unresolved fault is a visible no-op (no §12 ack flash), not a false clear. The physical safety-relay wiring half of 5.3 is bench/parts-gated and verifies under §17 (#51).
+- **Implemented (#52, DEC-014).** `ValveRestMonitor` (core, `valve_rest_monitor.{h,cpp}`) — the auto-return self-test. After a run's close travel, it watches the flow meter from SETTLE entry through IDLE for `REST_WINDOW_MS`: more than `REST_MAX_PULSES` means the just-closed zone still passes water → that zone is flagged. **Non-latching by design** — the flag becomes a `FaultManager::note()` ring entry (`FAULT_VALVE_REST`, E6, log-only) + a serial line + `flaggedMask()` for the Phase 4 status API, never a `raiseFault` (a dribble must not halt irrigation; a gross leak still latches via the §7 idle check, a decade above this threshold). The flag **self-heals**: a later clean rest window on the same zone clears it. A queued run chaining SETTLE→next aborts the check silently (the window would measure the next run's flow) — the last run of a queue session is still checked, so every used zone gets covered. Diverter legs are out of scope for V1 (no flow signature at rest); the §17 bench item exercises the zone path.
 
 ---
 
@@ -360,6 +361,8 @@ struct ScheduleEntry {
 | `IDLE_FLOW_FAULT_PULSES` | 50 (seed, tune) | unexpected-flow threshold over one idle window (`FlowFaultDetector`, #35) |
 | `CAL_RUN_SEC` | 120 (seed; `TINKLE_SIM`: 10) | calibration run ceiling, its own bound under `swMaxRuntimeSec` (#36) |
 | cal sanity bounds | K ∈ [50, 5000] p/gal, ≥ 0.25 gal | reject absurd calibrations → `FAULT_CAL_RANGE` (#36; seeds, tune) |
+| `REST_WINDOW_MS` | 10000 (seed; `TINKLE_SIM`: 3000) | DEC-014 post-close rest window (#52) |
+| `REST_MAX_PULSES` | 5 (seed, tune) | pulses at rest above which the closed zone is flagged (#52) |
 | button debounce | 30 ms | on top of RC |
 
 Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
