@@ -14,6 +14,9 @@
 #include "flow_monitor.h"
 #include "flow_fault_detector.h"
 #include "calibration_controller.h"
+#include "watchdog_trip.h"
+#include "watchdog.h"
+#include "fault_manager.h"
 
 // Native unit tests for ValveDriver (firmware spec §5, v1.4). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -1674,6 +1677,321 @@ static void test_cal_tally_immune_to_chained_run() {
     TEST_ASSERT_EQUAL_FLOAT(450.0f, r.flow.k());
 }
 
+// ----------------------------------------------------------------------------
+// Watchdog handshake (firmware spec §9, Unit B / DEC-016). Both halves of the one
+// protocol, tested against the same constants: WatchdogTrip is the EXACT unit the
+// attiny85 binary compiles (src/core/watchdog_trip.h), Watchdog is the ESP32
+// emitter/verdict side, and the integration test locks the DEC-003 criterion —
+// the heartbeat exists ONLY while the pump is commanded.
+// ----------------------------------------------------------------------------
+
+using tinkle::FaultManager;
+using tinkle::Watchdog;
+using tinkle::WatchdogTrip;
+
+namespace {
+
+WatchdogTrip::Config makeTripCfg() {
+    WatchdogTrip::Config c;
+    c.hbTimeoutMs = 2000;       // §15 HB_TIMEOUT_MS
+    c.hardMaxMs   = 60000;      // 1 min ceiling keeps tests fast (real: 30 min, §15)
+    return c;
+}
+
+// Feed a square wave: toggle `level` every halfMs, polling the trip logic at a
+// 50 ms tick (the ATtiny loop is far faster; coarse polling is the harder case).
+uint32_t hbBeat(WatchdogTrip& wt, bool& level, uint32_t now, uint32_t halfMs, uint32_t spanMs) {
+    const uint32_t end = now + spanMs;
+    uint32_t nextToggle = now;
+    while ((int32_t)(end - now) > 0) {
+        if ((int32_t)(now - nextToggle) >= 0) { level = !level; nextToggle += halfMs; }
+        wt.tick(level, now);
+        now += 50;
+    }
+    return now;
+}
+
+// Hold the line still for spanMs.
+uint32_t hbQuiet(WatchdogTrip& wt, bool level, uint32_t now, uint32_t spanMs) {
+    const uint32_t end = now + spanMs;
+    while ((int32_t)(end - now) > 0) { wt.tick(level, now); now += 50; }
+    return now;
+}
+
+constexpr uint8_t HB_PIN = 21;   // synthetic heartbeat pin, distinct from valve pins
+
+} // namespace
+
+// Power-up default is DISARMED, and a line frozen at any level never arms — only
+// an edge does (§9: fail dry on watchdog reboot).
+static void test_wdt_powerup_disarmed_frozen_line_never_arms() {
+    WatchdogTrip wt(makeTripCfg());
+    wt.begin(true, 0);                       // captured mid-stream HIGH: not an edge
+    TEST_ASSERT_FALSE(wt.armed());
+    TEST_ASSERT_FALSE(wt.tripped());
+    uint32_t now = hbQuiet(wt, true, 0, 10000);
+    TEST_ASSERT_FALSE(wt.armed());
+    TEST_ASSERT_FALSE(wt.tripped());
+    (void)now;
+}
+
+// The first heartbeat edge arms; edges within the timeout hold it armed.
+static void test_wdt_arms_on_edge_and_holds_with_beat() {
+    WatchdogTrip wt(makeTripCfg());
+    wt.begin(false, 0);
+    bool level = false;
+    uint32_t now = hbQuiet(wt, level, 0, 500);
+    TEST_ASSERT_FALSE(wt.armed());
+    now = hbBeat(wt, level, now, 250, 30000);   // §15 cadence, half the test ceiling
+    TEST_ASSERT_TRUE(wt.armed());
+    TEST_ASSERT_FALSE(wt.tripped());
+}
+
+// Heartbeat quiet while armed disarms SILENTLY within the timeout — a clean run
+// end is not a trip (§17 item 2 is about the relay opening, which disarm does).
+static void test_wdt_clean_disarm_no_trip() {
+    WatchdogTrip wt(makeTripCfg());
+    wt.begin(false, 0);
+    bool level = false;
+    uint32_t now = hbBeat(wt, level, 0, 250, 5000);
+    TEST_ASSERT_TRUE(wt.armed());
+    now = hbQuiet(wt, level, now, 2100);        // just past HB_TIMEOUT_MS
+    TEST_ASSERT_FALSE(wt.armed());
+    TEST_ASSERT_FALSE(wt.tripped());
+}
+
+// §17 item 3: a beating-but-overrun ESP32 is cut at HARD_MAX_RUNTIME on the
+// ATtiny's own clock, TRIPPED asserts, and the lockout HOLDS while the ESP32
+// keeps claiming run-active.
+static void test_wdt_hard_max_lockout_holds_under_beat() {
+    WatchdogTrip wt(makeTripCfg());
+    wt.begin(false, 0);
+    bool level = false;
+    uint32_t now = hbBeat(wt, level, 0, 250, 61000);    // past the 60 s test ceiling
+    TEST_ASSERT_FALSE(wt.armed());
+    TEST_ASSERT_TRUE(wt.tripped());
+    now = hbBeat(wt, level, now, 250, 10000);           // still beating — still locked
+    TEST_ASSERT_FALSE(wt.armed());
+    TEST_ASSERT_TRUE(wt.tripped());
+}
+
+// Lockout releases only after the heartbeat goes quiet for the timeout (the ESP32
+// latched FAULT_WATCHDOG, safed, stopped beating) — the §14 resolved signal.
+static void test_wdt_lockout_releases_after_quiet() {
+    WatchdogTrip wt(makeTripCfg());
+    wt.begin(false, 0);
+    bool level = false;
+    uint32_t now = hbBeat(wt, level, 0, 250, 61000);
+    TEST_ASSERT_TRUE(wt.tripped());
+    now = hbQuiet(wt, level, now, 2100);
+    TEST_ASSERT_FALSE(wt.tripped());
+    TEST_ASSERT_FALSE(wt.armed());
+}
+
+// A clean disarm resets the runtime ceiling: two back-to-back runs of 40 s each
+// (total 80 s > the 60 s ceiling) must both survive — HARD_MAX is per armed
+// period, which the per-run heartbeat window makes per run.
+static void test_wdt_ceiling_resets_per_arm() {
+    WatchdogTrip wt(makeTripCfg());
+    wt.begin(false, 0);
+    bool level = false;
+    uint32_t now = hbBeat(wt, level, 0, 250, 40000);
+    TEST_ASSERT_TRUE(wt.armed());
+    now = hbQuiet(wt, level, now, 2500);                // run gap >> HB_TIMEOUT
+    TEST_ASSERT_FALSE(wt.armed());
+    now = hbBeat(wt, level, now, 250, 40000);
+    TEST_ASSERT_TRUE(wt.armed());                       // would be Lockout if cumulative
+    TEST_ASSERT_FALSE(wt.tripped());
+}
+
+// All interval math is uint32_t subtraction: arm, beat, and disarm across the
+// ~49.7-day millis() wrap.
+static void test_wdt_millis_rollover() {
+    WatchdogTrip wt(makeTripCfg());
+    const uint32_t start = 0xFFFFFFFFu - 5000u;
+    wt.begin(false, start);
+    bool level = false;
+    uint32_t now = hbBeat(wt, level, start, 250, 20000);   // crosses the wrap
+    TEST_ASSERT_TRUE(wt.armed());
+    TEST_ASSERT_FALSE(wt.tripped());
+    now = hbQuiet(wt, level, now, 2100);
+    TEST_ASSERT_FALSE(wt.armed());
+}
+
+// ESP32 side: the heartbeat is emitted ONLY while the pump is commanded
+// (START_PUMP/RUNNING) — every other state is silent and parks the line LOW.
+// This is the DEC-003 criterion at module level.
+static void test_watchdog_emits_only_in_pump_window() {
+    Watchdog wd(g, HB_PIN, Watchdog::Config{});
+    wd.begin(0);
+    TEST_ASSERT_FALSE(g.level[HB_PIN]);
+
+    const RunState silent[] = { RunState::Idle, RunState::PrepDiverter,
+                                RunState::OpenZone, RunState::StopPump,
+                                RunState::CloseZone, RunState::Settle,
+                                RunState::Fault };
+    uint32_t now = 0;
+    for (RunState s : silent) {
+        const int before = g.writesTo(HB_PIN);
+        for (uint32_t t = 0; t < 1000; t += 50) { wd.tick(s, false, now); now += 50; }
+        TEST_ASSERT_EQUAL_INT(before, g.writesTo(HB_PIN));   // not one write
+        TEST_ASSERT_FALSE(wd.emitting());
+    }
+
+    wd.tick(RunState::StartPump, false, now);
+    TEST_ASSERT_TRUE(wd.emitting());
+    TEST_ASSERT_TRUE(g.level[HB_PIN]);          // first edge fires immediately
+}
+
+// Toggle cadence: an edge on window entry, then one every HEARTBEAT_MS; leaving
+// the window parks the line LOW.
+static void test_watchdog_toggle_cadence_and_park() {
+    Watchdog wd(g, HB_PIN, Watchdog::Config{});   // 250 ms
+    wd.begin(0);
+    const int baseline = g.writesTo(HB_PIN);      // begin()'s park write
+
+    uint32_t now = 1000;
+    for (uint32_t t = 0; t <= 1000; t += 50) { wd.tick(RunState::Running, false, now); now += 50; }
+    // Edges at t=0 (entry), 250, 500, 750, 1000 — five toggles, alternating levels.
+    TEST_ASSERT_EQUAL_INT(baseline + 5, g.writesTo(HB_PIN));
+
+    wd.tick(RunState::Settle, false, now);        // window exit
+    TEST_ASSERT_FALSE(wd.emitting());
+    TEST_ASSERT_FALSE(g.level[HB_PIN]);
+    TEST_ASSERT_EQUAL_INT(baseline + 6, g.writesTo(HB_PIN));   // the park write
+
+    now += 1000;                                  // silence stays silent
+    wd.tick(RunState::Idle, false, now);
+    TEST_ASSERT_EQUAL_INT(baseline + 6, g.writesTo(HB_PIN));
+}
+
+// Trip verdicts: asserted during ANY active state is FAULT_WATCHDOG (water staged
+// or moving); asserted while IDLE or already FAULTed is not a fault — the §4
+// pre-open gate covers new runs and the line self-releases.
+static void test_watchdog_trip_verdicts() {
+    Watchdog wd(g, HB_PIN, Watchdog::Config{});
+    wd.begin(0);
+    TEST_ASSERT_EQUAL(Fault::Watchdog, wd.tick(RunState::Running,      true, 100));
+    TEST_ASSERT_EQUAL(Fault::Watchdog, wd.tick(RunState::OpenZone,     true, 200));
+    TEST_ASSERT_EQUAL(Fault::Watchdog, wd.tick(RunState::PrepDiverter, true, 300));
+    TEST_ASSERT_EQUAL(Fault::None,     wd.tick(RunState::Idle,         true, 400));
+    TEST_ASSERT_EQUAL(Fault::None,     wd.tick(RunState::Fault,        true, 500));
+    TEST_ASSERT_EQUAL(Fault::None,     wd.tick(RunState::Running,      false, 600));
+}
+
+// End-to-end DEC-003 lock: drive a real run through RunController with the
+// Watchdog on the same FakeGpio and assert every heartbeat write happens while
+// the pump FET is commanded on — and none after it drops.
+static void test_watchdog_full_run_heartbeat_within_pump() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    Watchdog wd(g, HB_PIN, Watchdog::Config{});
+    wd.begin(0);
+    const int baseline = g.writesTo(HB_PIN);
+
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 2;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
+
+    uint32_t now = 0;
+    bool sawBeat = false;
+    while (!(rc.isIdle() && now > 0) && now < 20000) {
+        rc.tick(now);
+        const int before = g.writesTo(HB_PIN);
+        wd.tick(rc.state(), false, now);
+        if (g.writesTo(HB_PIN) > before && g.level[HB_PIN]) {
+            // A HIGH heartbeat edge — the pump must be commanded on right now.
+            TEST_ASSERT_TRUE(vd.pumpIsOn());
+            sawBeat = true;
+        }
+        now += 50;
+    }
+    TEST_ASSERT_TRUE(rc.isIdle());
+    TEST_ASSERT_TRUE(sawBeat);                   // the window actually produced edges
+    TEST_ASSERT_FALSE(g.level[HB_PIN]);          // parked LOW after the run
+    TEST_ASSERT_TRUE(g.writesTo(HB_PIN) > baseline);
+}
+
+// ----------------------------------------------------------------------------
+// FaultManager (§14, #5.3 software half): log ring + the resolved-condition
+// clear gate that the button long-press and the Phase 4 endpoint share.
+// ----------------------------------------------------------------------------
+
+// The gate: a latched fault whose condition still holds refuses to clear; once
+// the condition resolves, the same request succeeds and unlatches.
+static void test_fm_clear_blocked_until_condition_resolves() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    FaultManager fm(rc);
+
+    rc.raiseFault(Fault::Watchdog, 100);
+    fm.tick(100);
+    fm.setConditionActive(Fault::Watchdog, true);    // trip line still asserted
+    TEST_ASSERT_FALSE(fm.clearAllowed());
+    TEST_ASSERT_FALSE(fm.requestClear());
+    TEST_ASSERT_TRUE(rc.isFaulted());                // visible no-op, still latched
+
+    fm.setConditionActive(Fault::Watchdog, false);   // line released
+    TEST_ASSERT_TRUE(fm.clearAllowed());
+    TEST_ASSERT_TRUE(fm.requestClear());
+    TEST_ASSERT_FALSE(rc.isFaulted());
+    TEST_ASSERT_TRUE(rc.isIdle());
+}
+
+// No latched fault -> nothing to clear; and a one-shot code nobody pushes a
+// condition for (CalRange) clears freely.
+static void test_fm_not_faulted_and_unconditioned_codes() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    FaultManager fm(rc);
+
+    TEST_ASSERT_FALSE(fm.clearAllowed());
+    TEST_ASSERT_FALSE(fm.requestClear());
+
+    rc.raiseFault(Fault::CalRange, 50);
+    fm.tick(50);
+    TEST_ASSERT_TRUE(fm.requestClear());             // no live condition — clears
+    TEST_ASSERT_TRUE(rc.isIdle());
+}
+
+// The log: one entry per latch edge (not per tick), newest first, ring caps at
+// LOG_SIZE keeping the most recent entries.
+static void test_fm_log_edges_and_ring_wrap() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    FaultManager fm(rc);
+
+    rc.raiseFault(Fault::NoFlow, 100);
+    for (uint32_t t = 100; t < 600; t += 100) fm.tick(t);   // held latch: one entry
+    TEST_ASSERT_EQUAL_UINT8(1, fm.logCount());
+    TEST_ASSERT_EQUAL(Fault::NoFlow, fm.logEntry(0).code);
+    TEST_ASSERT_EQUAL_UINT32(100, fm.logEntry(0).atMs);
+
+    TEST_ASSERT_TRUE(fm.requestClear());
+    rc.raiseFault(Fault::CalRange, 700);
+    fm.tick(700);
+    TEST_ASSERT_EQUAL_UINT8(2, fm.logCount());
+    TEST_ASSERT_EQUAL(Fault::CalRange, fm.logEntry(0).code);   // newest first
+    TEST_ASSERT_EQUAL(Fault::NoFlow,   fm.logEntry(1).code);
+
+    // Churn past LOG_SIZE: the ring keeps the newest 8.
+    uint32_t t = 1000;
+    for (int i = 0; i < 10; ++i) {
+        TEST_ASSERT_TRUE(fm.requestClear());
+        rc.raiseFault(Fault::UnexpectedFlow, t);
+        fm.tick(t);
+        t += 100;
+    }
+    TEST_ASSERT_EQUAL_UINT8(FaultManager::LOG_SIZE, fm.logCount());
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow, fm.logEntry(0).code);
+    TEST_ASSERT_EQUAL_UINT32(t - 100, fm.logEntry(0).atMs);    // the last raise
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow,
+                      fm.logEntry(FaultManager::LOG_SIZE - 1).code);  // oldest kept
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -1778,5 +2096,22 @@ int main() {
     RUN_TEST(test_cal_run_fault_aborts);
     RUN_TEST(test_cal_cancel);
     RUN_TEST(test_cal_tally_immune_to_chained_run);
+
+    RUN_TEST(test_wdt_powerup_disarmed_frozen_line_never_arms);
+    RUN_TEST(test_wdt_arms_on_edge_and_holds_with_beat);
+    RUN_TEST(test_wdt_clean_disarm_no_trip);
+    RUN_TEST(test_wdt_hard_max_lockout_holds_under_beat);
+    RUN_TEST(test_wdt_lockout_releases_after_quiet);
+    RUN_TEST(test_wdt_ceiling_resets_per_arm);
+    RUN_TEST(test_wdt_millis_rollover);
+
+    RUN_TEST(test_watchdog_emits_only_in_pump_window);
+    RUN_TEST(test_watchdog_toggle_cadence_and_park);
+    RUN_TEST(test_watchdog_trip_verdicts);
+    RUN_TEST(test_watchdog_full_run_heartbeat_within_pump);
+
+    RUN_TEST(test_fm_clear_blocked_until_condition_resolves);
+    RUN_TEST(test_fm_not_faulted_and_unconditioned_codes);
+    RUN_TEST(test_fm_log_edges_and_ring_wrap);
     return UNITY_END();
 }

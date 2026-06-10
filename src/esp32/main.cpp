@@ -12,6 +12,8 @@
 #include "../core/flow_monitor.h"
 #include "../core/flow_fault_detector.h"
 #include "../core/calibration_controller.h"
+#include "../core/watchdog.h"
+#include "../core/fault_manager.h"
 #include "display_tm1637.h"
 #include "preferences_store.h"
 #include "system_clock.h"
@@ -90,6 +92,20 @@ static FlowFaultDetector flowFault(flowFaultCfg);
 static const CalibrationController::Config calCfg;      // §15 seeds
 static CalibrationController calibration(runController, persistence, flowMonitor, calCfg);
 
+// Watchdog handshake, ESP32 half (§9 / #5.2). Emits the heartbeat on HEARTBEAT_OUT
+// ONLY while the pump is commanded (START_PUMP/RUNNING) — the ATtiny arms on the
+// first edge and its quiet-line timeout disarms it between runs, so HARD_MAX_RUNTIME
+// is a per-run ceiling. The trip line is read here (active-low, see pins.h) and the
+// verdict routes through RunController::raiseFault like every other detector.
+static const Watchdog::Config wdCfg;                     // §15 HEARTBEAT_MS
+static Watchdog watchdog(gpio, HEARTBEAT_OUT, wdCfg);
+
+// Fault surface (§14 / #5.3 software half): fault-log ring + the resolved-condition
+// clear gate. Every clear path (button long-press now, /api/fault/clear in Phase 4)
+// goes through requestClear(), which refuses while the active fault's underlying
+// condition still holds — detectors push that truth in each tick below.
+static FaultManager faultManager(runController);
+
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
 // loop(); the panel module only produces clean debounced edges.
@@ -106,12 +122,10 @@ static ArduinoButtonInput   btnInput;
 static const Buttons::Config btnCfg = makeButtonConfig();
 static Buttons              buttons(btnInput, btnCfg);
 
-// Fault-clear success ack (DEC-006 / §12): when a long-press clearFault() takes, flash
-// every ring solid for this long so a held button never reads as a dead panel. The
-// complementary "held while latched-but-UNRESOLVED -> visible no-op" cue is gated on
-// the FaultManager resolved-condition signal (Phase 3/5); clearFault() today clears
-// unconditionally when faulted, so only the success ack ("was faulted, now cleared")
-// can fire now — it does NOT mean "the fault condition is gone".
+// Fault-clear success ack (DEC-006 / §12): when a long-press clear takes, flash every
+// ring solid for this long so a held button never reads as a dead panel. The clear
+// now routes through FaultManager::requestClear() (§14, #5.3), so a long-press on a
+// latched-but-UNRESOLVED fault is refused — no ack fires, the visible no-op cue.
 static constexpr uint32_t FAULT_ACK_MS  = 750;
 static uint32_t           faultAckUntilMs = 0;
 
@@ -160,10 +174,10 @@ void setup() {
     // ZONE_COUNT now covers all three rings (LED3 is Zone 3's), so no separate handling.
     for (uint8_t z = 0; z < ZONE_COUNT; ++z) { pinMode(ZONES[z].ledPin, OUTPUT); digitalWrite(ZONES[z].ledPin, LOW); }
 
-    // Watchdog handshake pins (§9). The heartbeat is emitted ONLY during active
-    // runs (DEC-004) and the trip line is consumed by the Watchdog module — both
-    // land in Phase 5 (#5.2). Until then: heartbeat idle low, trip line readable.
-    pinMode(HEARTBEAT_OUT, OUTPUT); digitalWrite(HEARTBEAT_OUT, LOW);
+    // Watchdog handshake pins (§9 / #5.2). begin() parks the heartbeat LOW (no run,
+    // no beat); the trip line is input-only with an external pull-up — idles HIGH,
+    // the ATtiny drives it LOW (open-drain) to assert tripped.
+    watchdog.begin(millis());
     pinMode(WD_TRIPPED_IN, INPUT);
 
     Serial.println(F("[tinkle] boot: safe state, IDLE — cooperative loop running."));
@@ -187,8 +201,8 @@ void loop() {
     //   IDLE       -> press starts that button's own zone.
     // A >=3 s long-press of any button clears a latched fault. A long hold fires
     // pressEdge first, but in FAULT that press is a no-op, so it harmlessly precedes
-    // the clear 3 s later. clearFault() returns false unless actually faulted, so the
-    // ack (and the clear) only fire from a genuine latched fault.
+    // the clear 3 s later. requestClear() refuses unless actually faulted AND the
+    // underlying condition has resolved (§14), so the ack only fires on a real clear.
     for (uint8_t z = 0; z < ZONE_COUNT; ++z) {
         if (buttons.pressEdge(z)) {
             if (runController.isFaulted()) {
@@ -203,7 +217,7 @@ void loop() {
                 runController.requestRun(req, now);       // idle -> start this zone
             }
         }
-        if (buttons.longPressEdge(z) && runController.clearFault())
+        if (buttons.longPressEdge(z) && faultManager.requestClear())
             faultAckUntilMs = now + FAULT_ACK_MS;         // §12 success ack
     }
 
@@ -231,6 +245,29 @@ void loop() {
     // freezing its pulse tally when the run settles. Keeps its own baseline, so the
     // RUNNING-edge re-baseline above can't disturb a calibration in progress.
     calibration.tick(runState, flowSensor.pulses(), now);
+
+    // Watchdog handshake (§9 / #5.2): emit/park the heartbeat for this state and
+    // turn the trip line into a verdict. Active-low line (pins.h): pulled HIGH at
+    // rest, the ATtiny drives LOW to assert. TINKLE_SIM has no ATtiny and Wokwi
+    // floats the unconnected input low, which would read "tripped" — force clear.
+#ifdef TINKLE_SIM
+    const bool wdTrip = false;
+#else
+    const bool wdTrip = digitalRead(WD_TRIPPED_IN) == LOW;
+#endif
+    runController.setWatchdogTripped(wdTrip);             // §4 pre-open gate
+    const Fault wdVerdict = watchdog.tick(runState, wdTrip, now);
+    if (wdVerdict != Fault::None) runController.raiseFault(wdVerdict, now);
+
+    // Fault surface (§14 / #5.3): push each detector's CURRENT condition truth,
+    // then let the manager log any newly latched fault. Watchdog resolved = trip
+    // line released; unexpected-flow resolved = no flow while idle (the rolling
+    // rate decays to 0 once pulses stop). NoFlow/CalRange are one-shot events with
+    // no live condition — they clear freely.
+    faultManager.setConditionActive(Fault::Watchdog, wdTrip);
+    faultManager.setConditionActive(Fault::UnexpectedFlow,
+                                    runController.isIdle() && flowMonitor.rateGPM() > 0.0f);
+    faultManager.tick(now);
 
     // §12 panel. Render the frame from controller state; the shim pushes to the
     // TM1637 only when it changes (bit-bang cost vs the tick budget). The idle clock
@@ -263,7 +300,7 @@ void loop() {
     // by construction, so there is no hold-state to cache — RunController sets the legs
     // per-run in PREP_DIVERTER, DEC-013.)
 
-    // (flow / web / watchdog tick here as they land)
+    // (web server tick lands here in Phase 4)
 
     // micros() subtraction wraps cleanly across the ~71 min rollover.
     if (loopMon.record(micros() - t0))

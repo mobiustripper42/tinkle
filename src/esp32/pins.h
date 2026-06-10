@@ -51,6 +51,10 @@ constexpr uint8_t LED3 = 23;
 // run-active line exists — the wiring doc allocates none.
 constexpr uint8_t HEARTBEAT_OUT = 4;
 constexpr uint8_t WD_TRIPPED_IN = 36;  // ATtiny "tripped" -> ESP32 (input-only). For logging/display.
+                                       // ACTIVE LOW: the 10k pull-up idles it HIGH; the ATtiny
+                                       // emulates open-drain (drives LOW = tripped, Hi-Z = released)
+                                       // so a 5V ATtiny can't overvolt this pin and an absent
+                                       // watchdog reads "not tripped" (the relay is the safety).
 
 // Free for more zones (build-for-three): 19, 21, 5, 2, 12, 15.
 
