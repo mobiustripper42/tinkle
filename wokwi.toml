@@ -1,18 +1,22 @@
 # Wokwi simulation config — DEC-004 tier 2 (Phase 0.7 / #7).
 #
-# Boots the real esp32 firmware in simulation: TM1637 panel, the three manual
-# buttons (B1/B2 zone runs, B3 stop/long-press fault-clear), and status LEDs on the
-# master FET, pump relay, and zone button rings — enough to watch Phase 1's ejection
-# point (master -> zone -> pump -> unwind, button-driven, live countdown).
+# Boots the real esp32 firmware in simulation: TM1637 panel, the three zone buttons
+# (B1/B2/B3 each run their own zone; any press stops a running zone; >=3 s long-press
+# clears a latched fault — DEC-006), and status LEDs on the pump relay, the three zone
+# valve FETs, the two diverter legs, and the zone button rings — enough to watch a full
+# run sequence (zone -> pump -> unwind, button-driven, live countdown). v1.4: no master
+# valve (DEC-012); the pump is the source gate.
 #
 # Run:
-#   1. pio run -e esp32                          # build first; paths below point at the output
-#   2. VS Code: F1 -> "Wokwi: Start Simulator"   # needs the (free) Wokwi extension license
+#   1. pio run -e esp32_sim                       # build first; paths below point at the output.
+#                                                 # esp32_sim defines TINKLE_SIM -> short valve
+#                                                 # travel + run duration so a run is watchable.
+#   2. VS Code: F1 -> "Wokwi: Start Simulator"    # needs the (free) Wokwi extension license
 #
 # Diagram omits LED series resistors (sim convenience); the breadboard bench (tier 3)
-# uses real current-limiting + the ULN2803 ring drivers per the wiring doc.
+# uses real current-limiting per the wiring doc.
 
 [wokwi]
 version = 1
-firmware = ".pio/build/esp32/firmware.bin"
-elf = ".pio/build/esp32/firmware.elf"
+firmware = ".pio/build/esp32_sim/firmware.bin"
+elf = ".pio/build/esp32_sim/firmware.elf"
