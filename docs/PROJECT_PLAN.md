@@ -135,12 +135,13 @@ to safe state, driven by a button, with a live countdown.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 5.1 | ATtiny85 sketch — heartbeat edge-detect, two trip conditions, fail-dry default | 8 | §9; DEC-003 |
-| 5.2 | ESP32 `Watchdog` — heartbeat emit (active runs only), trip-line read, force safe | 5 | §9 |
-| 5.3 | Safety relay wiring + `FaultManager` integration | 3 | §14 |
-| 5.4 | §17 acceptance checklist — full pass on the bench | 5 | LED/pulse stand-ins |
+| 5.1 | ATtiny85 sketch — heartbeat edge-detect, two trip conditions, fail-dry default | 8 | [#48](https://github.com/mobiustripper42/tinkle/issues/48) · §9; DEC-003 |
+| 5.2 | ESP32 `Watchdog` — heartbeat emit (active runs only), trip-line read, force safe | 5 | [#49](https://github.com/mobiustripper42/tinkle/issues/49) · §9 |
+| 5.3 | Safety relay wiring + `FaultManager` integration | 3 | [#50](https://github.com/mobiustripper42/tinkle/issues/50) · §14; software half only — wiring under 5.4 |
+| 5.4 | §17 acceptance checklist — full pass on the bench | 5 | [#51](https://github.com/mobiustripper42/tinkle/issues/51) · LED/pulse stand-ins; parts-gated |
+| 5.5 | DEC-014 auto-return self-test — rest-closed verify, degraded-valve flag | 3 | [#52](https://github.com/mobiustripper42/tinkle/issues/52) · DEC-014, DEC-016; follow-on PR after Unit B |
 
-**Phase 5 total: 21 pts**
+**Phase 5 total: 24 pts** — DEC-016 batches: Unit B = 5.1+5.2+5.3-software (one PR), 5.5 follow-on, 5.4 parts-gated.
 
 ---
 
