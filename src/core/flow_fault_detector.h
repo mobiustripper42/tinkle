@@ -23,9 +23,15 @@ namespace tinkle {
 class FlowFaultDetector {
 public:
     struct Config {
-        // §15 seeds — bench-confirm.
+        // §15 seeds — bench-confirm. TINKLE_SIM ([env:esp32_sim]) shortens the grace so the
+        // no-flow fault is observable inside the 10 s sim run (DEFAULT_RUN_SEC) — at the real
+        // 20 s grace a sim run would complete before the check ever armed. NOT hardware values.
+#ifdef TINKLE_SIM
+        uint32_t graceMs        = 3000;
+#else
         uint32_t graceMs        = 20000;   // FLOW_GRACE_S (20 s): pump spin-up + pipe fill
                                            // before the no-flow check arms.
+#endif
         float    minRunningGPM  = 0.1f;    // at/below this during RUNNING (post-grace) reads
                                            // as no flow (clog, dead pump, valve never opened).
         uint32_t idleFaultPulses = 50;     // IDLE_FLOW_FAULT_PULSES ("tune", §15): pulses over
