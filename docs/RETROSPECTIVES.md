@@ -5,6 +5,56 @@ Phase-end retrospectives, written by `/retro`. Most recent first.
 <!-- Entries appended here at each phase boundary: velocity, scope changes,
      process notes, forecast update. -->
 
+## Phase 3 — 2026-06-10 (Flow + Calibration)
+
+**Sessions:** 3 (Sessions 6–8)
+**Points:** 24 / 13 planned (185% — 13 phase-labeled + 11 absorbed, see Scope changes)
+**Wall clock:** 41.79h  (raw elapsed — includes two overnights + idle)
+**Breaks:** 35.86h
+**Active time (wall − breaks):** 5.93h ← honest headline
+**Velocity:** 0.25 h/pt active  ← the only forecast number
+**Issues:** 3 created (#34–#36), 3 closed, 0 moved.
+
+**Metric model change (DEC-S013 rev):** first phase on `active = wall − breaks` with
+transcript break inference; the per-PR dev/review split is retired (its anchors collapse
+under burst-open/merge-whenever). Phases 1–2 quoted dev h/pt (0.12 / 0.10) — a different
+metric. Do not blend; Phase 3 is the new baseline.
+
+### Per-session breakdown
+| Session | Date | Wall | Breaks | Active | Points | PRs |
+|---------|------|------|--------|--------|--------|-----|
+| 6 | 2026-06-07 | 0.17 | 0\* | 0.17 | 5 | #37 |
+| 7 | 2026-06-08→10 | 38.92 | 33.64 | 5.28 | 14 | #42, #43, #45, #46 |
+| 8 | 2026-06-10 | 2.70 | 2.22 | 0.48 | 5 | #47 |
+
+\* inference: transcript-unavailable (session ran on another machine; 10-min session, no
+material gap possible).
+
+### Notes
+Retro notes (what worked / didn't / changes) were skipped at Eric's request.
+
+### Scope changes
+- **Absorbed (11 pts, not planned for Phase 3):** v1.4 valve re-architecture task 1.8
+  (8 pts, PR #42 — rework forced by PR #40 landing v1.4 docs while firmware was still
+  v1.3), sim tooling `TINKLE_SIM`/`esp32_sim`/README (2 pts, PR #43), seeds-v4 template
+  pull (1 pt, PR #46).
+- 3.x flow-fault manual override (DEC-015, 3 pts) deliberately rides with the Phase 4
+  settings API — not Phase 3 scope, still open as planned.
+- Plan reorder approved (pending @architect): Phase 5 (watchdog) ahead of Phase 4
+  (web/SPA), batched as Unit B = 5.1+5.2+5.3 (+5.x), Unit C = 4.1+4.2 (+DEC-015),
+  Unit D = 4.3+4.4.
+
+### PM read
+Phase 3 closed all three planned tasks (#34, #35, #36 — 13 points) in a four-day window, but the headline number is 24 points in 5.93 active hours, because nearly half the phase's output was cross-phase absorption. The 0.25 h/pt active figure is the first reading on the new metric model (active = wall − breaks, per-PR dev/review split retired), so resist the urge to read it against Phases 1–2's 0.12/0.10 h/pt dev numbers — those measured a different thing, and the old split was demonstrably booking idle-waiting-on-merge as review anyway. Phase 3 is the new baseline, not a slowdown. The shape of the work stayed consistent with prior phases: short dense bursts inside long elapsed windows (Session 7: 5.28h active inside 38.92h wall).
+
+The scope story is the one to say plainly: 11 of 24 points were unplanned absorbs, and 8 of those were the v1.4 valve re-architecture — a rework forced by PR #40 landing v1.4 *docs* while the firmware was still v1.3. That's the second consecutive phase where docs and implementation diverged on `main` (Phase 1 had the C++-standard tier divergence; this one had the spec itself outrunning the code). The rework went cleanly — fix-forward, no rollback, 72/72 green, fail-dry chain re-verified — but the lesson is that a docs-first decision needs an explicit "firmware now contradicts the authoritative spec" flag at the moment it merges, not a discovery two days later. Worth a habit: any PR that changes a source-of-truth doc states in its body what code is now out of compliance.
+
+Two process patterns from the session files that the metrics flatten. First, environment drift bit twice in one session: CLAUDE.md claimed pio at `~/.local/bin` (absent), Task 1.8 shipped on a g++/Unity-shim substitute harness with an explicit "run real pio before merge" note, and the actual path turned out to be `~/.platformio/penv/bin/pio`. The substitute harness worked — but CLAUDE.md's Commands section is now wrong on the record and should be corrected before it misleads a future session. Second, review coverage loosened this phase: #43 was self-reviewed (defensible — build config and docs), and #47 — a fault-raising state machine — skipped @code-review entirely in favor of a direct user review. The user merged it in ~2.5h, which is fine as a one-off, but @code-review's track record here is two caught fail-dry bugs in Phase 1 and the boot-seeding nuisance-fault in #45. Skipping it on safety-adjacent modules is spending earned trust; I'd default it back on for the watchdog work.
+
+Eric skipped the retro questions, so for the record, here's what I'd have wanted his read on: whether the v1.4 absorb felt like a planning failure or an acceptable cost of docs-first (I lean the latter, with the flag-on-merge fix above), and whether the Session 7 multi-machine toolchain detour (bee-grace → mil-dev, the apt/Click crash) is a recurring tax or now paid off — the README it produced suggests paid off.
+
+Forward: the approved batch plan reorders Phase 5 (watchdog) ahead of Phase 4, pending the @architect check, and Unit B at ~16–19 points in one PR is the largest coherent unit attempted — roughly the size of all of Phase 2. The new splitting guidance explicitly permits this, but it also says larger units lean harder on a complete spec, crisp ACs, and the @architect gate; the watchdog is both halves of one heartbeat protocol *and* the second key of the fail-dry chain, so this is precisely the PR where the review tier should be at full strength, not relaxed. At Phase 3's planned-scope pace, Units B+C+D (~40–46 points) project to roughly 10–12 active hours — comfortably inside the Winter 2026–27 target, with absorbs remaining the only real schedule variable. They've appeared every phase so far; budget for them instead of being surprised a fourth time.
+
 ## Phase 2 — 2026-06-06 (Persistence + Scheduler + Clock + Fertigation)
 
 **Sessions:** 2 (Sessions 4 + 5; Session 3 was the boundary session — its 5 pts / PR #29 were the Phase-1-deferred #23 button model, counted in the Phase 1 retro)

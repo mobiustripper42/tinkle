@@ -15,15 +15,17 @@ Fibonacci scale (2, 3, 5, 8, 13). See `VELOCITY_AND_POKER_GUIDE.md`.
 All estimates from planning poker between Eric and Claude.
 Tests are baked into every task estimate — no separate testing tasks.
 
-**Velocity** (per `/retro`, DEC-S013 — `dev_time` is the forecast number; wall clock is break-inflated):
+**Velocity** (per `/retro`, DEC-S013 — `active = wall − breaks` is the forecast number; wall clock is break-inflated):
 
-| Phase | Sessions | Points | Wall (h) | Dev (h) | Review (h) | hrs/pt (dev) |
-|-------|----------|--------|----------|---------|------------|--------------|
+| Phase | Sessions | Points | Wall (h) | Breaks (h) | Active (h) | h/pt (active) |
+|-------|----------|--------|----------|------------|------------|---------------|
 | 0 | — | ~19 | — | — | — | scaffold — done pre-session-tracking, no time data |
-| 1 | 2 | 31\* | 15.75 | 3.58 | 1.75 | 0.12 |
-| 2 | 2 | 16 | 2.92 | 1.66 | 0.16 | 0.10 |
+| 1 | 2 | 31\* | 15.75 | — | — | legacy dev-metric: 0.12 h/pt (dev 3.58 h, review 1.75 h) — don't blend with active |
+| 2 | 2 | 16 | 2.92 | — | — | legacy dev-metric: 0.10 h/pt (dev 1.66 h, review 0.16 h) — don't blend with active |
+| 3 | 3 | 24\** | 41.79 | 35.86 | 5.93 | 0.25 |
 
 \* 31 = 25 Phase-1-labeled (#9–#14) + 6 spillover (Wokwi #7 [3, Phase 0], C++11 build-standard fix [2], TM1637 lib unblock [1]). Wall clock was ~66% breaks (toolchain download, a connection-drop gap), so treat Phase 1 as a **noisy baseline** — Phase 2 is the first clean read. Full detail in `RETROSPECTIVES.md`.
+\** 24 = 13 Phase-3-labeled (#34–#36) + 11 absorbed in the window (1.8 valve rework [8], sim tooling [2], seeds-v4 pull [1]). Phases 1–2 used the retired per-PR dev/review split; Phase 3 is the first phase on the `active = wall − breaks` model, so cross-model comparisons are apples-to-oranges.
 
 ---
 
@@ -103,11 +105,16 @@ to safe state, driven by a button, with a live countdown.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 3.1 | `FlowMonitor` — ISR pulse count, rate window, gallons from K | 5 | [#34](https://github.com/mobiustripper42/tinkle/issues/34) · §7 |
-| 3.2 | Fault detection — no-flow (grace) + unexpected idle flow | 3 | [#35](https://github.com/mobiustripper42/tinkle/issues/35) · §7, §14 |
-| 3.3 | Calibration mode — start/finish endpoints, K to NVS, sanity bounds | 5 | [#36](https://github.com/mobiustripper42/tinkle/issues/36) · §7 |
+| 3.1 | `FlowMonitor` — ISR pulse count, rate window, gallons from K | 5 | [x] [#34](https://github.com/mobiustripper42/tinkle/issues/34) · §7 |
+| 3.2 | Fault detection — no-flow (grace) + unexpected idle flow | 3 | [x] [#35](https://github.com/mobiustripper42/tinkle/issues/35) · §7, §14 |
+| 3.3 | Calibration mode — start/finish endpoints, K to NVS, sanity bounds | 5 | [x] [#36](https://github.com/mobiustripper42/tinkle/issues/36) · §7 |
 
-**Phase 3 total: 13 pts**
+**Phase 3 total: 13 pts** — complete (all closed). Core flow stack done: `FlowMonitor` → `FlowFaultDetector` → `CalibrationController`, all host-tested. The 3.x flow-fault manual override (DEC-015) rides with the Phase 4 settings API as planned.
+
+**Unplanned work absorbed in the Phase 3 window** (not in the original plan):
+- v1.4 valve re-architecture, task 1.8 — [PR #42](https://github.com/mobiustripper42/tinkle/pull/42) (8 pts; rowed under Phase 1 "reopened") · *Added during P3 retro*
+- Sim tooling: `TINKLE_SIM` flag, `esp32_sim` env, README — [PR #43](https://github.com/mobiustripper42/tinkle/pull/43) (2 pts) · *Added during P3 retro*
+- Seeds v4 template pull into CLAUDE.md — [PR #46](https://github.com/mobiustripper42/tinkle/pull/46) (1 pt) · *Added during P3 retro*
 
 ---
 

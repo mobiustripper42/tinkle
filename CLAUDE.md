@@ -82,11 +82,12 @@ pio test -e native               # host unit tests (src/core)
 pio device monitor -b 115200     # serial monitor
 ```
 
-PlatformIO CLI is installed (`~/.local/bin/pio`) and `pio test -e native` runs
-green — its real prerequisite is the host C++ toolchain (`build-essential` /
-`g++`), needed for the native env to build `src/core`. The ESP32 platform isn't
-downloaded yet, so `pio run -e esp32` is still pending (Phase 0.6 / #6). Wokwi (VS
-Code) runs the firmware in simulation without hardware (Phase 0.7).
+PlatformIO CLI lives at `~/.platformio/penv/bin/pio` (official `get-platformio.py`
+installer — NOT the apt package, whose click-8.1 incompatibility crashes; see
+README). `pio test -e native` and `pio run -e esp32` both run green; the native
+env's real prerequisite is the host C++ toolchain (`build-essential` / `g++`).
+Wokwi runs the firmware in simulation without hardware — build `esp32_sim`
+(`-D TINKLE_SIM`) for sim-shortened travel/run constants.
 
 ## Conventions
 
