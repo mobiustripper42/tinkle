@@ -35,6 +35,17 @@ public:
 
     explicit FlowFaultDetector(const Config& cfg) : cfg_(cfg) {}
 
+    // Seed the window origins at boot (call from setup(), like FlowMonitor::begin()).
+    // prevState_ starts at Idle, so the first Idle tick is NOT an edge and never
+    // re-baselines — without this, a setup() longer than idleWindowMs (a slow WiFi
+    // join) would evaluate a pseudo-window spanning all of boot and could latch a
+    // nuisance UnexpectedFlow from pulses counted since FlowSensor::begin().
+    void begin(uint32_t pulses, uint32_t nowMs) {
+        idleBaseline_      = pulses;
+        idleWindowStartMs_ = nowMs;
+        runStartMs_        = nowMs;
+    }
+
     // Call every loop tick. `pulses` is FlowMonitor's monotonic cumulative count (for the
     // idle check); `rateGPM` is its rolling rate (for the no-flow check). Returns the fault
     // to raise this tick, or Fault::None. Idempotent against an already-latched run: once a

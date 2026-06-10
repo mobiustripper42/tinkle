@@ -143,6 +143,7 @@ void setup() {
     flowSensor.begin();
     flowMonitor.setK(persistence.pulsesPerGallon());
     flowMonitor.begin(flowSensor.pulses(), millis());
+    flowFault.begin(flowSensor.pulses(), millis());   // seed the idle window past boot
 
     buttons.begin();              // configure the panel pins as inputs (§11)
     display.begin();              // TM1637 init + clear (§12)

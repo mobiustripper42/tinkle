@@ -1396,6 +1396,26 @@ void test_ff_grace_resets_per_run() {
     TEST_ASSERT_EQUAL(Fault::NoFlow, d.update(RunState::Running, 0.0f, 100, 12000)); // grace elapsed
 }
 
+// begin() seeds the idle window past boot: a slow setup() (> idleWindowMs) with pulses
+// counted during it must NOT read as unexpected flow on the first tick.
+void test_ff_begin_seeds_boot_window() {
+    FlowFaultDetector d(ffCfg());
+    d.begin(500, 3000);                                                             // late boot, 500 pulses
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 500, 3000));      // first tick: no boot pseudo-window
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 500, 4000));      // quiet window from the seed
+}
+
+// Pulses accrued through the close sequence (trailing flow in StopPump/Settle) are excluded
+// from the first idle window by the Idle-edge re-baseline — no false UnexpectedFlow after a run.
+void test_ff_post_run_idle_rebaseline() {
+    FlowFaultDetector d(ffCfg());
+    d.update(RunState::Running,  5.0f, 1000, 0);
+    d.update(RunState::StopPump, 1.0f, 1200, 5000);                                 // flow trailing off
+    d.update(RunState::Settle,   0.2f, 1300, 5500);                                 // +300 since run > threshold
+    d.update(RunState::Idle,     0.0f, 1300, 6000);                                 // edge: re-baseline at 1300
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 1300, 7000));     // full window, flat -> clean
+}
+
 // End-to-end: a no-flow verdict routed to RunController slams the safe state and latches (§14).
 void test_ff_integration_no_flow_faults_rc() {
     ValveDriver vd(g, cfg);
@@ -1508,6 +1528,8 @@ int main() {
     RUN_TEST(test_ff_idle_subthreshold_no_fault);
     RUN_TEST(test_ff_transition_states_never_fault);
     RUN_TEST(test_ff_grace_resets_per_run);
+    RUN_TEST(test_ff_begin_seeds_boot_window);
+    RUN_TEST(test_ff_post_run_idle_rebaseline);
     RUN_TEST(test_ff_integration_no_flow_faults_rc);
     return UNITY_END();
 }
