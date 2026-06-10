@@ -59,6 +59,8 @@ For one phase, read RETROSPECTIVES.md. For your lifetime number — or a combine
 **No 1s** — if it's that small, just do it. Don't plan it.
 **No 13s if avoidable** — break them down. A 13 means you don't understand the task well enough yet.
 
+**Points size estimation, not execution units.** A point is a relative planning number calibrated to your own velocity — *not* a ceiling on how much Claude builds in one run. Current models hold coherence across far more than an 8, and splitting a *coherent* task to honor a points ceiling fragments context and can lower quality (two stitched 5s < one well-specified 8). Split execution units by **reviewability, blast radius, reversibility, and migration conflicts** — not by "the model can't hold it." A coherent 8 is a fine single unit; a genuine 13 still gets broken up (you don't understand it well enough yet, and the diff is hard to review). See CLAUDE.md § Scope Discipline.
+
 ### How to poker (solo dev + Claude)
 
 **Setup:** Claude proposes effort for each task in a phase. You review.
