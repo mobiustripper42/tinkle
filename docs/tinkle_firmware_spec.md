@@ -161,6 +161,7 @@ The travel timers must be independent per actuator so a diverter travel doesn't 
 - `POST /api/calibrate/start {zoneIndex}` → opens that zone's path (diverter plain, zone open, pump on), zeroes the pulse counter, enters a bounded calibration run (own max-runtime).
 - User collects output in a known container.
 - `POST /api/calibrate/finish {measuredGallons}` → `K = pulsesCounted / measuredGallons`, store to NVS, close everything. Reject absurd values (sanity bounds).
+- **Implemented (#36):** `CalibrationController` (core, `calibration_controller.{h,cpp}`) — the state machine + K math, host-tested; actuation routes through `RunController` (sole commander). `start(zone)` requires both idle (a calibration never queues), requests a bounded run (`CAL_RUN_SEC`, its own ceiling under `swMaxRuntimeSec`) with the diverter plain, and baselines its **own** pulse tally (independent of `FlowMonitor`'s per-run accumulation, so the RUNNING-edge re-baseline can't disturb it). The tally tracks live until the run reaches SETTLE (zone closed, trailing close-travel flow already counted), then freezes — SETTLE not IDLE, because a queued run chains SETTLE→next without visiting IDLE. `finish(measuredGallons)` stops a still-active run, computes K, and on success writes NVS (`k_ppg`) + the live `FlowMonitor`; an absurd volume or out-of-range K raises `FAULT_CAL_RANGE` (§14 latch + safe state) and leaves K untouched — the Phase 4 endpoint range-validates input before calling in. `cancel()` aborts without judging; a fault during the run voids the calibration (the original fault owns the story). The start/finish/cancel HTTP endpoints land with the Phase 4 web API.
 
 ---
 
@@ -350,6 +351,8 @@ struct ScheduleEntry {
 | `swMaxRuntimeSec` | 1200 | ESP32 per-run ceiling, configurable |
 | `FLOW_GRACE_S` | 20 | settle before no-flow check |
 | `IDLE_FLOW_FAULT_PULSES` | 50 (seed, tune) | unexpected-flow threshold over one idle window (`FlowFaultDetector`, #35) |
+| `CAL_RUN_SEC` | 120 (seed; `TINKLE_SIM`: 10) | calibration run ceiling, its own bound under `swMaxRuntimeSec` (#36) |
+| cal sanity bounds | K ∈ [50, 5000] p/gal, ≥ 0.25 gal | reject absurd calibrations → `FAULT_CAL_RANGE` (#36; seeds, tune) |
 | button debounce | 30 ms | on top of RC |
 
 Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.

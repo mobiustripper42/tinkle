@@ -11,6 +11,7 @@
 #include "../core/scheduler.h"
 #include "../core/flow_monitor.h"
 #include "../core/flow_fault_detector.h"
+#include "../core/calibration_controller.h"
 #include "display_tm1637.h"
 #include "preferences_store.h"
 #include "system_clock.h"
@@ -81,6 +82,13 @@ static FlowMonitor       flowMonitor(Persistence::DEFAULT_PULSES_PER_GALLON);
 // RunController::raiseFault (the sole commander), which slams the safe state and latches.
 static const FlowFaultDetector::Config flowFaultCfg;   // §15 seeds
 static FlowFaultDetector flowFault(flowFaultCfg);
+
+// Calibration mode (§7 / #36). State machine + K math in core; the bounded cal run
+// routes through RunController (sole commander) and K lands in NVS + the live
+// FlowMonitor. start/finish/cancel are driven by the Phase 4 calibrate endpoints —
+// until the web API lands, nothing calls them and tick() is a cheap no-op.
+static const CalibrationController::Config calCfg;      // §15 seeds
+static CalibrationController calibration(runController, persistence, flowMonitor, calCfg);
 
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
@@ -218,6 +226,11 @@ void loop() {
     const Fault flowVerdict = flowFault.update(runState, flowMonitor.rateGPM(),
                                                flowSensor.pulses(), now);
     if (flowVerdict != Fault::None) runController.raiseFault(flowVerdict, now);
+
+    // Calibration lifecycle (§7 / #36): tracks the cal run against the state machine,
+    // freezing its pulse tally when the run settles. Keeps its own baseline, so the
+    // RUNNING-edge re-baseline above can't disturb a calibration in progress.
+    calibration.tick(runState, flowSensor.pulses(), now);
 
     // §12 panel. Render the frame from controller state; the shim pushes to the
     // TM1637 only when it changes (bit-bang cost vs the tick budget). The idle clock
