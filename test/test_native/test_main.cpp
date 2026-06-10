@@ -13,6 +13,7 @@
 #include "scheduler.h"
 #include "flow_monitor.h"
 #include "flow_fault_detector.h"
+#include "calibration_controller.h"
 
 // Native unit tests for ValveDriver (firmware spec §5, v1.4). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -1438,6 +1439,241 @@ void test_ff_integration_no_flow_faults_rc() {
     TEST_ASSERT_FALSE(g.level[ZF0]);                     // safe state: zone de-energized
 }
 
+// --- CalibrationController (firmware spec §7 / #36) -------------------------------
+// The calibration state machine + K math, host-driven end to end: real RunController
+// + ValveDriver on the fake GPIO, real Persistence on the fake store, injected pulse
+// counts and an explicit clock. Actuation stays behind RunController throughout.
+
+using tinkle::CalibrationController;
+using CalPhase  = CalibrationController::Phase;
+using CalResult = CalibrationController::FinishResult;
+
+namespace {
+
+CalibrationController::Config calCfg() {
+    CalibrationController::Config c;
+    c.runSec     = 60;       // short bounded run for tests
+    c.minGallons = 0.25f;
+    c.minK       = 50.0f;
+    c.maxK       = 5000.0f;
+    return c;
+}
+
+// One harness per test: the full chain a calibration touches.
+struct CalRig {
+    ValveDriver   vd;
+    RunController rc;
+    FakeKvStore   kv;
+    Persistence   store;
+    FlowMonitor   flow;
+    CalibrationController cal;
+
+    CalRig()
+        : vd(g, cfg), rc(vd, makeRunCfg()), store(kv, 2),
+          flow(Persistence::DEFAULT_PULSES_PER_GALLON),
+          cal(rc, store, flow, calCfg()) {
+        rc.begin(0);
+        store.begin();
+    }
+
+    // Mirror the main loop: tick the controller then the calibration, stepping the
+    // clock, until pred() holds or the budget runs out. Pulses are injected by the
+    // caller via the pulse reference (a "live counter" the test mutates).
+    template <class Pred>
+    uint32_t pump(uint32_t now, uint32_t stepMs, uint32_t budgetMs,
+                  const uint32_t& pulses, Pred pred) {
+        uint32_t spent = 0;
+        while (!pred() && spent <= budgetMs) {
+            rc.tick(now);
+            cal.tick(rc.state(), pulses, now);
+            now += stepMs;
+            spent += stepMs;
+        }
+        return now;
+    }
+};
+
+} // namespace
+
+// start() requests a bounded run with the diverter plain and baselines the tally.
+static void test_cal_start_bounded_plain_run() {
+    CalRig r;
+    uint32_t pulses = 1000;                       // counter needn't start at zero
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    TEST_ASSERT_EQUAL(CalPhase::Running, r.cal.phase());
+
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+    TEST_ASSERT_TRUE(r.vd.pumpIsOn());
+    TEST_ASSERT_TRUE(g.level[ZF0]);               // zone open
+    TEST_ASSERT_FALSE(r.vd.diverterFert());       // diverter plain (§7)
+    // Bounded by its own ceiling, not swMaxRuntimeSec.
+    TEST_ASSERT_TRUE(r.rc.remainingSec(now) <= 60);
+    TEST_ASSERT_EQUAL_UINT32(0, r.cal.pulsesCounted());
+}
+
+// No queueing: refuse when another run is active, and one calibration at a time.
+static void test_cal_start_refused_when_busy() {
+    CalRig r;
+    RunRequest req; req.zoneIndex = 1; req.durationSec = 30;
+    TEST_ASSERT_TRUE(r.rc.requestRun(req, 0));
+    TEST_ASSERT_FALSE(r.cal.start(0, 0, 0));      // RunController busy
+    TEST_ASSERT_EQUAL(CalPhase::Idle, r.cal.phase());
+
+    CalRig r2;
+    uint32_t pulses = 0;
+    TEST_ASSERT_TRUE(r2.cal.start(0, pulses, 0));
+    TEST_ASSERT_FALSE(r2.cal.start(1, pulses, 0)); // already calibrating
+}
+
+// Happy path: run completes, tally freezes at SETTLE, finish computes + persists K.
+static void test_cal_happy_path_k_to_nvs() {
+    CalRig r;
+    uint32_t pulses = 500;
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+
+    pulses += 900;                                 // water flows during the run
+    now = r.pump(now, 1000, 70000, pulses,
+                 [&]{ return r.cal.phase() == CalPhase::Awaiting; });
+    TEST_ASSERT_EQUAL_UINT32(900, r.cal.pulsesCounted());
+
+    pulses += 300;                                 // post-settle pulses must NOT count
+    now = r.pump(now, 100, 1000, pulses, [&]{ return r.rc.isIdle(); });
+    r.cal.tick(r.rc.state(), pulses, now);
+    TEST_ASSERT_EQUAL_UINT32(900, r.cal.pulsesCounted());
+
+    // 900 / 1.5 = 600 — deliberately NOT the 450 default, or Persistence's
+    // write-on-change would (correctly) skip the flash write and hide the path.
+    TEST_ASSERT_EQUAL(CalResult::Ok, r.cal.finish(1.5f, pulses, now));
+    TEST_ASSERT_EQUAL_FLOAT(600.0f, r.cal.lastK());
+    TEST_ASSERT_EQUAL_FLOAT(600.0f, r.flow.k());               // live monitor updated
+    TEST_ASSERT_EQUAL_FLOAT(600.0f, r.kv.getFloat("k_ppg", 0)); // NVS (§8)
+    TEST_ASSERT_EQUAL(CalPhase::Idle, r.cal.phase());
+    TEST_ASSERT_FALSE(r.rc.isFaulted());
+}
+
+// finish() mid-run stops the run (graceful unwind) and still judges the tally.
+static void test_cal_finish_mid_run_stops() {
+    CalRig r;
+    uint32_t pulses = 0;
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+    pulses += 600;
+    r.cal.tick(r.rc.state(), pulses, now);
+
+    TEST_ASSERT_EQUAL(CalResult::Ok, r.cal.finish(1.0f, pulses, now));
+    TEST_ASSERT_EQUAL_FLOAT(600.0f, r.flow.k());
+    now = r.pump(now, 100, 70000, pulses, [&]{ return r.rc.isIdle(); });
+    TEST_ASSERT_TRUE(r.rc.isIdle());               // closed everything, no fault
+    TEST_ASSERT_FALSE(r.vd.pumpIsOn());
+}
+
+// Absurd measured volume -> FAULT_CAL_RANGE, K untouched (NVS and live).
+static void test_cal_reject_bad_volume() {
+    CalRig r;
+    uint32_t pulses = 0;
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+    pulses += 900;
+    r.cal.tick(r.rc.state(), pulses, now);
+
+    TEST_ASSERT_EQUAL(CalResult::Rejected, r.cal.finish(0.1f, pulses, now));
+    TEST_ASSERT_EQUAL(Fault::CalRange, r.rc.activeFault());   // §14 latch
+    TEST_ASSERT_FALSE(r.vd.pumpIsOn());                       // safe state slammed
+    TEST_ASSERT_EQUAL_FLOAT(Persistence::DEFAULT_PULSES_PER_GALLON, r.flow.k());
+    TEST_ASSERT_EQUAL_INT(0, r.kv.writesTo("k_ppg"));         // nothing hit flash
+    TEST_ASSERT_EQUAL(CalPhase::Idle, r.cal.phase());
+}
+
+// K outside sanity bounds (both sides) -> FAULT_CAL_RANGE, K untouched. A zero tally
+// lands here too (K = 0 < minK) — no divide-by-zero path to a write.
+static void test_cal_reject_k_out_of_range() {
+    CalRig r;
+    uint32_t pulses = 0;
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+    pulses += 20;                                  // 20 pulses / 1 gal -> K = 20 < 50
+    r.cal.tick(r.rc.state(), pulses, now);
+    TEST_ASSERT_EQUAL(CalResult::Rejected, r.cal.finish(1.0f, pulses, now));
+    TEST_ASSERT_EQUAL(Fault::CalRange, r.rc.activeFault());
+    TEST_ASSERT_EQUAL_INT(0, r.kv.writesTo("k_ppg"));
+
+    CalRig r2;
+    pulses = 0;
+    TEST_ASSERT_TRUE(r2.cal.start(0, pulses, 0));
+    now = r2.pump(0, 5, 8000, pulses,
+                  [&]{ return r2.rc.state() == RunState::Running; });
+    pulses += 10000;                               // 10000 / 0.5 -> K = 20000 > 5000
+    r2.cal.tick(r2.rc.state(), pulses, now);
+    TEST_ASSERT_EQUAL(CalResult::Rejected, r2.cal.finish(0.5f, pulses, now));
+    TEST_ASSERT_EQUAL(Fault::CalRange, r2.rc.activeFault());
+}
+
+// finish() with no calibration in progress: refused, but no fault raised.
+static void test_cal_finish_not_calibrating() {
+    CalRig r;
+    TEST_ASSERT_EQUAL(CalResult::NotCalibrating, r.cal.finish(2.0f, 0, 0));
+    TEST_ASSERT_FALSE(r.rc.isFaulted());
+}
+
+// A fault during the cal run voids the calibration; the original fault owns the story.
+static void test_cal_run_fault_aborts() {
+    CalRig r;
+    uint32_t pulses = 0;
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+    r.rc.raiseFault(Fault::NoFlow, now);
+    r.cal.tick(r.rc.state(), pulses, now);
+    TEST_ASSERT_EQUAL(CalPhase::Idle, r.cal.phase());
+    TEST_ASSERT_EQUAL(CalResult::NotCalibrating, r.cal.finish(2.0f, pulses, now));
+    TEST_ASSERT_EQUAL(Fault::NoFlow, r.rc.activeFault());     // not overwritten
+}
+
+// cancel(): graceful abort — run unwinds, no fault, no K write.
+static void test_cal_cancel() {
+    CalRig r;
+    uint32_t pulses = 0;
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+    r.cal.cancel(now);
+    TEST_ASSERT_EQUAL(CalPhase::Idle, r.cal.phase());
+    now = r.pump(now, 100, 70000, pulses, [&]{ return r.rc.isIdle(); });
+    TEST_ASSERT_TRUE(r.rc.isIdle());
+    TEST_ASSERT_FALSE(r.rc.isFaulted());
+    TEST_ASSERT_EQUAL_INT(0, r.kv.writesTo("k_ppg"));
+}
+
+// The frozen tally survives a queued run chaining SETTLE -> next run without IDLE:
+// the second run's water must not inflate the calibration.
+static void test_cal_tally_immune_to_chained_run() {
+    CalRig r;
+    uint32_t pulses = 0;
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+    pulses += 900;
+
+    RunRequest next; next.zoneIndex = 1; next.durationSec = 30;
+    TEST_ASSERT_TRUE(r.rc.requestRun(next, now));   // queues behind the cal run
+
+    now = r.pump(now, 1000, 70000, pulses,
+                 [&]{ return r.cal.phase() == CalPhase::Awaiting; });
+    now = r.pump(now, 1000, 70000, pulses,
+                 [&]{ return r.rc.state() == RunState::Running; });  // queued run live
+    pulses += 5000;                                 // the OTHER run's water
+    r.cal.tick(r.rc.state(), pulses, now);
+    TEST_ASSERT_EQUAL_UINT32(900, r.cal.pulsesCounted());
+    TEST_ASSERT_EQUAL(CalResult::Ok, r.cal.finish(2.0f, pulses, now));
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, r.flow.k());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -1531,5 +1767,16 @@ int main() {
     RUN_TEST(test_ff_begin_seeds_boot_window);
     RUN_TEST(test_ff_post_run_idle_rebaseline);
     RUN_TEST(test_ff_integration_no_flow_faults_rc);
+
+    RUN_TEST(test_cal_start_bounded_plain_run);
+    RUN_TEST(test_cal_start_refused_when_busy);
+    RUN_TEST(test_cal_happy_path_k_to_nvs);
+    RUN_TEST(test_cal_finish_mid_run_stops);
+    RUN_TEST(test_cal_reject_bad_volume);
+    RUN_TEST(test_cal_reject_k_out_of_range);
+    RUN_TEST(test_cal_finish_not_calibrating);
+    RUN_TEST(test_cal_run_fault_aborts);
+    RUN_TEST(test_cal_cancel);
+    RUN_TEST(test_cal_tally_immune_to_chained_run);
     return UNITY_END();
 }
