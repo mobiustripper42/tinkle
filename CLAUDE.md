@@ -143,7 +143,7 @@ tasks are GitHub Issues; a phase ends when its issues close.
 
 | Agent | Model | When | Purpose |
 |-------|-------|------|---------|
-| @architect | Opus | Before design decisions, new deps, scope creep | Coherence vs SPEC + DECISIONS |
+| @architect | Fable 5 | Before design decisions, new deps, scope creep | Coherence vs SPEC + DECISIONS |
 | @code-review | Sonnet | After commits (wired into `/kill-this`) | Catch issues early |
 | @pm | Sonnet | Session start/end | Track progress, flag risks |
 | @sync-config | Sonnet | `/push-seeds`, `/pull-seeds` | Classify template-vs-project diffs |
@@ -151,6 +151,24 @@ tasks are GitHub Issues; a phase ends when its issues close.
 | @doc-consistency | Sonnet | `/doc-consistency-check` | Cross-reference doc claims (report-only) |
 
 (`@ui-reviewer` omitted — `tool` type.)
+
+## Model Selection
+
+Three tiers. Default low; escalate by **task length and complexity** — Fable 5's lead over Sonnet/Opus is smallest on short scoped tasks and widens the longer and more complex the work (state-machine reworks, cross-cutting refactors, long autonomous runs).
+
+| Tier | Model | Use for |
+|------|-------|---------|
+| Workhorse | `claude-sonnet-4-6` | Default main session and most agents. Single-file edits, scoped tasks, reviews. |
+| Hard | `claude-opus-4-8` | The "stuck" escalation; fail-dry/safety-chain logic; anything where being wrong is expensive but the task is bounded. |
+| Frontier | `claude-fable-5` | Long-horizon, multi-file, high-autonomy work where holding coherence across the whole change is the bottleneck — and architecture decisions (see `@architect`). $10/$50 per MTok, 2× Opus both directions; reserve accordingly. |
+
+- **Reach for `effort` before reaching for a tier.** `effort` (`low`/`medium`/`high`/`xhigh`/`max`, set via `output_config`) buys quality more cheaply than a model jump on a task the current model can already do. `xhigh` is the floor for coding/agentic work, `high` for intelligence-sensitive work, `max` only when correctness must beat cost. Fable 5 reaches production-quality code at *medium* effort and is more token-efficient than prior models — frontier quality does **not** require max effort.
+- **Spec up front, then let it run.** Front-load the full task spec in one turn and let the model work long at high effort rather than over-decomposing a coherent task into tiny issues — Fable holds coherence across millions of tokens, and chopping the task throws that away. The firmware spec (`docs/tinkle_firmware_spec.md`) plus the GitHub Issue's acceptance criteria **are** the spec; point the model at them.
+- **File memory is a force multiplier — ~3× more effective on Fable than Opus 4.8.** Session files, `docs/DECISIONS.md`, and acceptance criteria are exactly the persistent notes Fable exploits to improve its own output. Keep them current; reference them explicitly in the task.
+- **Vision is a first-class input.** Fable 5 is state-of-the-art at vision — lean on it for the wiring doc, bench/breadboard photos, and datasheet figures instead of describing them in prose.
+- **Silent fallback caveat.** Fable routes <5% of sessions (cyber / bio-chem / distillation classifiers, conservatively tuned) to Opus 4.8 automatically and tells you when it does. Defensive watchdog/fail-safe work won't trip it in normal use — but if a session unexpectedly feels a tier weaker, check for a fallback notice before chasing a phantom regression.
+- **Agents:** model in agent frontmatter. `@architect` pins `claude-fable-5` — architecture decisions are where being wrong compounds, so they get the frontier tier. Reviewers (`@code-review`, `@pm`, `@doc-consistency`, `@tape-reader`) stay Sonnet.
+- **New agents:** default to Sonnet. Add a `model:` line only when the agent's job is architecture- or vision-level reasoning.
 
 ## Versioning
 
@@ -162,9 +180,26 @@ revisit — not needed now.
 
 - Each task gets a branch: `git checkout -b task/X.Y-short-description`.
 - `/kill-this` opens the PR (`closes #N`), runs @code-review. Keep ≤3 open PRs.
+- **Stacking PRs is preferred** when tasks depend on each other. Branch the next
+  task off the previous task branch (`git checkout -b task/X.Y-next task/X.Y-prev`),
+  not off main.
 - No `production` branch by default — PRs ship to `main`. Deployable projects can
   add a downstream `production` branch and ship with `/promote-production` (ff-merge
   `main` → `production`); only that skill gates on `origin/production` (DEC-S022).
+
+## Workflow Notes
+
+- **Never rebase a task branch that already has commits on origin.** If main has
+  advanced while a PR branch is open, leave the branch as-is — GitHub's "Update
+  branch" button handles this at merge time. Rebasing rewrites remote history and
+  requires a force-push. Use `git merge --ff-only` only if explicitly asked.
+- **JSON parsing in Bash:** Prefer `gh ... --jq '...'` (built-in jq via `gh`) or
+  `jq` over `python3 -c "import json,sys; ..."` one-liners. The python invocations
+  trigger per-pattern permission prompts (each unique argument list is a new
+  allowlist entry), while `gh --jq` runs under the existing `Bash(gh ...)`
+  allowance. For non-`gh` JSON, install/use `jq` directly. Reserve python for
+  cases where the data shape genuinely needs control flow.
+- **Bug reports:** create a GitHub issue, label `bug`, add to current or next phase.
 
 ## Approach to Action
 
@@ -175,13 +210,33 @@ explicit confirmation for the genuinely consequential: flashing hardware, force-
 pushes, anything touching shared/remote state, anything hard to reverse.
 
 Check `docs/SPEC.md` "Not V1" before adding scope. If a task feels bigger than its
-estimate: stop, re-estimate; if it's a 13, break it down; if it's scope creep, flag
-and move on.
+estimate: stop, re-estimate; if it's scope creep, flag and move on.
+
+**Splitting is a reviewability call, not a model-capability one.** Points size
+*estimation*; they don't cap how much gets built in one run. Fable holds coherence
+across far more than an 8, and splitting a *coherent* task fragments context — two
+stitched-together 5s can land worse than one well-specified 8. So:
+- **Don't split a coherent 8** (one feature, one migration, one subsystem) just to
+  honor a ceiling — run it as one unit with the full spec up front.
+- **Do split** when the diff is too large to review well, the blast radius or
+  reversibility worries you, or an "8" is secretly two unrelated things.
+- **Still break genuine 13s** — for review and risk, and because a 13 usually means
+  the task isn't understood well enough yet. Not because the model can't hold it.
+- Larger units lean harder on a complete spec + crisp ACs and the `@architect`
+  gate. Raise the ceiling only with those in place.
 
 ## Tone
 
 Occasional dry humor welcome. One good line beats three forced ones. Skip
 disclaimers; be meticulous.
+
+## Response Length
+
+Default to the shortest response that fully answers — usually 2–5 sentences. No
+preamble, no restating the question, no closing offers to help further. No
+reflexive "let me know if you need more" or "happy to expand." Do offer concrete
+follow-ups when they'd save a future round-trip. Length is requested explicitly
+("expand," "give me the long version"), never the default.
 
 ## Verbosity
 
@@ -189,6 +244,29 @@ End-of-turn summaries: one or two sentences — what changed, what's next. Don't
 work just watched, don't restate the task. Mid-session updates: one sentence per
 state change ("Found X." "Build green."). The session-summary block is dense, not
 voluminous — cut the wall of prose.
+
+## Narration
+
+`Response Length` and `Verbosity` above are the standing baseline. This is the
+switchable knob on top of them — Opus 4.8 / Fable narrate more by default, so name
+the level and I'll hold it for the session.
+
+- **Terse** (default): Silence between tool calls. One sentence only when I find
+  something, change direction, or hit a blocker. No "Now I'll…", "Let me check…",
+  "Looking at…", no recapping what you just watched. Close with one or two
+  sentences on the outcome.
+- **Normal**: Brief progress notes at meaningful steps — not every action.
+- **Narrate**: Explain reasoning as I go. For teaching, debugging, or watching a
+  tricky change land.
+
+Switch any time: `narration: terse|normal|narrate`.
+
+Two mechanics move narration the same direction, independent of level:
+- **Keep adaptive thinking on.** With thinking disabled, 4.8 / Fable spill
+  reasoning into the visible answer — which reads as *more* narrative. Adaptive
+  keeps reasoning in thinking blocks and the response clean.
+- **Lower `effort`** (`low` / `medium`) trims preamble and confirmations — a
+  coarser lever than the levels above.
 
 ## Cost and Waste
 
