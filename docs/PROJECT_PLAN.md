@@ -122,12 +122,13 @@ to safe state, driven by a button, with a live countdown.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 4.1 | ESPAsyncWebServer + STA-join/SoftAP fallback + mDNS | 5 | §10 |
-| 4.2 | REST endpoints (status, schedule, settings, run, stop, calibrate, fault) | 8 | §10; range-validate, FAULT-gate |
-| 4.3 | SPA — 6 screens, vanilla, mobile-first, graceful degrade | 8 | §10.1; dev vs mock API |
-| 4.4 | gzip-embed pipeline (`build-spa`) → PROGMEM, < 50 KB | 3 | DEC-002 |
+| 4.1 | ESPAsyncWebServer + STA-join/SoftAP fallback + mDNS | 5 | [#55](https://github.com/mobiustripper42/tinkle/issues/55) · §10 |
+| 4.2 | REST endpoints (status, schedule, settings, run, stop, calibrate, fault) | 8 | [#56](https://github.com/mobiustripper42/tinkle/issues/56) · §10; range-validate, FAULT-gate |
+| 4.x | DEC-015 flow-check manual override (settings flag + API) | 3 | [#57](https://github.com/mobiustripper42/tinkle/issues/57) · DEC-015; banner in 4.3 |
+| 4.3 | SPA — 6 screens, vanilla, mobile-first, graceful degrade | 8 | [#58](https://github.com/mobiustripper42/tinkle/issues/58) · §10.1; dev vs mock API |
+| 4.4 | gzip-embed pipeline (`build-spa`) → PROGMEM, < 50 KB | 3 | [#59](https://github.com/mobiustripper42/tinkle/issues/59) · DEC-002 |
 
-**Phase 4 total: 24 pts**
+**Phase 4 total: 27 pts** — DEC-016 batches: Unit C = 4.1+4.2+4.x (one PR), Unit D = 4.3+4.4 (one PR).
 
 ---
 
