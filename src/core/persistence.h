@@ -49,8 +49,13 @@ public:
     // defaulted scalar — are absorbed by read-with-default and do NOT bump this.
     static constexpr uint32_t SCHEMA_VER = 1;
 
-    // First-boot / empty-NVS defaults.
+    // First-boot / empty-NVS defaults. TINKLE_SIM ([env:esp32_sim]) shortens the run
+    // default so a Wokwi run finishes in seconds — NOT a real-hardware value.
+#ifdef TINKLE_SIM
+    static constexpr uint32_t DEFAULT_RUN_SEC    = 10;
+#else
     static constexpr uint32_t DEFAULT_RUN_SEC    = 600;   // retires BUTTON_RUN_SEC (main.cpp)
+#endif
     static constexpr uint32_t DEFAULT_SW_MAX_SEC = 1200;  // matches RunConfig::swMaxRuntimeSec
     // Flow K (§7): a placeholder datasheet seed for the hall sensor — calibration (#36)
     // overwrites it. §15: defaults are seeds, not gospel; bench-confirm the real K.

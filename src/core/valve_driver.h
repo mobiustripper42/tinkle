@@ -42,8 +42,15 @@ struct ValveConfig {
 
     // Travel windows (§15 — bench-confirm against real parts; datasheet 6-10 s). A
     // 2-wire ball valve drives full travel; there is no 75 ms latch pulse anymore.
+    // TINKLE_SIM (the Wokwi build, platformio.ini [env:esp32_sim]) shortens these so a
+    // run is watchable — they are NOT the real-hardware values. Wet/bench builds use §15.
+#ifdef TINKLE_SIM
+    uint16_t zoneTravelMs     = 1000;
+    uint16_t diverterTravelMs = 1000;
+#else
     uint16_t zoneTravelMs     = 10000;  // §15 ZONE_TRAVEL_MS
     uint16_t diverterTravelMs = 10000;  // §15 DIVERTER_TRAVEL_MS
+#endif
 };
 
 class ValveDriver {
