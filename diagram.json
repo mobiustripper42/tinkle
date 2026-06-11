@@ -29,9 +29,8 @@
     { "type": "wokwi-led", "id": "led_z2",  "top": 160, "left": 330, "attrs": { "color": "green",  "label": "RING2" } },
     { "type": "wokwi-led", "id": "led_z3",  "top": 210, "left": 330, "attrs": { "color": "green",  "label": "RING3" } },
 
-    { "type": "chip-flow-pulse", "id": "flow", "top": 360, "left": -260, "attrs": {} },
     { "type": "wokwi-slide-switch", "id": "flow_sw", "top": 360, "left": -120,
-      "attrs": { "value": "1", "label": "FLOW on/off" } }
+      "attrs": { "label": "FLOW on/off" } }
   ],
   "connections": [
     [ "tm:CLK", "esp:25", "yellow", [] ],
@@ -73,11 +72,9 @@
     [ "led_z3:A", "esp:23", "green", [] ],
     [ "led_z3:C", "esp:GND.3", "black", [] ],
 
-    [ "flow:OUT", "esp:27", "purple", [] ],
-    [ "flow:GND", "esp:GND.1", "black", [] ],
-    [ "flow:EN", "flow_sw:2", "purple", [] ],
-    [ "flow_sw:1", "esp:3V3", "red", [] ],
-    [ "flow_sw:3", "esp:GND.1", "black", [] ]
+    [ "flow_sw:2", "esp:27", "purple", [] ],
+    [ "flow_sw:1", "esp:GND.1", "black", [] ],
+    [ "flow_sw:3", "esp:19", "purple", [] ]
   ],
   "dependencies": {}
 }

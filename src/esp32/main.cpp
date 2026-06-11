@@ -215,6 +215,21 @@ void setup() {
     watchdog.begin(millis());
     pinMode(WD_TRIPPED_IN, INPUT);
 
+#ifdef TINKLE_SIM
+    // Sim flow source (#62): the firmware generates its own fake hall pulses —
+    // 15 Hz square wave on a free pin (LEDC), looped back to FLOW_PIN in the
+    // Wokwi diagram through the "FLOW on/off" slide switch (stock parts; no
+    // custom chip, which the VS Code Wokwi runtime can't compile). 15 p/s at
+    // the 450 K seed reads ~2.0 GPM. The switch BOOTS QUIET (common to GND):
+    // a flow-on boot would cross the 50-pulse idle threshold in ~3.3 s and
+    // latch FAULT_UNEXPECTED_FLOW before anyone touched a button. Slide it up
+    // as a run starts; down mid-run for E1; up while idle for E2.
+    constexpr uint8_t FLOW_SIM_PIN = 19;   // free per pins.h; sim-only loopback
+    ledcSetup(0, 15, 10);                  // ch 0, 15 Hz, 10-bit
+    ledcAttachPin(FLOW_SIM_PIN, 0);
+    ledcWrite(0, 512);                     // 50% duty
+#endif
+
     // Web layer last — everything it exposes exists by now. WiFi join is kicked
     // off here and watched from the loop (non-blocking); the server is live in
     // either mode and a phone finds it at http://tinkle.local.

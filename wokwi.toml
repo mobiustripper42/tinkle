@@ -16,9 +16,12 @@
 #      creds), NTP syncs, and the SPA/API forward to the host: http://localhost:8180/
 #      (remote VPS: let VS Code forward 8180, or tunnel it).
 #
-# Flow sensor: the chips/flow-pulse custom chip feeds ~15 pulses/s (~2.0 GPM at the
-# 450 p/gal K seed) into GPIO27 while the "FLOW on/off" slide switch is up. Slide it
-# down mid-run to provoke FAULT_NO_FLOW (3 s sim grace); slide it up while idle to
+# Flow sensor: the sim firmware generates its own fake hall pulses — a 15 Hz LEDC
+# square wave on GPIO19 (TINKLE_SIM only; ~2.0 GPM at the 450 K seed), looped back
+# to GPIO27 in the diagram through the "FLOW on/off" slide switch. The switch BOOTS
+# QUIET (flow-on at boot would cross the 50-pulse idle threshold in ~3.3 s and latch
+# FAULT_UNEXPECTED_FLOW unprovoked). Slide it up as a run starts (the ~2 s staging
+# + 3 s grace leave room); down mid-run to provoke FAULT_NO_FLOW; up while idle to
 # provoke FAULT_UNEXPECTED_FLOW (50 pulses over a 5 s window).
 #
 # Diagram omits LED series resistors (sim convenience); the breadboard bench (tier 3)
