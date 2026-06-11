@@ -79,4 +79,30 @@ void Scheduler::evaluate(uint32_t nowMs) {
     }
 }
 
+void packScheduleEntry(const ScheduleEntry& e, uint8_t out[SCHED_ENTRY_BYTES]) {
+    out[0] = e.id;
+    out[1] = e.zoneIndex;
+    out[2] = e.hour;
+    out[3] = e.minute;
+    out[4] = (uint8_t)(e.durationSec & 0xFF);          // u16 little-endian
+    out[5] = (uint8_t)(e.durationSec >> 8);
+    out[6] = e.daysMask;
+    out[7] = (uint8_t)e.fertOverride;
+    out[8] = e.enabled ? 1 : 0;
+    out[9] = 0;                                        // reserved
+}
+
+ScheduleEntry unpackScheduleEntry(const uint8_t in[SCHED_ENTRY_BYTES]) {
+    ScheduleEntry e;
+    e.id           = in[0];
+    e.zoneIndex    = in[1];
+    e.hour         = in[2];
+    e.minute       = in[3];
+    e.durationSec  = (uint16_t)(in[4] | ((uint16_t)in[5] << 8));
+    e.daysMask     = in[6];
+    e.fertOverride = in[7] <= 2 ? (FertOverride)in[7] : FertOverride::Auto;
+    e.enabled      = in[8] != 0;
+    return e;
+}
+
 } // namespace tinkle

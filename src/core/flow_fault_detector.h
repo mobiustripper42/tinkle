@@ -58,8 +58,16 @@ public:
     // fault sends the state to Fault, neither check arms, so it won't re-raise.
     Fault update(RunState state, float rateGPM, uint32_t pulses, uint32_t nowMs);
 
+    // DEC-015 manual override (#57): while muted, update() returns None — faults are
+    // muted, MEASUREMENT IS NOT (FlowMonitor keeps counting and reporting; the windows
+    // here keep tracking, so un-muting needs no re-seed). Software-only by construction:
+    // this gates only the two flow verdicts, never the Watchdog path or the pump gate.
+    void setMuted(bool muted) { muted_ = muted; }
+    bool muted() const        { return muted_; }
+
 private:
     Config   cfg_;
+    bool     muted_ = false;       // DEC-015: default = checks ON
     RunState prevState_         = RunState::Idle;
     uint32_t runStartMs_        = 0;   // when RUNNING was (re)entered — grace clock origin
     uint32_t idleBaseline_      = 0;   // pulse count at the start of the current idle window

@@ -42,6 +42,14 @@ struct ScheduleEntry {
     bool         enabled      = false;
 };
 
+// Fixed-width pack format for the §8 NVS schedule blob (Phase 4 save-on-edit). One
+// entry = 10 bytes, explicit little-endian for the u16 — the blob must survive a
+// firmware rebuild, so no struct-memcpy (padding/ABI would silently version it).
+// Byte 9 is reserved (0) for forward-compat without a schema bump.
+constexpr uint16_t SCHED_ENTRY_BYTES = 10;
+void packScheduleEntry(const ScheduleEntry& e, uint8_t out[SCHED_ENTRY_BYTES]);
+ScheduleEntry unpackScheduleEntry(const uint8_t in[SCHED_ENTRY_BYTES]);
+
 class Scheduler {
 public:
     static constexpr uint8_t MAX_ENTRIES = 16;   // V1 cap; the UI/NVS bound it later

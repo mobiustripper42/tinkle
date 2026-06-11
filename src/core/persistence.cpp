@@ -8,6 +8,10 @@ namespace tinkle {
 static constexpr const char* KEY_SCHEMA  = "schema_ver";  // 10
 static constexpr const char* KEY_SW_MAX  = "sw_max_sec";  // 10
 static constexpr const char* KEY_K_PPG   = "k_ppg";       //  5  flow K, pulses/gallon (§7)
+static constexpr const char* KEY_FLOWOVR = "flow_ovr";    //  8  DEC-015 override (#57)
+static constexpr const char* KEY_SSID    = "wifi_ssid";   //  9  Phase 4 (#55)
+static constexpr const char* KEY_PASS    = "wifi_pass";   //  9
+static constexpr const char* KEY_SCHED   = "sched";       //  5  packed schedule blob (#56)
 
 const char* Persistence::zoneKey(char* buf, uint8_t zone) {
     // "z<N>_dur": longest is two-digit zone "z15_dur" = 7 chars + NUL. buf must be >= 8.
@@ -52,6 +56,10 @@ void Persistence::begin() {
     swMaxRuntimeSec_ = store_.getU32(KEY_SW_MAX, DEFAULT_SW_MAX_SEC);
 
     pulsesPerGallon_ = store_.getFloat(KEY_K_PPG, DEFAULT_PULSES_PER_GALLON);
+
+    flowOverride_ = store_.getU8(KEY_FLOWOVR, 0) != 0;     // DEC-015: default = checks ON
+    store_.getStr(KEY_SSID, wifiSsid_, SSID_CAP);          // "" when unconfigured
+    store_.getStr(KEY_PASS, wifiPass_, PASS_CAP);
 }
 
 uint32_t Persistence::zoneDefaultSec(uint8_t zone) const {
@@ -78,6 +86,57 @@ void Persistence::setPulsesPerGallon(float k) {
     if (pulsesPerGallon_ == k) return;     // write-on-change (exact: we only ever store what we set)
     pulsesPerGallon_ = k;
     store_.putFloat(KEY_K_PPG, k);
+}
+
+void Persistence::setFlowOverride(bool on) {
+    if (flowOverride_ == on) return;
+    flowOverride_ = on;
+    store_.putU8(KEY_FLOWOVR, on ? 1 : 0);
+}
+
+// Bounded copy that never relies on the source being shorter than the field.
+static void copyCred(char* dst, uint16_t cap, const char* src) {
+    uint16_t i = 0;
+    if (src) for (; i + 1 < cap && src[i]; ++i) dst[i] = src[i];
+    dst[i] = '\0';
+}
+
+// C-string equality up to the first NUL — array tails past the terminator are
+// uninitialized in the staging buffers and must not vote.
+static bool sameStr(const char* a, const char* b) {
+    uint16_t i = 0;
+    while (a[i] && a[i] == b[i]) ++i;
+    return a[i] == b[i];
+}
+
+void Persistence::setWifiCreds(const char* ssid, const char* pass) {
+    char newSsid[SSID_CAP]; copyCred(newSsid, SSID_CAP, ssid);
+    char newPass[PASS_CAP]; copyCred(newPass, PASS_CAP, pass);
+    if (sameStr(wifiSsid_, newSsid) && sameStr(wifiPass_, newPass)) return;   // write-on-change
+    copyCred(wifiSsid_, SSID_CAP, newSsid);
+    copyCred(wifiPass_, PASS_CAP, newPass);
+    store_.putStr(KEY_SSID, wifiSsid_);
+    store_.putStr(KEY_PASS, wifiPass_);
+}
+
+uint8_t Persistence::loadScheduleEntries(ScheduleEntry* out, uint8_t cap) {
+    uint8_t blob[Scheduler::MAX_ENTRIES * SCHED_ENTRY_BYTES];
+    const uint16_t len = store_.getBytes(KEY_SCHED, blob, sizeof(blob));
+    uint8_t n = (uint8_t)(len / SCHED_ENTRY_BYTES);   // a torn/odd blob truncates safely
+    if (n > cap) n = cap;
+    for (uint8_t i = 0; i < n; ++i)
+        out[i] = unpackScheduleEntry(blob + i * SCHED_ENTRY_BYTES);
+    return n;
+}
+
+void Persistence::saveScheduleEntries(const ScheduleEntry* entries, uint8_t count) {
+    if (count > Scheduler::MAX_ENTRIES) count = Scheduler::MAX_ENTRIES;
+    uint8_t blob[Scheduler::MAX_ENTRIES * SCHED_ENTRY_BYTES];
+    for (uint8_t i = 0; i < count; ++i)
+        packScheduleEntry(entries[i], blob + i * SCHED_ENTRY_BYTES);
+    // The blob is the whole schedule, replaced atomically on every edit (§13
+    // save-on-edit). No write-on-change diff: edits are operator-rate, not loop-rate.
+    store_.putBytes(KEY_SCHED, blob, (uint16_t)(count * SCHED_ENTRY_BYTES));
 }
 
 } // namespace tinkle

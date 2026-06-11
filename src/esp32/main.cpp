@@ -15,7 +15,10 @@
 #include "../core/watchdog.h"
 #include "../core/fault_manager.h"
 #include "../core/valve_rest_monitor.h"
+#include "../core/api.h"
 #include "display_tm1637.h"
+#include "wifi_manager.h"
+#include "web_server.h"
 #include "preferences_store.h"
 #include "system_clock.h"
 #include "flow_sensor.h"
@@ -115,6 +118,15 @@ static FaultManager faultManager(runController);
 static const ValveRestMonitor::Config restCfg;           // §15 seeds
 static ValveRestMonitor valveRest(restCfg);
 
+// Web layer (§10 / Unit C, #55-#57). Api is core (host-tested policy); WebServer is
+// the async-HTTP plumbing serializing against this loop via lock()/unlock(); the
+// WiFi manager joins the mesh or falls back to SoftAP, with mDNS either way. WiFi
+// has no role in watering (§17 local autonomy) — it only carries the phone UI.
+static Api         api(Api::Deps{runController, scheduler, persistence, faultManager,
+                                 calibration, flowMonitor, flowFault, valveRest, wallClock});
+static WifiManager wifiManager(persistence);
+static WebServer   webServer(api, flowSensor, wifiManager);
+
 // Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
 // come straight from the pins.h zone table (data-driven). The press policy lives in
 // loop(); the panel module only produces clean debounced edges.
@@ -164,6 +176,20 @@ void setup() {
     prefsStore.begin();
     persistence.begin();
 
+    // Apply the persisted scalars that modules captured defaults for (§10 settings):
+    // the software run ceiling and the DEC-015 flow-check override.
+    runController.setSwMaxRuntimeSec(persistence.swMaxRuntimeSec());
+    flowFault.setMuted(persistence.flowOverride());
+
+    // Rehydrate the schedule from its NVS blob (§13 — the schedule lives in flash
+    // and runs headless; WiFi is never required for it).
+    {
+        ScheduleEntry stored[Scheduler::MAX_ENTRIES];
+        const uint8_t n = persistence.loadScheduleEntries(stored, Scheduler::MAX_ENTRIES);
+        for (uint8_t i = 0; i < n; ++i) scheduler.add(stored[i]);
+        if (n) Serial.printf("[tinkle] schedule: %u entries loaded\n", n);
+    }
+
     // Configure TZ + SNTP and take the first sync attempt (§13). No network yet, so this
     // stays invalid until Phase 4 brings up WiFi; the call is harmless until then.
     systemClock.begin();
@@ -189,6 +215,12 @@ void setup() {
     watchdog.begin(millis());
     pinMode(WD_TRIPPED_IN, INPUT);
 
+    // Web layer last — everything it exposes exists by now. WiFi join is kicked
+    // off here and watched from the loop (non-blocking); the server is live in
+    // either mode and a phone finds it at http://tinkle.local.
+    wifiManager.begin(millis());
+    webServer.begin();
+
     Serial.println(F("[tinkle] boot: safe state, IDLE — cooperative loop running."));
 }
 
@@ -196,6 +228,15 @@ void loop() {
     // One millis() read per pass; long actions time against it inside the modules.
     const uint32_t now = millis();
     const uint32_t t0  = micros();
+
+    // Serialize this pass against the async HTTP handlers (web_server.h note): they
+    // run on the other core and call into the same modules. Sub-ms hold, released
+    // every pass, so a handler never waits longer than a tick or two.
+    webServer.lock();
+
+    wifiManager.tick(now);     // STA watcher / SoftAP fallback (§10). Inside the lock:
+                               // it reads creds postSettings mutates, and /api/status
+                               // reads the mode this mutates — both need the bracket.
 
     runController.tick(now);   // sole actuator commander; ticks the ValveDriver too
     buttons.tick(now);         // debounce + edge detect (§11)
@@ -245,7 +286,9 @@ void loop() {
     // Flow faults (§7/§14 / #35): no-flow during RUNNING (post-grace) / unexpected flow
     // during IDLE. The detector reads the post-tick rate + cumulative count against the
     // run state and returns the fault to raise; raiseFault is the sole actuator commander
-    // and no-ops once latched, so calling it every tick is safe.
+    // and no-ops once latched, so calling it every tick is safe. The DEC-015 override
+    // mutes inside the detector (setMuted — boot + /api/settings keep it current), so a
+    // muted detector returns None here while measurement keeps flowing regardless.
     const Fault flowVerdict = flowFault.update(runState, flowMonitor.rateGPM(),
                                                flowSensor.pulses(), now);
     if (flowVerdict != Fault::None) runController.raiseFault(flowVerdict, now);
@@ -279,7 +322,11 @@ void loop() {
     // Fault, not Idle), letting a clear through while water still moves.
     // NoFlow/CalRange are one-shot events with no live condition — they clear freely.
     faultManager.setConditionActive(Fault::Watchdog, wdTrip);
-    faultManager.setConditionActive(Fault::UnexpectedFlow, flowMonitor.rateGPM() > 0.0f);
+    // With the DEC-015 override on, the operator has declared the sensor untrust-
+    // worthy — its pulses no longer block a clear (the API's clear-on-enable relies
+    // on this staying false while overridden).
+    faultManager.setConditionActive(Fault::UnexpectedFlow,
+                                    !persistence.flowOverride() && flowMonitor.rateGPM() > 0.0f);
     faultManager.tick(now);
 
     // Auto-return self-test (DEC-014 / #52): fresh state read — a fault latching
@@ -324,7 +371,9 @@ void loop() {
     // by construction, so there is no hold-state to cache — RunController sets the legs
     // per-run in PREP_DIVERTER, DEC-013.)
 
-    // (web server tick lands here in Phase 4)
+    // Core-state section over — let any waiting HTTP handler in. The async server
+    // needs no tick; WiFi is watched at the top of the pass.
+    webServer.unlock();
 
     // micros() subtraction wraps cleanly across the ~71 min rollover.
     if (loopMon.record(micros() - t0))
