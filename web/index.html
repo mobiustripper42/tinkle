@@ -1,23 +1,581 @@
-<!doctype html>
+<!DOCTYPE html>
+<!-- Tinkle SPA (firmware spec §10.1, #58). One self-contained file: inline CSS+JS,
+     no external fetches (no internet in the tunnel), gzipped into PROGMEM by
+     tools/build_spa.py (#59) and served at / by web_server.h.
+
+     THIN CLIENT ONLY: every action is a §10 API call; no business logic lives
+     here and nothing here is safety-relevant (§10.1 — a dead phone never affects
+     a run). Dev mode: open from file:// or append ?mock=1 to run against an
+     in-page mock API instead of the device. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Tinkle</title>
+<style>
+/* Sunlight-readable: max-contrast light theme, big type, fat touch targets. */
+:root{
+  --ink:#111; --paper:#fff; --dim:#555; --line:#bbb;
+  --go:#0a7a2f; --stop:#c81e1e; --warn:#9a6700; --card:#f4f4f2;
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+html{font:18px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{margin:0; background:var(--paper); color:var(--ink);
+     padding-bottom:9.5rem}    /* room for STOP + tab bar */
+main{max-width:34rem; margin:0 auto; padding:.75rem}
+h1{font-size:1.3rem; margin:.25rem 0 .75rem}
+h2{font-size:1.05rem; margin:1rem 0 .4rem; color:var(--dim); text-transform:uppercase; letter-spacing:.04em}
+.screen{display:none}
+.screen.active{display:block}
+
+.banner{padding:.6rem .75rem; font-weight:700; text-align:center; display:none}
+.banner.show{display:block}
+#net-banner{background:#333; color:#fff}
+#ovr-banner{background:var(--warn); color:#fff}
+#fault-banner{background:var(--stop); color:#fff}
+
+.card{background:var(--card); border:1px solid var(--line); border-radius:.6rem;
+      padding:.75rem; margin:.5rem 0}
+.big{font-size:3.4rem; font-weight:800; text-align:center; font-variant-numeric:tabular-nums}
+.state-line{text-align:center; font-size:1.2rem; font-weight:700}
+.kv{display:flex; justify-content:space-between; padding:.2rem 0; gap:.5rem}
+.kv span:first-child{color:var(--dim)}
+.kv span:last-child{font-weight:700; text-align:right}
+
+button{font:inherit; font-weight:700; color:var(--ink); background:#fff;
+       border:2px solid var(--ink); border-radius:.6rem;
+       padding:.8rem 1rem; min-height:3rem; width:100%; margin:.25rem 0; cursor:pointer}
+button:active{transform:scale(.985)}
+button:disabled{opacity:.45}
+button.go{background:var(--go); border-color:var(--go); color:#fff}
+button.danger{background:var(--stop); border-color:var(--stop); color:#fff}
+button.small{width:auto; min-height:2.4rem; padding:.4rem .8rem; font-size:.9rem}
+
+label{display:block; margin:.5rem 0 .15rem; color:var(--dim); font-size:.9rem}
+input,select{font:inherit; width:100%; padding:.6rem; min-height:3rem;
+             border:2px solid var(--line); border-radius:.5rem; background:#fff}
+input[type=checkbox]{width:1.6rem; height:1.6rem; min-height:0}
+.row{display:flex; gap:.5rem; align-items:center}
+.row>*{flex:1}
+.row>.shrink{flex:0 0 auto; width:auto}
+
+.days{display:flex; gap:.25rem; margin:.25rem 0}
+.days button{min-height:2.6rem; padding:.3rem 0; font-size:.85rem; margin:0}
+.days button.on{background:var(--ink); color:#fff}
+
+.muted{color:var(--dim); font-size:.9rem}
+.ok-flash{color:var(--go); font-weight:700}
+.err-flash{color:var(--stop); font-weight:700}
+
+#stopall{position:fixed; left:0; right:0; bottom:4.25rem; padding:0 .75rem; z-index:5}
+#stopall button{max-width:34rem; margin:0 auto; display:block; font-size:1.3rem; min-height:3.6rem;
+                box-shadow:0 .25rem .75rem rgba(0,0,0,.25)}
+nav{position:fixed; left:0; right:0; bottom:0; display:flex; background:var(--ink); z-index:5}
+nav button{flex:1; background:none; border:none; border-radius:0; color:#bbb;
+           font-size:.78rem; min-height:4rem; padding:.3rem 0; margin:0}
+nav button.active{color:#fff; font-weight:800; border-top:3px solid #fff}
+nav .ico{display:block; font-size:1.3rem}
+.fault-item{border-left:.4rem solid var(--stop); padding-left:.6rem; margin:.5rem 0}
+.flag-item{border-left:.4rem solid var(--warn); padding-left:.6rem; margin:.5rem 0}
+</style>
 </head>
 <body>
-<!--
-  Tinkle phone UI — SCAFFOLD PLACEHOLDER.
 
-  Built in Phase 4 (firmware spec §10.1): vanilla HTML/CSS/JS, single file,
-  inline CSS+JS, gzipped into PROGMEM and served by ESPAsyncWebServer with
-  Content-Encoding: gzip. Target the whole bundle under ~50 KB gzipped. Thin
-  client over the §10 REST API only — no business logic in the browser, no
-  external CDN/font/script fetches, no role in fail-dry.
+<div id="net-banner"   class="banner">DISCONNECTED — showing last known state</div>
+<div id="ovr-banner"   class="banner">&#9888; FLOW CHECK DISABLED</div>
+<div id="fault-banner" class="banner">FAULT — tap for details</div>
 
-  Dev against a mock API server (see web/README.md) — no hardware needed.
--->
-<h1>Tinkle</h1>
-<p>UI scaffold — built in Phase 4.</p>
+<main>
+
+<!-- 1 · Status / home -->
+<section id="scr-home" class="screen active">
+  <h1>Tinkle</h1>
+  <div class="card">
+    <div class="state-line" id="st-state">—</div>
+    <div class="big" id="st-count">--:--</div>
+    <div class="kv"><span>Zone</span><span id="st-zone">—</span></div>
+    <div class="kv"><span>Flow</span><span id="st-gpm">—</span></div>
+    <div class="kv"><span>This run</span><span id="st-gal">—</span></div>
+    <div class="kv"><span>Diverter</span><span id="st-div">—</span></div>
+    <div class="kv"><span>Queued</span><span id="st-q">—</span></div>
+  </div>
+  <h2>Last run</h2>
+  <div class="card" id="st-last">—</div>
+  <h2>Device</h2>
+  <div class="card">
+    <div class="kv"><span>Clock</span><span id="st-clock">—</span></div>
+    <div class="kv"><span>WiFi</span><span id="st-wifi">—</span></div>
+    <div class="kv"><span>Up</span><span id="st-up">—</span></div>
+  </div>
+</section>
+
+<!-- 2 · Manual run -->
+<section id="scr-run" class="screen">
+  <h1>Manual run</h1>
+  <label for="run-zone">Zone</label>
+  <select id="run-zone"></select>
+  <label for="run-min">Duration (minutes)</label>
+  <input id="run-min" type="number" inputmode="numeric" min="1" max="120" value="10">
+  <div class="row" style="margin:.6rem 0">
+    <label class="row" style="margin:0"><input id="run-fert" type="checkbox" class="shrink">
+      <span>Fertigate (through Dosatron)</span></label>
+  </div>
+  <button class="go" id="run-go">START RUN</button>
+  <div id="run-msg" class="muted" role="status"></div>
+</section>
+
+<!-- 3 · Schedule -->
+<section id="scr-sched" class="screen">
+  <h1>Schedule</h1>
+  <div id="sched-list"></div>
+  <button id="sched-add">+ Add entry</button>
+  <button class="go" id="sched-save">SAVE SCHEDULE</button>
+  <div id="sched-msg" class="muted" role="status"></div>
+  <p class="muted">Saving replaces the whole schedule on the controller. The schedule
+  runs from the controller's flash — phone and WiFi not required.</p>
+</section>
+
+<!-- 4 · Settings -->
+<section id="scr-set" class="screen">
+  <h1>Settings</h1>
+  <h2>Zone defaults (minutes)</h2>
+  <div id="set-zones"></div>
+  <h2>Limits</h2>
+  <label for="set-swmax">Software max runtime (minutes, &le; 30)</label>
+  <input id="set-swmax" type="number" inputmode="numeric" min="1" max="30">
+  <h2>Flow sensor</h2>
+  <div class="kv"><span>K (pulses/gallon)</span><span id="set-k">—</span></div>
+  <p class="muted">K is set by calibration, not edited here.</p>
+  <label class="row"><input id="set-ovr" type="checkbox" class="shrink">
+    <span><b>Disable flow checks</b> (DEC-015) — runs ignore the flow sensor.
+    Use when the sensor is broken or lying. Watchdog and runtime limits stay armed.</span></label>
+  <h2>WiFi</h2>
+  <label for="set-ssid">Network (SSID)</label>
+  <input id="set-ssid" autocomplete="off">
+  <label for="set-pass">Password</label>
+  <input id="set-pass" type="password" autocomplete="off" placeholder="(unchanged unless set)">
+  <p class="muted">New WiFi settings apply at next power-up.</p>
+  <button class="go" id="set-save">SAVE SETTINGS</button>
+  <div id="set-msg" class="muted" role="status"></div>
+</section>
+
+<!-- 5 · Calibration -->
+<section id="scr-cal" class="screen">
+  <h1>Calibrate flow</h1>
+  <div class="card muted">
+    Run any zone into a measured container (5-gal bucket). <b>Zone 3 (hose outlet)
+    is easiest once plumbed.</b> The flow meter sits on the common line, so one
+    calibration sets K for every zone. The run stops by itself (~2 min); measure
+    what you collected and enter it below.
+  </div>
+  <div id="cal-idle">
+    <label for="cal-zone">Zone</label>
+    <select id="cal-zone"></select>
+    <button class="go" id="cal-start">START CALIBRATION RUN</button>
+  </div>
+  <div id="cal-running" style="display:none">
+    <div class="card">
+      <div class="state-line">Calibration running&hellip;</div>
+      <div class="kv"><span>Pulses counted</span><span id="cal-pulses">0</span></div>
+    </div>
+    <button class="danger" id="cal-cancel">CANCEL</button>
+  </div>
+  <div id="cal-await" style="display:none">
+    <div class="card">
+      <div class="state-line">Run done — measure the water</div>
+      <div class="kv"><span>Pulses counted</span><span id="cal-pulses2">0</span></div>
+    </div>
+    <label for="cal-gal">Measured gallons</label>
+    <input id="cal-gal" type="number" inputmode="decimal" step="0.05" min="0.25" max="100">
+    <button class="go" id="cal-finish">COMPUTE &amp; SAVE K</button>
+    <button id="cal-cancel2">Discard</button>
+  </div>
+  <div id="cal-msg" class="muted" role="status"></div>
+</section>
+
+<!-- 6 · Faults -->
+<section id="scr-faults" class="screen">
+  <h1>Faults</h1>
+  <div id="fault-active" class="card">No fault.</div>
+  <button class="go" id="fault-clear">CLEAR FAULT</button>
+  <div id="fault-clear-msg" class="muted" role="status"></div>
+  <h2>Maintenance flags</h2>
+  <div id="rest-flags" class="card">None.</div>
+  <h2>Recent fault log</h2>
+  <div id="fault-log" class="card">Empty.</div>
+</section>
+
+</main>
+
+<div id="stopall"><button class="danger" id="stop-btn">&#9632; STOP ALL</button></div>
+
+<nav>
+  <button data-scr="home"   class="active"><span class="ico">&#8962;</span>Home</button>
+  <button data-scr="run"    ><span class="ico">&#9654;</span>Run</button>
+  <button data-scr="sched"  ><span class="ico">&#128337;</span>Sched</button>
+  <button data-scr="set"    ><span class="ico">&#9881;</span>Setup</button>
+  <button data-scr="cal"    ><span class="ico">&#128167;</span>Cal</button>
+  <button data-scr="faults" ><span class="ico">&#9888;</span>Faults</button>
+</nav>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const ZONE_NAMES = ['Zone 1', 'Zone 2', 'Zone 3 — hose'];
+const FAULT_TEXT = {
+  none:'No fault.', noFlow:'E1 — No flow during a run (clog, dead pump, valve never opened).',
+  unexpectedFlow:'E2 — Water moving while idle (stuck valve or leak).',
+  watchdog:'E3 — Hardware watchdog tripped (run exceeded the hardware ceiling).',
+  calRange:'E4 — Calibration rejected (measurement implausible).',
+  clock:'E5 — Clock invalid.', valveRest:'E6 — A valve failed to rest closed (service it).'
+};
+const STATE_TEXT = {
+  idle:'IDLE', prepDiverter:'PREPARING…', openZone:'OPENING VALVE…',
+  startPump:'STARTING PUMP…', running:'WATERING', stopPump:'STOPPING…',
+  closeZone:'CLOSING VALVE…', settle:'SETTLING…', fault:'⚠ FAULT'
+};
+
+/* ---- API (thin; ?mock=1 or file:// swaps in the in-page mock for UI dev) ---- */
+const MOCK = location.protocol === 'file:' || /[?&]mock=1/.test(location.search);
+const net = { ok: true };
+async function api(path, body) {
+  if (MOCK) return mock(path, body);
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const r = await fetch(path, body !== undefined
+      ? { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body), signal: ctl.signal }
+      : { signal: ctl.signal });
+    net.ok = true;
+    const j = await r.json().catch(() => ({}));
+    return { ok: r.ok, code: r.status, ...j };
+  } catch (e) {
+    net.ok = false;
+    return { ok:false, code:0, error:'disconnected' };
+  } finally { clearTimeout(t); renderBanners(); }
+}
+
+/* ---- state + poll loop ---- */
+let S = null;                       // last /api/status
+let statusAt = 0;                   // Date.now() when S landed
+let SET = null;                     // last /api/settings
+
+async function poll() {
+  const s = await api('/api/status');
+  if (s.ok) { S = s; statusAt = Date.now(); }
+  renderAll();
+  const active = S && S.state !== 'idle' && S.state !== 'fault';
+  setTimeout(poll, active ? 1000 : 2000);
+}
+
+/* ---- rendering ---- */
+function renderBanners() {
+  $('#net-banner').classList.toggle('show', !net.ok);
+  $('#ovr-banner').classList.toggle('show', !!(S && S.flow && S.flow.overrideActive));
+  $('#fault-banner').classList.toggle('show', !!(S && S.fault && S.fault.active !== 'none'));
+}
+function mmss(sec) {
+  sec = Math.max(0, Math.round(sec));
+  return String(Math.floor(sec/60)).padStart(2,'0') + ':' + String(sec%60).padStart(2,'0');
+}
+function ago(ms) {
+  const m = Math.round(ms/60000);
+  return m < 1 ? 'just now' : m < 60 ? m+'m ago' : Math.round(m/60)+'h ago';
+}
+function zoneName(i) { return i < 0 ? '—' : (ZONE_NAMES[i] || ('Zone '+(i+1))); }
+
+function renderHome() {
+  if (!S) return;
+  $('#st-state').textContent = STATE_TEXT[S.state] || S.state;
+  const live = S.state === 'running'
+    ? S.remainingSec - (Date.now() - statusAt)/1000 : S.remainingSec;
+  $('#st-count').textContent = S.state === 'running' ? mmss(live) : '--:--';
+  $('#st-zone').textContent  = zoneName(S.activeZone);
+  $('#st-gpm').textContent   = S.flow ? S.flow.gpm.toFixed(2) + ' GPM' : '—';
+  $('#st-gal').textContent   = S.flow ? S.flow.gallons.toFixed(2) + ' gal' : '—';
+  $('#st-div').textContent   = S.lastRun && S.state !== 'idle' && S.lastRun.fertigate ? 'FERT' : 'plain';
+  $('#st-q').textContent     = S.queueDepth || 0;
+  const lr = S.lastRun || {};
+  $('#st-last').textContent = lr.result === 'none' ? 'No runs since boot.' :
+    zoneName(lr.zone) + ' · ' + Math.round(lr.durationSec/60) + ' min · ' +
+    (lr.fertigate ? 'fert' : 'plain') + ' · ' + lr.result +
+    (lr.result === 'faulted' ? ' (' + lr.fault + ')' : '');
+  $('#st-clock').textContent = S.clock && S.clock.valid
+    ? String(S.clock.hour).padStart(2,'0')+':'+String(S.clock.minute).padStart(2,'0') : 'not synced';
+  $('#st-wifi').textContent  = S.wifi ? S.wifi.mode + ' ' + (S.wifi.ip || '') : '—';
+  $('#st-up').textContent    = S.uptimeMs ? Math.floor(S.uptimeMs/3600000)+'h '+
+                               Math.floor(S.uptimeMs/60000)%60+'m' : '—';
+}
+
+function renderFaults() {
+  if (!S) return;
+  const f = S.fault || { active:'none', log:[] };
+  $('#fault-active').textContent = FAULT_TEXT[f.active] || f.active;
+  $('#fault-active').style.borderLeft = f.active !== 'none' ? '.4rem solid var(--stop)' : '';
+  $('#fault-clear').disabled = f.active === 'none';
+  const flags = S.valveRestFlags || 0;
+  $('#rest-flags').innerHTML = flags === 0 ? 'None.' :
+    ZONE_NAMES.map((n,i) => flags & (1<<i)
+      ? '<div class="flag-item">'+n+': not resting closed — service the valve (E6)</div>' : '').join('');
+  $('#fault-log').innerHTML = (f.log && f.log.length)
+    ? f.log.map(e => '<div class="fault-item">'+e.code+' · '+ago((S.uptimeMs||0) - e.atMs)+'</div>').join('')
+    : 'Empty.';
+}
+
+function renderCal() {
+  if (!S) return;
+  const ph = S.cal ? S.cal.phase : 'idle';
+  $('#cal-idle').style.display    = ph === 'idle'     ? '' : 'none';
+  $('#cal-running').style.display = ph === 'running'  ? '' : 'none';
+  $('#cal-await').style.display   = ph === 'awaiting' ? '' : 'none';
+  if (S.cal) {
+    $('#cal-pulses').textContent  = S.cal.pulses;
+    $('#cal-pulses2').textContent = S.cal.pulses;
+  }
+}
+
+function renderAll() { renderBanners(); renderHome(); renderFaults(); renderCal(); }
+
+/* ---- navigation ---- */
+function show(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  $('#scr-'+name).classList.add('active');
+  document.querySelectorAll('nav button').forEach(b =>
+    b.classList.toggle('active', b.dataset.scr === name));
+  if (name === 'sched') loadSchedule();
+  if (name === 'set' || name === 'run') loadSettings();
+}
+document.querySelectorAll('nav button').forEach(b =>
+  b.addEventListener('click', () => show(b.dataset.scr)));
+$('#fault-banner').addEventListener('click', () => show('faults'));
+
+/* ---- STOP ALL (always visible, never confirms) ---- */
+$('#stop-btn').addEventListener('click', () => api('/api/stop', {}));
+
+/* ---- manual run ---- */
+function fillZoneSelect(sel) {
+  const n = (SET && SET.zoneDefaults) ? SET.zoneDefaults.length : 3;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (let i = 0; i < n; i++) {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = zoneName(i);
+    sel.appendChild(o);
+  }
+  if (prev !== '' && +prev < n) sel.value = prev;
+}
+$('#run-zone').addEventListener('change', () => {
+  if (SET && SET.zoneDefaults) {
+    const d = SET.zoneDefaults[$('#run-zone').value];
+    if (d) $('#run-min').value = Math.max(1, Math.round(d/60));
+  }
+});
+$('#run-go').addEventListener('click', async () => {
+  const r = await api('/api/run', {
+    zoneIndex: +$('#run-zone').value,
+    durationSec: Math.round(+$('#run-min').value * 60),
+    fertigate: $('#run-fert').checked
+  });
+  flash('#run-msg', r.ok ? (r.queued ? 'Queued behind the current run.' : 'Started.')
+                         : 'Refused: ' + (r.error || r.code), r.ok);
+  if (r.ok) show('home');
+});
+
+/* ---- schedule ---- */
+let sched = [];
+const DAY_CH = ['S','M','T','W','T','F','S'];
+async function loadSchedule() {
+  const r = await api('/api/schedule');
+  if (r.ok) { sched = r.entries || []; renderSched(); }
+}
+function renderSched() {
+  const host = $('#sched-list');
+  host.innerHTML = '';
+  sched.forEach((e, i) => {
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.innerHTML =
+      '<div class="row">' +
+        '<select data-k="zoneIndex"></select>' +
+        '<input data-k="time" type="time" value="' +
+          String(e.hour).padStart(2,'0') + ':' + String(e.minute).padStart(2,'0') + '">' +
+      '</div>' +
+      '<div class="row">' +
+        '<input data-k="min" type="number" inputmode="numeric" min="1" max="120" value="' +
+          Math.max(1, Math.round(e.durationSec/60)) + '" aria-label="minutes">' +
+        '<select data-k="fertOverride">' +
+          '<option value="0">Fert: auto</option><option value="1">Fert: on</option>' +
+          '<option value="2">Fert: off</option></select>' +
+      '</div>' +
+      '<div class="days">' + DAY_CH.map((c,d) =>
+        '<button data-day="'+d+'" class="'+(e.daysMask>>d&1?'on':'')+'">'+c+'</button>').join('') +
+      '</div>' +
+      '<div class="row">' +
+        '<label class="row" style="margin:0"><input data-k="enabled" type="checkbox" class="shrink"' +
+          (e.enabled?' checked':'') + '><span>Enabled</span></label>' +
+        '<button class="small shrink" data-del>Delete</button>' +
+      '</div>';
+    const zs = div.querySelector('[data-k=zoneIndex]');
+    fillZoneSelect(zs); zs.value = e.zoneIndex;
+    zs.addEventListener('change', () => e.zoneIndex = +zs.value);
+    div.querySelector('[data-k=time]').addEventListener('change', ev => {
+      const hm = ev.target.value.split(':'); e.hour = +hm[0]; e.minute = +hm[1];
+    });
+    div.querySelector('[data-k=min]').addEventListener('change', ev =>
+      e.durationSec = Math.round(+ev.target.value * 60));
+    div.querySelector('[data-k=fertOverride]').value = e.fertOverride || 0;
+    div.querySelector('[data-k=fertOverride]').addEventListener('change', ev =>
+      e.fertOverride = +ev.target.value);
+    div.querySelector('[data-k=enabled]').addEventListener('change', ev =>
+      e.enabled = ev.target.checked);
+    div.querySelectorAll('[data-day]').forEach(b => b.addEventListener('click', () => {
+      e.daysMask ^= (1 << +b.dataset.day); b.classList.toggle('on');
+    }));
+    div.querySelector('[data-del]').addEventListener('click', () => {
+      sched.splice(i,1); renderSched();
+    });
+    host.appendChild(div);
+  });
+}
+$('#sched-add').addEventListener('click', () => {
+  sched.push({ zoneIndex:0, hour:6, minute:0, durationSec:600, daysMask:127,
+               fertOverride:0, enabled:true });
+  renderSched();
+});
+$('#sched-save').addEventListener('click', async () => {
+  if (sched.some(e => !e.daysMask)) {
+    flash('#sched-msg', 'An entry has no days selected.', false); return;
+  }
+  const r = await api('/api/schedule', { entries: sched });
+  flash('#sched-msg', r.ok ? 'Saved ' + r.count + ' entries.'
+                           : 'Refused: ' + (r.error || r.code), r.ok);
+});
+
+/* ---- settings ---- */
+async function loadSettings() {
+  const r = await api('/api/settings');
+  if (!r.ok) return;
+  SET = r;
+  fillZoneSelect($('#run-zone'));
+  fillZoneSelect($('#cal-zone'));
+  const host = $('#set-zones');
+  host.innerHTML = '';
+  r.zoneDefaults.forEach((sec, i) => {
+    const d = document.createElement('div');
+    d.className = 'row';
+    d.innerHTML = '<span class="shrink" style="min-width:9rem">' + zoneName(i) + '</span>' +
+      '<input type="number" inputmode="numeric" min="1" max="120" value="' +
+      Math.round(sec/60) + '" data-z="' + i + '">';
+    host.appendChild(d);
+  });
+  $('#set-swmax').value = Math.round(r.swMaxRuntimeSec/60);
+  $('#set-k').textContent = r.pulsesPerGallon.toFixed(1);
+  $('#set-ovr').checked = r.flowOverride;
+  $('#set-ssid').value = (r.wifi && r.wifi.ssid) || '';
+  $('#set-pass').value = '';
+}
+$('#set-save').addEventListener('click', async () => {
+  const body = {
+    zoneDefaults: Array.prototype.map.call(
+      document.querySelectorAll('#set-zones input'), i => Math.round(+i.value*60)),
+    swMaxRuntimeSec: Math.round(+$('#set-swmax').value * 60),
+    flowOverride: $('#set-ovr').checked
+  };
+  const ssid = $('#set-ssid').value.trim();
+  if (ssid && (!SET || !SET.wifi || ssid !== SET.wifi.ssid || $('#set-pass').value))
+    body.wifi = { ssid: ssid, pass: $('#set-pass').value };
+  const r = await api('/api/settings', body);
+  if (r.ok) SET = r;
+  flash('#set-msg', r.ok ? 'Saved.' + (r.wifiNote ? ' WiFi applies at next boot.' : '')
+                         : 'Refused: ' + (r.error || r.code), r.ok);
+});
+
+/* ---- calibration ---- */
+$('#cal-start').addEventListener('click', async () => {
+  const r = await api('/api/calibrate/start', { zoneIndex: +$('#cal-zone').value });
+  flash('#cal-msg', r.ok ? 'Calibration run started — collect the water.'
+                         : 'Refused: ' + (r.error || r.code), r.ok);
+});
+async function calCancel() {
+  await api('/api/stop', {});
+  flash('#cal-msg', 'Calibration cancelled.', true);
+}
+$('#cal-cancel').addEventListener('click', calCancel);
+$('#cal-cancel2').addEventListener('click', calCancel);
+$('#cal-finish').addEventListener('click', async () => {
+  const r = await api('/api/calibrate/finish', { measuredGallons: +$('#cal-gal').value });
+  flash('#cal-msg', r.ok ? 'Saved. K = ' + r.k.toFixed(1) + ' pulses/gallon.'
+                         : 'Rejected: ' + (r.error || r.code), r.ok);
+});
+
+/* ---- faults ---- */
+$('#fault-clear').addEventListener('click', async () => {
+  const r = await api('/api/fault/clear', {});
+  flash('#fault-clear-msg', r.cleared ? 'Cleared (' + r.was + ').'
+    : 'Refused — the underlying condition has not resolved.', !!r.cleared);
+});
+
+function flash(sel, msg, ok) {
+  const el = $(sel);
+  el.textContent = msg;
+  el.className = ok ? 'ok-flash' : 'err-flash';
+  setTimeout(() => { el.textContent = ''; el.className = 'muted'; }, 6000);
+}
+
+/* ---- mock API for UI development (?mock=1 / file://) ---- */
+let M;
+function mock(path, body) {
+  if (!M) M = {
+    state:'idle', zone:-1, until:0, fault:'none', log:[],
+    entries:[], cal:{ phase:'idle', pulses:0, lastK:0 },
+    set:{ zoneDefaults:[600,600,600], swMaxRuntimeSec:1200, pulsesPerGallon:450,
+          flowOverride:false, wifi:{ ssid:'mock-net', configured:true } }
+  };
+  const now = Date.now();
+  if (M.state === 'running' && now > M.until) { M.state = 'idle'; M.zone = -1; }
+  if (path === '/api/status') return { ok:true, code:200,
+    state:M.state, activeZone:M.zone,
+    remainingSec: M.state === 'running' ? Math.round((M.until-now)/1000) : 0,
+    queueDepth:0,
+    flow:{ gpm: M.state === 'running' ? 2.31 : 0, gallons: M.state === 'running' ? 1.2 : 0,
+           k:M.set.pulsesPerGallon, overrideActive:M.set.flowOverride },
+    lastRun:{ result:'completed', zone:0, durationSec:600, fertigate:false, fault:'none' },
+    fault:{ active:M.fault, clearAllowed:M.fault !== 'none', log:M.log },
+    valveRestFlags:0, clock:{ valid:true, hour:12, minute:34, weekday:3 },
+    cal:M.cal, uptimeMs: now % 86400000,
+    wifi:{ mode:'mock', ip:'0.0.0.0', rssi:-50 } };
+  if (path === '/api/run') { M.state = 'running'; M.zone = body.zoneIndex;
+    M.until = now + body.durationSec*1000; return { ok:true, code:200, queued:false }; }
+  if (path === '/api/stop') { M.state = 'idle'; M.zone = -1; M.cal.phase = 'idle';
+    return { ok:true, code:200, stopped:true }; }
+  if (path === '/api/schedule') {
+    if (body) { M.entries = body.entries;
+      return { ok:true, code:200, saved:true, count:body.entries.length }; }
+    return { ok:true, code:200, entries:M.entries, max:16, dropped:0 }; }
+  if (path === '/api/settings') {
+    if (body) { Object.assign(M.set, body);
+      if (body.wifi) M.set.wifi = { ssid:body.wifi.ssid, configured:true }; }
+    return { ok:true, code:200, zoneDefaults:M.set.zoneDefaults,
+      swMaxRuntimeSec:M.set.swMaxRuntimeSec, pulsesPerGallon:M.set.pulsesPerGallon,
+      flowOverride:M.set.flowOverride, wifi:M.set.wifi,
+      wifiNote: body && body.wifi ? 'applies at next boot' : undefined }; }
+  if (path === '/api/calibrate/start') { M.cal = { phase:'running', pulses:0, lastK:0 };
+    const iv = setInterval(() => { M.cal.pulses += 37;
+      if (M.cal.pulses > 800) { M.cal.phase = 'awaiting'; clearInterval(iv); } }, 500);
+    return { ok:true, code:200, started:true }; }
+  if (path === '/api/calibrate/finish') { const k = M.cal.pulses / body.measuredGallons;
+    M.set.pulsesPerGallon = k; M.cal = { phase:'idle', pulses:0, lastK:k };
+    return { ok:true, code:200, k:k }; }
+  if (path === '/api/fault/clear') { const was = M.fault; M.fault = 'none';
+    return { ok: was !== 'none', code: was !== 'none' ? 200 : 409,
+             cleared: was !== 'none', was:was }; }
+  return { ok:false, code:404, error:'not found' };
+}
+
+/* ---- boot ---- */
+loadSettings();
+poll();
+</script>
 </body>
 </html>
