@@ -248,7 +248,15 @@ int Api::postSettings(JsonVariantConst in, JsonDocument& out, uint32_t nowMs) {
     JsonVariantConst wifi = in["wifi"];
     if (!wifi.isNull()) {
         if (!wifi["ssid"].is<const char*>()) return err(out, 400, "wifi.ssid required");
+        // A non-string pass would coerce to nullptr and silently store an EMPTY
+        // passphrase — wrong network at next boot. Reject loudly instead.
+        if (!wifi["pass"].isNull() && !wifi["pass"].is<const char*>())
+            return err(out, 400, "wifi.pass must be a string");
     }
+    // The DEC-015 safety knob is the worst field to be lenient on: a present-but-
+    // non-bool value (e.g. 1) must 400 like every other field, not silently drop.
+    if (!in["flowOverride"].isNull() && !in["flowOverride"].is<bool>())
+        return err(out, 400, "flowOverride must be a boolean");
 
     // --- apply ---
     if (!in["swMaxRuntimeSec"].isNull()) {

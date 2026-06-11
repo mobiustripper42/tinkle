@@ -229,12 +229,14 @@ void loop() {
     const uint32_t now = millis();
     const uint32_t t0  = micros();
 
-    wifiManager.tick(now);     // STA join watcher / SoftAP fallback (§10) — no core state
-
     // Serialize this pass against the async HTTP handlers (web_server.h note): they
     // run on the other core and call into the same modules. Sub-ms hold, released
     // every pass, so a handler never waits longer than a tick or two.
     webServer.lock();
+
+    wifiManager.tick(now);     // STA watcher / SoftAP fallback (§10). Inside the lock:
+                               // it reads creds postSettings mutates, and /api/status
+                               // reads the mode this mutates — both need the bracket.
 
     runController.tick(now);   // sole actuator commander; ticks the ValveDriver too
     buttons.tick(now);         // debounce + edge detect (§11)

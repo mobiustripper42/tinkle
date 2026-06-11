@@ -2410,6 +2410,17 @@ static void test_api_settings_get_post() {
     TEST_ASSERT_EQUAL_UINT32(900, r.store.swMaxRuntimeSec());
     TEST_ASSERT_EQUAL_FLOAT(500.0f, r.flow.k());           // the valid field didn't slip in
 
+    // Type leniency is rejected loudly: a non-bool override (the DEC-015 safety
+    // knob) and a non-string wifi.pass (would coerce to an empty passphrase) 400.
+    out.clear();
+    body = parseJson("{\"flowOverride\":1}");
+    TEST_ASSERT_EQUAL_INT(400, r.api.postSettings(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_FALSE(r.store.flowOverride());
+    out.clear();
+    body = parseJson("{\"wifi\":{\"ssid\":\"x\",\"pass\":12345}}");
+    TEST_ASSERT_EQUAL_INT(400, r.api.postSettings(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_EQUAL_STRING("farm-mesh", r.store.wifiSsid());   // untouched
+
     // swMax was applied LIVE to RunController: a 7200 s request caps at 900.
     JsonDocument runOut;
     body = parseJson("{\"zoneIndex\":0,\"durationSec\":7200}");

@@ -27,9 +27,9 @@ struct PreferencesStore : IKeyValueStore {
 
     bool getStr(const char* key, char* out, uint16_t cap) override {
         if (!cap) return false;
-        if (!prefs.isKey(key)) { out[0] = '\0'; return false; }
-        // getString copies up to cap-1 + NUL and returns the stored length.
-        prefs.getString(key, out, cap);
+        out[0] = '\0';                      // a failed nvs_get_str writes nothing —
+        if (!prefs.isKey(key)) return false;//   never hand back an unterminated buffer
+        prefs.getString(key, out, cap);     // copies up to cap-1 + NUL
         return true;
     }
     void putStr(const char* key, const char* value) override { prefs.putString(key, value); }

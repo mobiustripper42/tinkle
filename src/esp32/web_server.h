@@ -16,7 +16,11 @@
 // passes (sub-ms hold when idle), so a handler waits at most a tick or two;
 // a handler that can't get it within LOCK_TIMEOUT_MS answers 503 instead of
 // blocking the TCP task. The §2 budget is unaffected — an uncontended take is
-// tens of cycles.
+// tens of cycles. KNOWN BOUND: a handler holds the mutex across its NVS writes
+// (postSchedule/postSettings), and a worst-case NVS page-GC pause (~100s of ms)
+// stalls the next loop pass — and the 250 ms heartbeat against the ATtiny's 2 s
+// timeout — for that long. Margin today is ~10x and edits are operator-rate; if
+// the margin ever tightens, defer NVS persistence to the loop side of the lock.
 //
 // BODY COLLECTION: POST bodies accumulate chunk-by-chunk into a malloc'd buffer
 // hung on request->_tempObject (the framework free()s it with the request), then
@@ -63,7 +67,7 @@ private:
     enum class Post : uint8_t { Run, Stop, Schedule, Settings, CalStart, CalFinish, FaultClear };
 
     void handleGet(AsyncWebServerRequest* r, Get which) {
-        if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(LOCK_TIMEOUT_MS)) != pdTRUE) {
+        if (!mutex_ || xSemaphoreTake(mutex_, pdMS_TO_TICKS(LOCK_TIMEOUT_MS)) != pdTRUE) {
             r->send(503, "application/json", "{\"error\":\"busy\"}");
             return;
         }
@@ -92,11 +96,14 @@ private:
         server_.on(path, HTTP_POST,
             [this, which](AsyncWebServerRequest* r) { handlePost(r, which); },
             nullptr,
-            // Chunk accumulator: one contiguous buffer, framework-freed.
+            // Chunk accumulator: one contiguous buffer, framework-freed. The bounds
+            // guard doesn't trust the parser's index/len arithmetic — a future lib
+            // swap must degrade to a 400, never a heap overflow.
             [](AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t index, size_t total) {
                 if (total > BODY_CAP) return;                  // judged in handlePost
                 if (index == 0) r->_tempObject = calloc(total + 1, 1);
-                if (r->_tempObject) memcpy((uint8_t*)r->_tempObject + index, data, len);
+                if (r->_tempObject && index + len <= total)
+                    memcpy((uint8_t*)r->_tempObject + index, data, len);
             });
     }
 
@@ -113,7 +120,7 @@ private:
             }
         }
 
-        if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(LOCK_TIMEOUT_MS)) != pdTRUE) {
+        if (!mutex_ || xSemaphoreTake(mutex_, pdMS_TO_TICKS(LOCK_TIMEOUT_MS)) != pdTRUE) {
             r->send(503, "application/json", "{\"error\":\"busy\"}");
             return;
         }
