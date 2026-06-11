@@ -1,0 +1,152 @@
+#pragma once
+#include <Arduino.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+#include "../core/api.h"
+#include "flow_sensor.h"
+#include "wifi_manager.h"
+
+// WebServer — the HTTP plumbing for the §10 API (#55/#56). All POLICY lives in
+// core Api (host-tested); this file is routes, body collection, and one mutex.
+//
+// CONCURRENCY: ESPAsyncWebServer handlers run on the async_tcp task (core 0)
+// while the cooperative loop owns core 1 — genuine parallelism, so every Api call
+// (which reads/mutates RunController & co.) is serialized against the loop with
+// one FreeRTOS mutex. The loop takes it for each tick body and releases between
+// passes (sub-ms hold when idle), so a handler waits at most a tick or two;
+// a handler that can't get it within LOCK_TIMEOUT_MS answers 503 instead of
+// blocking the TCP task. The §2 budget is unaffected — an uncontended take is
+// tens of cycles.
+//
+// BODY COLLECTION: POST bodies accumulate chunk-by-chunk into a malloc'd buffer
+// hung on request->_tempObject (the framework free()s it with the request), then
+// the whole body parses once in the final handler. Bodies above BODY_CAP answer
+// 413 — the largest legitimate §10 payload (a full 16-entry schedule) is < 2 KB.
+
+namespace tinkle {
+
+class WebServer {
+public:
+    static constexpr size_t   BODY_CAP        = 4096;
+    static constexpr uint32_t LOCK_TIMEOUT_MS = 250;
+
+    WebServer(Api& api, FlowSensor& flowSensor, WifiManager& wifi)
+        : server_(80), api_(api), flowSensor_(flowSensor), wifi_(wifi) {}
+
+    void begin() {
+        mutex_ = xSemaphoreCreateMutex();
+
+        server_.on("/api/status",   HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Status); });
+        server_.on("/api/schedule", HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Schedule); });
+        server_.on("/api/settings", HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Settings); });
+
+        onPost("/api/run",              Post::Run);
+        onPost("/api/stop",             Post::Stop);
+        onPost("/api/schedule",         Post::Schedule);
+        onPost("/api/settings",         Post::Settings);
+        onPost("/api/calibrate/start",  Post::CalStart);
+        onPost("/api/calibrate/finish", Post::CalFinish);
+        onPost("/api/fault/clear",      Post::FaultClear);
+
+        server_.onNotFound([](AsyncWebServerRequest* r) {
+            r->send(404, "application/json", "{\"error\":\"not found\"}");
+        });
+        server_.begin();
+    }
+
+    // The loop's side of the serialization: wrap each tick body in lock()/unlock().
+    void lock()   { if (mutex_) xSemaphoreTake(mutex_, portMAX_DELAY); }
+    void unlock() { if (mutex_) xSemaphoreGive(mutex_); }
+
+private:
+    enum class Get  : uint8_t { Status, Schedule, Settings };
+    enum class Post : uint8_t { Run, Stop, Schedule, Settings, CalStart, CalFinish, FaultClear };
+
+    void handleGet(AsyncWebServerRequest* r, Get which) {
+        if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(LOCK_TIMEOUT_MS)) != pdTRUE) {
+            r->send(503, "application/json", "{\"error\":\"busy\"}");
+            return;
+        }
+        JsonDocument out;
+        int code = 500;
+        switch (which) {
+            case Get::Status:
+                code = api_.getStatus(out, millis());
+                // ESP32-only facts the core can't know, merged into the same doc.
+                {
+                    JsonObject w = out["wifi"].to<JsonObject>();
+                    w["mode"] = wifi_.modeName();
+                    w["ip"]   = wifi_.ip();
+                    w["rssi"] = wifi_.rssi();
+                }
+                out["uptimeMs"] = millis();
+                break;
+            case Get::Schedule: code = api_.getSchedule(out); break;
+            case Get::Settings: code = api_.getSettings(out); break;
+        }
+        xSemaphoreGive(mutex_);
+        sendJson(r, code, out);
+    }
+
+    void onPost(const char* path, Post which) {
+        server_.on(path, HTTP_POST,
+            [this, which](AsyncWebServerRequest* r) { handlePost(r, which); },
+            nullptr,
+            // Chunk accumulator: one contiguous buffer, framework-freed.
+            [](AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t index, size_t total) {
+                if (total > BODY_CAP) return;                  // judged in handlePost
+                if (index == 0) r->_tempObject = calloc(total + 1, 1);
+                if (r->_tempObject) memcpy((uint8_t*)r->_tempObject + index, data, len);
+            });
+    }
+
+    void handlePost(AsyncWebServerRequest* r, Post which) {
+        if (r->contentLength() > BODY_CAP) {
+            r->send(413, "application/json", "{\"error\":\"body too large\"}");
+            return;
+        }
+        JsonDocument in;
+        if (r->_tempObject) {
+            if (deserializeJson(in, (const char*)r->_tempObject) != DeserializationError::Ok) {
+                r->send(400, "application/json", "{\"error\":\"malformed JSON\"}");
+                return;
+            }
+        }
+
+        if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(LOCK_TIMEOUT_MS)) != pdTRUE) {
+            r->send(503, "application/json", "{\"error\":\"busy\"}");
+            return;
+        }
+        const uint32_t now    = millis();
+        const uint32_t pulses = flowSensor_.pulses();
+        JsonDocument out;
+        JsonVariantConst body = in.as<JsonVariantConst>();
+        int code = 500;
+        switch (which) {
+            case Post::Run:        code = api_.postRun(body, out, now);                   break;
+            case Post::Stop:       code = api_.postStop(out, now);                        break;
+            case Post::Schedule:   code = api_.postSchedule(body, out, now);              break;
+            case Post::Settings:   code = api_.postSettings(body, out, now);              break;
+            case Post::CalStart:   code = api_.postCalStart(body, out, pulses, now);      break;
+            case Post::CalFinish:  code = api_.postCalFinish(body, out, pulses, now);     break;
+            case Post::FaultClear: code = api_.postFaultClear(out, now);                  break;
+        }
+        xSemaphoreGive(mutex_);
+        sendJson(r, code, out);
+    }
+
+    static void sendJson(AsyncWebServerRequest* r, int code, const JsonDocument& doc) {
+        String payload;
+        serializeJson(doc, payload);
+        if (payload.length() == 0) payload = "{}";
+        r->send(code, "application/json", payload);
+    }
+
+    AsyncWebServer    server_;
+    Api&              api_;
+    FlowSensor&       flowSensor_;
+    WifiManager&      wifi_;
+    SemaphoreHandle_t mutex_ = nullptr;
+};
+
+} // namespace tinkle

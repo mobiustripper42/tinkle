@@ -99,6 +99,10 @@ public:
     // new clear paths (e.g. /api/fault/clear) here directly.
     bool clearFault();
 
+    // Live settings update (§10 POST /api/settings). Applies to the NEXT duration
+    // check, so it also shortens an in-flight run. 0 = no software cap (§15 note).
+    void setSwMaxRuntimeSec(uint32_t sec) { cfg_.swMaxRuntimeSec = sec; }
+
     // Latest ATtiny trip-line state, pushed in by the Watchdog module (§9). Used
     // as the §4 step-2 pre-open gate: if asserted when OPEN_ZONE is reached, the
     // run aborts to FAULT(Watchdog) instead of energizing the path. (A trip that

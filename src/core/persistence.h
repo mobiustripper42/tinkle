@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "valve_driver.h"   // ValveConfig::MAX_ZONES — the single source of zone capacity
+#include "scheduler.h"      // ScheduleEntry + pack helpers — the §8 schedule blob (Phase 4)
 
 // Persistence — NVS/Preferences read/write of stored state (firmware spec §8, DEC-008).
 //
@@ -31,7 +32,9 @@
 namespace tinkle {
 
 // The NVS abstraction. Typed key-value with read-with-default — mirrors Preferences'
-// getUInt/putUInt/getUChar/putUChar surface, kept minimal to what §8's V1 scalars need.
+// getUInt/putUInt/getUChar/putUChar surface, kept minimal to what §8's V1 state needs.
+// Strings (WiFi creds) and byte blobs (the schedule, Phase 4) joined the scalar set
+// when the web layer landed — same read-with-default discipline.
 struct IKeyValueStore {
     virtual uint32_t getU32(const char* key, uint32_t fallback) = 0;
     virtual void     putU32(const char* key, uint32_t value)    = 0;
@@ -39,6 +42,13 @@ struct IKeyValueStore {
     virtual void     putU8 (const char* key, uint8_t  value)    = 0;
     virtual float    getFloat(const char* key, float fallback)  = 0;   // calibration K (§7)
     virtual void     putFloat(const char* key, float value)     = 0;
+    // Strings: copies up to cap-1 chars + NUL into out; returns false (and writes "")
+    // when the key is absent. Blobs: returns bytes actually read (0 if absent), never
+    // more than cap; put stores exactly len bytes.
+    virtual bool     getStr(const char* key, char* out, uint16_t cap)            = 0;
+    virtual void     putStr(const char* key, const char* value)                  = 0;
+    virtual uint16_t getBytes(const char* key, void* out, uint16_t cap)          = 0;
+    virtual void     putBytes(const char* key, const void* data, uint16_t len)   = 0;
     virtual ~IKeyValueStore() = default;
 };
 
@@ -70,16 +80,32 @@ public:
     // without faulting. Call once at boot after the store is open.
     void begin();
 
+    // WiFi credential capacity (802.11: SSID <= 32, WPA2 passphrase <= 63) + NUL.
+    static constexpr uint16_t SSID_CAP = 33;
+    static constexpr uint16_t PASS_CAP = 65;
+
     // --- reads (the in-memory mirror; no flash hit) ---
     uint8_t  zoneCount()             const { return zoneCount_; }
     uint32_t zoneDefaultSec(uint8_t zone) const;   // out-of-range -> DEFAULT_RUN_SEC
     uint32_t swMaxRuntimeSec()       const { return swMaxRuntimeSec_; }
     float    pulsesPerGallon()       const { return pulsesPerGallon_; }   // flow K (§7, #34)
+    bool     flowOverride()          const { return flowOverride_; }      // DEC-015 (#57)
+    const char* wifiSsid()           const { return wifiSsid_; }          // "" = unconfigured
+    const char* wifiPass()           const { return wifiPass_; }
 
     // --- writes (write-on-change: a set to the current value touches no flash) ---
     void setZoneDefaultSec(uint8_t zone, uint32_t sec);
     void setSwMaxRuntimeSec(uint32_t sec);
     void setPulsesPerGallon(float k);         // written by calibration (#36); ignores k <= 0
+    void setFlowOverride(bool on);            // DEC-015 (#57); the API owns clear-on-enable
+    void setWifiCreds(const char* ssid, const char* pass);   // truncates to capacity
+
+    // --- schedule blob (§8/§13; the web editor owns save-on-edit, #56) ---
+    // Packed fixed-width entries (see scheduler.h pack helpers); the blob is the whole
+    // schedule, replaced atomically on every save. Returns entries written into out
+    // (<= cap); 0 when no schedule is stored.
+    uint8_t loadScheduleEntries(ScheduleEntry* out, uint8_t cap);
+    void    saveScheduleEntries(const ScheduleEntry* entries, uint8_t count);
 
 private:
     // Build the per-zone key "z<N>_dur" into buf (capacity must be >= 8; NVS keys cap at
@@ -92,6 +118,9 @@ private:
     uint32_t zoneDefaultSec_[ValveConfig::MAX_ZONES];
     uint32_t swMaxRuntimeSec_;
     float    pulsesPerGallon_;
+    bool     flowOverride_ = false;        // DEC-015: default = checks ON
+    char     wifiSsid_[SSID_CAP] = {};
+    char     wifiPass_[PASS_CAP] = {};
 };
 
 } // namespace tinkle

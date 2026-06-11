@@ -24,6 +24,22 @@ struct PreferencesStore : IKeyValueStore {
     void     putU8 (const char* key, uint8_t  value)    override { prefs.putUChar(key, value); }
     float    getFloat(const char* key, float fallback)  override { return prefs.getFloat(key, fallback); }
     void     putFloat(const char* key, float value)     override { prefs.putFloat(key, value); }
+
+    bool getStr(const char* key, char* out, uint16_t cap) override {
+        if (!cap) return false;
+        if (!prefs.isKey(key)) { out[0] = '\0'; return false; }
+        // getString copies up to cap-1 + NUL and returns the stored length.
+        prefs.getString(key, out, cap);
+        return true;
+    }
+    void putStr(const char* key, const char* value) override { prefs.putString(key, value); }
+    uint16_t getBytes(const char* key, void* out, uint16_t cap) override {
+        if (!prefs.isKey(key)) return 0;
+        return (uint16_t)prefs.getBytes(key, out, cap);
+    }
+    void putBytes(const char* key, const void* data, uint16_t len) override {
+        prefs.putBytes(key, data, len);
+    }
 };
 
 } // namespace tinkle

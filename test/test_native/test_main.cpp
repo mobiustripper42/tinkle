@@ -18,6 +18,7 @@
 #include "watchdog.h"
 #include "fault_manager.h"
 #include "valve_rest_monitor.h"
+#include "api.h"
 
 // Native unit tests for ValveDriver (firmware spec §5, v1.4). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -842,6 +843,32 @@ struct FakeKvStore : tinkle::IKeyValueStore {
         auto it = f32.find(k); return it == f32.end() ? def : it->second;
     }
     void putFloat(const char* k, float v) override { f32[k] = v; writes[k]++; }
+
+    std::map<std::string, std::string>          str;
+    std::map<std::string, std::vector<uint8_t>> bytes;
+
+    bool getStr(const char* k, char* out, uint16_t cap) override {
+        auto it = str.find(k);
+        if (it == str.end()) { if (cap) out[0] = '\0'; return false; }
+        uint16_t i = 0;
+        for (; i + 1 < cap && i < it->second.size(); ++i) out[i] = it->second[i];
+        out[i] = '\0';
+        return true;
+    }
+    void putStr(const char* k, const char* v) override { str[k] = v; writes[k]++; }
+    uint16_t getBytes(const char* k, void* out, uint16_t cap) override {
+        auto it = bytes.find(k);
+        if (it == bytes.end()) return 0;
+        uint16_t n = (uint16_t)it->second.size();
+        if (n > cap) n = cap;
+        for (uint16_t i = 0; i < n; ++i) static_cast<uint8_t*>(out)[i] = it->second[i];
+        return n;
+    }
+    void putBytes(const char* k, const void* data, uint16_t len) override {
+        const uint8_t* p = static_cast<const uint8_t*>(data);
+        bytes[k].assign(p, p + len);
+        writes[k]++;
+    }
 
     int writesTo(const char* k) const {
         auto it = writes.find(k); return it == writes.end() ? 0 : it->second;
@@ -2165,6 +2192,396 @@ static void test_rest_fault_aborts_window_and_valverest_cannot_latch() {
     TEST_ASSERT_TRUE(rc.isIdle());
 }
 
+// ----------------------------------------------------------------------------
+// Api (§10, Unit C / #55-#57): endpoint policy against the REAL wire shapes —
+// ArduinoJson on the host, full dependency rig, no parallel model.
+// ----------------------------------------------------------------------------
+
+using tinkle::Api;
+using tinkle::FlowFaultDetector;
+using tinkle::FlowMonitor;
+using tinkle::Scheduler;
+using tinkle::ScheduleEntry;
+
+namespace {
+
+struct ApiRig {
+    ValveDriver           vd;
+    RunController         rc;
+    FakeKvStore           kv;
+    Persistence           store;
+    FlowMonitor           flow;
+    FlowFaultDetector     flowFault;
+    FaultManager          fm;
+    CalibrationController cal;
+    ValveRestMonitor      rest;
+    FakeWallClock         wallSrc;
+    tinkle::Clock         clk;
+    Scheduler             sched;
+    Api                   api;
+
+    ApiRig()
+        : vd(g, cfg), rc(vd, makeRunCfg()), store(kv, 2),
+          flow(Persistence::DEFAULT_PULSES_PER_GALLON),
+          flowFault(FlowFaultDetector::Config{}),
+          fm(rc), cal(rc, store, flow, calCfg()), rest(makeRestCfg()),
+          clk(wallSrc), sched(rc, clk),
+          api(Api::Deps{rc, sched, store, fm, cal, flow, flowFault, rest, clk}) {
+        rc.begin(0);
+        store.begin();
+    }
+
+    // Mirror the main loop (controller + calibration), stepping the clock.
+    template <class Pred>
+    uint32_t pump(uint32_t now, uint32_t stepMs, uint32_t budgetMs,
+                  const uint32_t& pulses, Pred pred) {
+        uint32_t spent = 0;
+        while (!pred() && spent <= budgetMs) {
+            rc.tick(now);
+            cal.tick(rc.state(), pulses, now);
+            now += stepMs;
+            spent += stepMs;
+        }
+        return now;
+    }
+};
+
+// Parse a JSON literal into a document (test helper; asserts on parse failure).
+JsonDocument parseJson(const char* text) {
+    JsonDocument doc;
+    TEST_ASSERT_TRUE_MESSAGE(deserializeJson(doc, text) == DeserializationError::Ok,
+                             "test JSON literal failed to parse");
+    return doc;
+}
+
+} // namespace
+
+// GET /api/status at boot: idle, no fault, defaults — the §10 shape.
+static void test_api_status_shape() {
+    ApiRig r;
+    JsonDocument out;
+    TEST_ASSERT_EQUAL_INT(200, r.api.getStatus(out, 0));
+    TEST_ASSERT_EQUAL_STRING("idle", out["state"]);
+    TEST_ASSERT_EQUAL_INT(-1, out["activeZone"].as<int>());
+    TEST_ASSERT_EQUAL_UINT32(0, out["remainingSec"].as<uint32_t>());
+    TEST_ASSERT_EQUAL_FLOAT(Persistence::DEFAULT_PULSES_PER_GALLON, out["flow"]["k"]);
+    TEST_ASSERT_FALSE(out["flow"]["overrideActive"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("none", out["fault"]["active"]);
+    TEST_ASSERT_FALSE(out["fault"]["clearAllowed"].as<bool>());
+    TEST_ASSERT_EQUAL_INT(0, out["fault"]["log"].size());
+    TEST_ASSERT_EQUAL_UINT8(0, out["valveRestFlags"].as<uint8_t>());
+    TEST_ASSERT_FALSE(out["clock"]["valid"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("idle", out["cal"]["phase"]);
+}
+
+// POST /api/run: 400 missing field, 422 out of range, 200 starts with the stored
+// per-zone default, queues behind an active run.
+static void test_api_run_validation_and_start() {
+    ApiRig r;
+    JsonDocument out;
+
+    JsonDocument body = parseJson("{}");
+    TEST_ASSERT_EQUAL_INT(400, r.api.postRun(body.as<JsonVariantConst>(), out, 0));
+
+    out.clear(); body = parseJson("{\"zoneIndex\":5}");
+    TEST_ASSERT_EQUAL_INT(422, r.api.postRun(body.as<JsonVariantConst>(), out, 0));
+
+    out.clear(); body = parseJson("{\"zoneIndex\":0,\"durationSec\":5}");   // < RUN_MIN_SEC
+    TEST_ASSERT_EQUAL_INT(422, r.api.postRun(body.as<JsonVariantConst>(), out, 0));
+
+    out.clear(); body = parseJson("{\"zoneIndex\":0,\"durationSec\":\"abc\"}");
+    TEST_ASSERT_EQUAL_INT(400, r.api.postRun(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_TRUE(r.rc.isIdle());                       // nothing slipped through
+
+    out.clear(); body = parseJson("{\"zoneIndex\":0}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postRun(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, out["durationSec"].as<uint32_t>());
+    TEST_ASSERT_FALSE(out["queued"].as<bool>());
+    TEST_ASSERT_FALSE(r.rc.isIdle());
+
+    out.clear(); body = parseJson("{\"zoneIndex\":1,\"durationSec\":60,\"fertigate\":true}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postRun(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_TRUE(out["queued"].as<bool>());
+    TEST_ASSERT_EQUAL_UINT8(1, r.rc.queueDepth());
+}
+
+// The §10 FAULT gate: mutating endpoints 409 in FAULT; /stop and /fault/clear are
+// exempt, and the clear obeys the FaultManager resolved-condition gate over HTTP.
+static void test_api_fault_gate_and_exemptions() {
+    ApiRig r;
+    JsonDocument out;
+    r.rc.raiseFault(Fault::Watchdog, 100);
+    r.fm.tick(100);
+    r.fm.setConditionActive(Fault::Watchdog, true);        // trip line still asserted
+
+    JsonDocument body = parseJson("{\"zoneIndex\":0}");
+    TEST_ASSERT_EQUAL_INT(409, r.api.postRun(body.as<JsonVariantConst>(), out, 200));
+    out.clear();
+    body = parseJson("{\"entries\":[]}");
+    TEST_ASSERT_EQUAL_INT(409, r.api.postSchedule(body.as<JsonVariantConst>(), out, 200));
+    out.clear();
+    body = parseJson("{\"zoneIndex\":0}");
+    TEST_ASSERT_EQUAL_INT(409, r.api.postCalStart(body.as<JsonVariantConst>(), out, 0, 200));
+
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(200, r.api.postStop(out, 200));  // exempt (harmless no-op)
+
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(409, r.api.postFaultClear(out, 300));   // condition holds
+    TEST_ASSERT_FALSE(out["cleared"].as<bool>());
+    TEST_ASSERT_TRUE(r.rc.isFaulted());
+
+    r.fm.setConditionActive(Fault::Watchdog, false);       // trip line released
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(200, r.api.postFaultClear(out, 400));
+    TEST_ASSERT_TRUE(out["cleared"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("watchdog", out["was"]);
+    TEST_ASSERT_TRUE(r.rc.isIdle());
+}
+
+// POST /api/schedule: atomic replace, NVS save-on-edit, GET roundtrip, and a bad
+// entry rejects the whole post leaving the live schedule untouched.
+static void test_api_schedule_roundtrip_persist_atomic() {
+    ApiRig r;
+    JsonDocument out;
+    JsonDocument body = parseJson(
+        "{\"entries\":["
+        "{\"zoneIndex\":0,\"hour\":6,\"minute\":30,\"durationSec\":600,\"daysMask\":127,\"enabled\":true},"
+        "{\"zoneIndex\":1,\"hour\":18,\"minute\":0,\"durationSec\":300,\"daysMask\":42,\"fertOverride\":2,\"enabled\":true}"
+        "]}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postSchedule(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_EQUAL_UINT8(2, r.sched.count());
+    TEST_ASSERT_TRUE(r.kv.bytes.count("sched") == 1);      // §13 save-on-edit hit NVS
+
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(200, r.api.getSchedule(out));
+    TEST_ASSERT_EQUAL_INT(2, out["entries"].size());
+    TEST_ASSERT_EQUAL_INT(18,  out["entries"][1]["hour"].as<int>());
+    TEST_ASSERT_EQUAL_INT(42,  out["entries"][1]["daysMask"].as<int>());
+    TEST_ASSERT_EQUAL_INT(2,   out["entries"][1]["fertOverride"].as<int>());
+
+    // Atomicity: hour 24 rejects the whole post; the live schedule stays at 2.
+    out.clear();
+    body = parseJson("{\"entries\":[{\"zoneIndex\":0,\"hour\":24,\"minute\":0,"
+                     "\"durationSec\":600,\"daysMask\":127,\"enabled\":true}]}");
+    TEST_ASSERT_EQUAL_INT(422, r.api.postSchedule(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_EQUAL_UINT8(2, r.sched.count());
+
+    // Reboot path: a fresh Persistence + Scheduler over the same store reloads both.
+    Persistence store2(r.kv, 2);
+    store2.begin();
+    ScheduleEntry loaded[Scheduler::MAX_ENTRIES];
+    const uint8_t n = store2.loadScheduleEntries(loaded, Scheduler::MAX_ENTRIES);
+    TEST_ASSERT_EQUAL_UINT8(2, n);
+    TEST_ASSERT_EQUAL_UINT8(1,   loaded[1].zoneIndex);
+    TEST_ASSERT_EQUAL_UINT16(300, loaded[1].durationSec);
+    TEST_ASSERT_EQUAL(tinkle::FertOverride::Off, loaded[1].fertOverride);
+    TEST_ASSERT_TRUE(loaded[1].enabled);
+}
+
+// GET/POST /api/settings: defaults out, partial update in, ranges enforced before
+// anything applies, swMax live-caps the active run, the passphrase never echoes.
+static void test_api_settings_get_post() {
+    ApiRig r;
+    JsonDocument out;
+    TEST_ASSERT_EQUAL_INT(200, r.api.getSettings(out));
+    TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_RUN_SEC, out["zoneDefaults"][0].as<uint32_t>());
+    TEST_ASSERT_EQUAL_UINT32(Persistence::DEFAULT_SW_MAX_SEC, out["swMaxRuntimeSec"].as<uint32_t>());
+    TEST_ASSERT_FALSE(out["wifi"]["configured"].as<bool>());
+
+    out.clear();
+    JsonDocument body = parseJson(
+        "{\"swMaxRuntimeSec\":900,\"pulsesPerGallon\":500,\"zoneDefaults\":[300,400],"
+        "\"wifi\":{\"ssid\":\"farm-mesh\",\"pass\":\"hunter22\"}}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postSettings(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_EQUAL_UINT32(900, r.store.swMaxRuntimeSec());
+    TEST_ASSERT_EQUAL_FLOAT(500.0f, r.flow.k());
+    TEST_ASSERT_EQUAL_UINT32(300, r.store.zoneDefaultSec(0));
+    TEST_ASSERT_EQUAL_UINT32(400, r.store.zoneDefaultSec(1));
+    TEST_ASSERT_EQUAL_STRING("farm-mesh", r.store.wifiSsid());
+    TEST_ASSERT_EQUAL_STRING("hunter22",  r.store.wifiPass());
+    TEST_ASSERT_EQUAL_STRING("farm-mesh", out["wifi"]["ssid"]);
+    TEST_ASSERT_TRUE(out["wifi"]["pass"].isNull());        // write-only, never echoed
+
+    // Out-of-range rejects before anything applies (atomic).
+    out.clear();
+    body = parseJson("{\"swMaxRuntimeSec\":5000,\"pulsesPerGallon\":600}");
+    TEST_ASSERT_EQUAL_INT(422, r.api.postSettings(body.as<JsonVariantConst>(), out, 0));
+    TEST_ASSERT_EQUAL_UINT32(900, r.store.swMaxRuntimeSec());
+    TEST_ASSERT_EQUAL_FLOAT(500.0f, r.flow.k());           // the valid field didn't slip in
+
+    // swMax was applied LIVE to RunController: a 7200 s request caps at 900.
+    JsonDocument runOut;
+    body = parseJson("{\"zoneIndex\":0,\"durationSec\":7200}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postRun(body.as<JsonVariantConst>(), runOut, 1000));
+    const uint32_t pulses = 0;
+    uint32_t now = r.pump(1000, 5, 8000, pulses, [&]{ return r.rc.state() == RunState::Running; });
+    TEST_ASSERT_TRUE(r.rc.remainingSec(now) <= 900);
+}
+
+// DEC-015 (#57): enabling the override mutes flow verdicts, clears a latched flow
+// fault even while water still pulses (the recovery path), and persists.
+static void test_api_flow_override_dec015() {
+    ApiRig r;
+    JsonDocument out;
+
+    r.rc.raiseFault(Fault::UnexpectedFlow, 100);
+    r.fm.tick(100);
+    r.fm.setConditionActive(Fault::UnexpectedFlow, true);  // water still pulsing
+    TEST_ASSERT_EQUAL_INT(409, r.api.postFaultClear(out, 150));
+
+    out.clear();
+    JsonDocument body = parseJson("{\"flowOverride\":true}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postSettings(body.as<JsonVariantConst>(), out, 200));
+    TEST_ASSERT_TRUE(out["flowOverride"].as<bool>());
+    TEST_ASSERT_FALSE(r.rc.isFaulted());                   // cleared by the enable
+    TEST_ASSERT_TRUE(r.rc.isIdle());
+    TEST_ASSERT_TRUE(r.store.flowOverride());              // persisted
+    TEST_ASSERT_TRUE(r.flowFault.muted());                 // detector muted
+
+    // A NON-flow fault is untouched by the override path: the watchdog keeps its gate.
+    r.rc.raiseFault(Fault::Watchdog, 300);
+    r.fm.tick(300);
+    r.fm.setConditionActive(Fault::Watchdog, true);
+    out.clear();
+    body = parseJson("{\"flowOverride\":true}");           // re-post, already on
+    TEST_ASSERT_EQUAL_INT(200, r.api.postSettings(body.as<JsonVariantConst>(), out, 350));
+    TEST_ASSERT_TRUE(r.rc.isFaulted());                    // watchdog fault survives
+    TEST_ASSERT_EQUAL(Fault::Watchdog, r.rc.activeFault());
+}
+
+// The detector-side mute (DEC-015): verdicts go quiet, tracking does not — the
+// idle window keeps sliding while muted, so un-muting never judges the muted span.
+static void test_flow_detector_mute() {
+    FlowFaultDetector::Config c;
+    c.graceMs = 1000; c.minRunningGPM = 0.1f; c.idleFaultPulses = 5; c.idleWindowMs = 1000;
+
+    FlowFaultDetector unmuted(c);
+    unmuted.begin(0, 0);
+    unmuted.update(RunState::Running, 0.0f, 0, 100);       // RUNNING edge: grace starts
+    TEST_ASSERT_EQUAL(Fault::NoFlow, unmuted.update(RunState::Running, 0.0f, 0, 1200));
+
+    FlowFaultDetector muted(c);
+    muted.begin(0, 0);
+    muted.setMuted(true);
+    muted.update(RunState::Running, 0.0f, 0, 100);
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Running, 0.0f, 0, 1200));
+
+    // Idle: 50 pulses land while muted -> no verdict, but the window re-baselines;
+    // un-mute -> the next quiet window is judged fresh, not the muted backlog.
+    muted.update(RunState::Idle, 0.0f, 100, 1300);         // IDLE edge: baseline = 100
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 2400));
+    muted.setMuted(false);
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 3500));
+}
+
+// Calibration endpoints: lifecycle mapping (409 not-calibrating / busy), the happy
+// path computing K over a driven run, and Rejected -> 422 + FAULT_CAL_RANGE.
+static void test_api_cal_endpoints() {
+    ApiRig r;
+    JsonDocument out;
+
+    JsonDocument body = parseJson("{\"measuredGallons\":2.0}");
+    TEST_ASSERT_EQUAL_INT(409, r.api.postCalFinish(body.as<JsonVariantConst>(), out, 0, 0));
+
+    out.clear(); body = parseJson("{\"zoneIndex\":9}");
+    TEST_ASSERT_EQUAL_INT(422, r.api.postCalStart(body.as<JsonVariantConst>(), out, 0, 0));
+
+    uint32_t pulses = 0;
+    out.clear(); body = parseJson("{\"zoneIndex\":0}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postCalStart(body.as<JsonVariantConst>(), out, pulses, 0));
+    TEST_ASSERT_TRUE(r.cal.active());
+
+    out.clear();                                            // double-start refused
+    TEST_ASSERT_EQUAL_INT(409, r.api.postCalStart(body.as<JsonVariantConst>(), out, pulses, 10));
+
+    uint32_t now = r.pump(10, 5, 8000, pulses, [&]{ return r.rc.state() == RunState::Running; });
+    pulses += 900;
+    now = r.pump(now, 100, 90000, pulses,
+                 [&]{ return r.cal.phase() == CalibrationController::Phase::Awaiting; });
+
+    out.clear(); body = parseJson("{\"measuredGallons\":2.0}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postCalFinish(body.as<JsonVariantConst>(), out, pulses, now));
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, out["k"]);
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, r.flow.k());
+
+    // Parse-sane but below the controller's minGallons -> Rejected -> 422 + latch.
+    // (Awaiting freezes at SETTLE entry, so let the controller reach IDLE first —
+    // a calibration never starts over a still-settling run.)
+    now = r.pump(now, 100, 70000, pulses, [&]{ return r.rc.isIdle(); });
+    body = parseJson("{\"zoneIndex\":0}");
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(200, r.api.postCalStart(body.as<JsonVariantConst>(), out, pulses, now));
+    now = r.pump(now, 5, 8000, pulses, [&]{ return r.rc.state() == RunState::Running; });
+    pulses += 500;
+    out.clear(); body = parseJson("{\"measuredGallons\":0.1}");
+    TEST_ASSERT_EQUAL_INT(422, r.api.postCalFinish(body.as<JsonVariantConst>(), out, pulses, now));
+    TEST_ASSERT_TRUE(r.rc.isFaulted());
+    TEST_ASSERT_EQUAL(Fault::CalRange, r.rc.activeFault());
+}
+
+// /api/stop voids an active calibration (operator bailed: no K, no CalRange) and
+// unwinds the run.
+static void test_api_stop_voids_calibration() {
+    ApiRig r;
+    JsonDocument out;
+    uint32_t pulses = 0;
+    JsonDocument body = parseJson("{\"zoneIndex\":0}");
+    TEST_ASSERT_EQUAL_INT(200, r.api.postCalStart(body.as<JsonVariantConst>(), out, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses, [&]{ return r.rc.state() == RunState::Running; });
+
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(200, r.api.postStop(out, now));
+    TEST_ASSERT_FALSE(r.cal.active());
+    now = r.pump(now, 100, 70000, pulses, [&]{ return r.rc.isIdle(); });
+    TEST_ASSERT_TRUE(r.rc.isIdle());
+    TEST_ASSERT_FALSE(r.rc.isFaulted());
+    TEST_ASSERT_EQUAL_INT(0, r.kv.writesTo("k_ppg"));      // no K written
+}
+
+// Schedule pack/unpack: explicit little-endian roundtrip + garbage fert clamps.
+static void test_sched_pack_unpack_roundtrip() {
+    ScheduleEntry e;
+    e.id = 7; e.zoneIndex = 2; e.hour = 23; e.minute = 59;
+    e.durationSec = 0x1234; e.daysMask = 0x55;
+    e.fertOverride = tinkle::FertOverride::On; e.enabled = true;
+
+    uint8_t buf[tinkle::SCHED_ENTRY_BYTES];
+    tinkle::packScheduleEntry(e, buf);
+    TEST_ASSERT_EQUAL_UINT8(0x34, buf[4]);                 // little-endian low byte
+    TEST_ASSERT_EQUAL_UINT8(0x12, buf[5]);
+
+    ScheduleEntry d = tinkle::unpackScheduleEntry(buf);
+    TEST_ASSERT_EQUAL_UINT8(7, d.id);
+    TEST_ASSERT_EQUAL_UINT8(2, d.zoneIndex);
+    TEST_ASSERT_EQUAL_UINT16(0x1234, d.durationSec);
+    TEST_ASSERT_EQUAL(tinkle::FertOverride::On, d.fertOverride);
+    TEST_ASSERT_TRUE(d.enabled);
+
+    buf[7] = 9;                                            // corrupt fert byte
+    TEST_ASSERT_EQUAL(tinkle::FertOverride::Auto, tinkle::unpackScheduleEntry(buf).fertOverride);
+}
+
+// Persistence: flow-override + WiFi creds survive a "reboot" (fresh mirror, same store).
+static void test_persist_override_and_creds_roundtrip() {
+    FakeKvStore s;
+    {
+        Persistence p(s, 2);
+        p.begin();
+        TEST_ASSERT_FALSE(p.flowOverride());               // DEC-015 default: checks ON
+        TEST_ASSERT_EQUAL_STRING("", p.wifiSsid());
+        p.setFlowOverride(true);
+        p.setWifiCreds("tunnel-net", "drip4days");
+        p.setWifiCreds("tunnel-net", "drip4days");          // write-on-change: no second write
+    }
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("wifi_ssid"));
+    Persistence p2(s, 2);
+    p2.begin();
+    TEST_ASSERT_TRUE(p2.flowOverride());
+    TEST_ASSERT_EQUAL_STRING("tunnel-net", p2.wifiSsid());
+    TEST_ASSERT_EQUAL_STRING("drip4days",  p2.wifiPass());
+}
+
 // FaultManager::note() is log-only: the entry lands in the ring, nothing
 // latches, and runs are still accepted.
 static void test_fm_note_is_nonlatching() {
@@ -2312,5 +2729,17 @@ int main() {
     RUN_TEST(test_rest_threshold_boundary);
     RUN_TEST(test_rest_fault_aborts_window_and_valverest_cannot_latch);
     RUN_TEST(test_fm_note_is_nonlatching);
+
+    RUN_TEST(test_api_status_shape);
+    RUN_TEST(test_api_run_validation_and_start);
+    RUN_TEST(test_api_fault_gate_and_exemptions);
+    RUN_TEST(test_api_schedule_roundtrip_persist_atomic);
+    RUN_TEST(test_api_settings_get_post);
+    RUN_TEST(test_api_flow_override_dec015);
+    RUN_TEST(test_flow_detector_mute);
+    RUN_TEST(test_api_cal_endpoints);
+    RUN_TEST(test_api_stop_voids_calibration);
+    RUN_TEST(test_sched_pack_unpack_roundtrip);
+    RUN_TEST(test_persist_override_and_creds_roundtrip);
     return UNITY_END();
 }
