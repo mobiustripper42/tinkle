@@ -40,6 +40,7 @@ int Api::err(JsonDocument& out, int code, const char* msg) {
 int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
     out["state"]        = stateName(d_.run.state());
     out["activeZone"]   = d_.run.activeZone();
+    out["activeFert"]   = d_.run.activeFertigate();   // lastRun lags until run end
     out["remainingSec"] = d_.run.remainingSec(nowMs);
     out["queueDepth"]   = d_.run.queueDepth();
 

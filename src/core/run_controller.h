@@ -119,6 +119,9 @@ public:
     bool              isFaulted()    const { return state_ == RunState::Fault; }
     bool              isIdle()       const { return state_ == RunState::Idle; }
     int               activeZone()   const;            // -1 if no active run
+    // Fertigate flag of the ACTIVE run (false when none) — lastRun() only updates
+    // at run end, so status displays must not read fert state from it mid-run.
+    bool              activeFertigate() const { return activeZone() >= 0 && current_.fertigate; }
     uint32_t          remainingSec(uint32_t nowMs) const; // 0 unless RUNNING
     uint8_t           queueDepth()   const { return qCount_; }
     const RunSummary& lastRun()      const { return lastRun_; }

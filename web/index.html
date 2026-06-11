@@ -153,8 +153,11 @@ nav .ico{display:block; font-size:1.3rem}
   <label for="set-ssid">Network (SSID)</label>
   <input id="set-ssid" autocomplete="off">
   <label for="set-pass">Password</label>
-  <input id="set-pass" type="password" autocomplete="off" placeholder="(unchanged unless set)">
-  <p class="muted">New WiFi settings apply at next power-up.</p>
+  <input id="set-pass" type="password" autocomplete="off"
+         placeholder="(blank = open network)">
+  <p class="muted">Changing the network saves the password exactly as entered —
+  leave it blank only for an open network. Applies at next power-up; if the join
+  fails, the controller falls back to the Tinkle-Setup hotspot.</p>
   <button class="go" id="set-save">SAVE SETTINGS</button>
   <div id="set-msg" class="muted" role="status"></div>
 </section>
@@ -260,6 +263,8 @@ async function api(path, body) {
 let S = null;                       // last /api/status
 let statusAt = 0;                   // Date.now() when S landed
 let SET = null;                     // last /api/settings
+let schedDirty = false;             // unsaved schedule edits — don't clobber on tab switch
+let setDirty   = false;             // unsaved settings edits
 
 async function poll() {
   const s = await api('/api/status');
@@ -268,6 +273,8 @@ async function poll() {
   const active = S && S.state !== 'idle' && S.state !== 'fault';
   setTimeout(poll, active ? 1000 : 2000);
 }
+// Smooth countdown even when a slow/disconnected poll stretches the cycle.
+setInterval(() => { if (S && S.state === 'running') renderHome(); }, 1000);
 
 /* ---- rendering ---- */
 function renderBanners() {
@@ -294,7 +301,7 @@ function renderHome() {
   $('#st-zone').textContent  = zoneName(S.activeZone);
   $('#st-gpm').textContent   = S.flow ? S.flow.gpm.toFixed(2) + ' GPM' : '—';
   $('#st-gal').textContent   = S.flow ? S.flow.gallons.toFixed(2) + ' gal' : '—';
-  $('#st-div').textContent   = S.lastRun && S.state !== 'idle' && S.lastRun.fertigate ? 'FERT' : 'plain';
+  $('#st-div').textContent   = S.activeZone < 0 ? '—' : (S.activeFert ? 'FERT' : 'plain');
   $('#st-q').textContent     = S.queueDepth || 0;
   const lr = S.lastRun || {};
   $('#st-last').textContent = lr.result === 'none' ? 'No runs since boot.' :
@@ -343,8 +350,8 @@ function show(name) {
   $('#scr-'+name).classList.add('active');
   document.querySelectorAll('nav button').forEach(b =>
     b.classList.toggle('active', b.dataset.scr === name));
-  if (name === 'sched') loadSchedule();
-  if (name === 'set' || name === 'run') loadSettings();
+  if (name === 'sched' && !schedDirty) loadSchedule();      // never clobber edits
+  if ((name === 'set' || name === 'run') && !setDirty) loadSettings();
 }
 document.querySelectorAll('nav button').forEach(b =>
   b.addEventListener('click', () => show(b.dataset.scr)));
@@ -372,9 +379,11 @@ $('#run-zone').addEventListener('change', () => {
   }
 });
 $('#run-go').addEventListener('click', async () => {
+  const min = +$('#run-min').value;
+  if (!(min >= 1)) { flash('#run-msg', 'Enter minutes (1–120).', false); return; }
   const r = await api('/api/run', {
     zoneIndex: +$('#run-zone').value,
-    durationSec: Math.round(+$('#run-min').value * 60),
+    durationSec: Math.round(min * 60),
     fertigate: $('#run-fert').checked
   });
   flash('#run-msg', r.ok ? (r.queued ? 'Queued behind the current run.' : 'Started.')
@@ -387,8 +396,15 @@ let sched = [];
 const DAY_CH = ['S','M','T','W','T','F','S'];
 async function loadSchedule() {
   const r = await api('/api/schedule');
-  if (r.ok) { sched = r.entries || []; renderSched(); }
+  if (r.ok) { sched = r.entries || []; schedDirty = false; renderSched(); }
 }
+// Any interaction inside the list is an edit (inputs, day toggles, deletes).
+$('#sched-list').addEventListener('input',  () => schedDirty = true);
+$('#sched-list').addEventListener('change', () => schedDirty = true);
+$('#sched-list').addEventListener('click', e => {
+  if (e.target.dataset.day !== undefined || e.target.hasAttribute('data-del'))
+    schedDirty = true;
+});
 function renderSched() {
   const host = $('#sched-list');
   host.innerHTML = '';
@@ -441,13 +457,18 @@ function renderSched() {
 $('#sched-add').addEventListener('click', () => {
   sched.push({ zoneIndex:0, hour:6, minute:0, durationSec:600, daysMask:127,
                fertOverride:0, enabled:true });
+  schedDirty = true;
   renderSched();
 });
 $('#sched-save').addEventListener('click', async () => {
   if (sched.some(e => !e.daysMask)) {
     flash('#sched-msg', 'An entry has no days selected.', false); return;
   }
+  if (sched.some(e => !(e.durationSec >= 60))) {
+    flash('#sched-msg', 'Every entry needs a duration (1–120 minutes).', false); return;
+  }
   const r = await api('/api/schedule', { entries: sched });
+  if (r.ok) schedDirty = false;
   flash('#sched-msg', r.ok ? 'Saved ' + r.count + ' entries.'
                            : 'Refused: ' + (r.error || r.code), r.ok);
 });
@@ -457,6 +478,7 @@ async function loadSettings() {
   const r = await api('/api/settings');
   if (!r.ok) return;
   SET = r;
+  setDirty = false;
   fillZoneSelect($('#run-zone'));
   fillZoneSelect($('#cal-zone'));
   const host = $('#set-zones');
@@ -475,10 +497,15 @@ async function loadSettings() {
   $('#set-ssid').value = (r.wifi && r.wifi.ssid) || '';
   $('#set-pass').value = '';
 }
+$('#scr-set').addEventListener('input', () => setDirty = true);
 $('#set-save').addEventListener('click', async () => {
+  const mins = Array.prototype.map.call(
+    document.querySelectorAll('#set-zones input'), i => +i.value);
+  if (mins.some(m => !(m >= 1)) || !(+$('#set-swmax').value >= 1)) {
+    flash('#set-msg', 'Enter minutes (1–120) for every field.', false); return;
+  }
   const body = {
-    zoneDefaults: Array.prototype.map.call(
-      document.querySelectorAll('#set-zones input'), i => Math.round(+i.value*60)),
+    zoneDefaults: mins.map(m => Math.round(m * 60)),
     swMaxRuntimeSec: Math.round(+$('#set-swmax').value * 60),
     flowOverride: $('#set-ovr').checked
   };
@@ -486,7 +513,7 @@ $('#set-save').addEventListener('click', async () => {
   if (ssid && (!SET || !SET.wifi || ssid !== SET.wifi.ssid || $('#set-pass').value))
     body.wifi = { ssid: ssid, pass: $('#set-pass').value };
   const r = await api('/api/settings', body);
-  if (r.ok) SET = r;
+  if (r.ok) { SET = r; setDirty = false; }
   flash('#set-msg', r.ok ? 'Saved.' + (r.wifiNote ? ' WiFi applies at next boot.' : '')
                          : 'Refused: ' + (r.error || r.code), r.ok);
 });
@@ -545,16 +572,32 @@ function mock(path, body) {
     valveRestFlags:0, clock:{ valid:true, hour:12, minute:34, weekday:3 },
     cal:M.cal, uptimeMs: now % 86400000,
     wifi:{ mode:'mock', ip:'0.0.0.0', rssi:-50 } };
-  if (path === '/api/run') { M.state = 'running'; M.zone = body.zoneIndex;
+  // The mock REJECTS what the real api.cpp rejects (10-7200 s runs, 60-1800 s
+  // swMax, gallon bounds) — dev mode must surface the empty-input paths a phone
+  // keyboard produces, not paper over them.
+  const e422 = m => ({ ok:false, code:422, error:m });
+  if (path === '/api/run') {
+    if (!(body.durationSec >= 10 && body.durationSec <= 7200))
+      return e422('durationSec out of range');
+    M.state = 'running'; M.zone = body.zoneIndex;
     M.until = now + body.durationSec*1000; return { ok:true, code:200, queued:false }; }
   if (path === '/api/stop') { M.state = 'idle'; M.zone = -1; M.cal.phase = 'idle';
     return { ok:true, code:200, stopped:true }; }
   if (path === '/api/schedule') {
-    if (body) { M.entries = body.entries;
+    if (body) {
+      if (body.entries.some(e => !(e.durationSec >= 10 && e.durationSec <= 7200)))
+        return e422('durationSec out of range');
+      M.entries = body.entries;
       return { ok:true, code:200, saved:true, count:body.entries.length }; }
     return { ok:true, code:200, entries:M.entries, max:16, dropped:0 }; }
   if (path === '/api/settings') {
-    if (body) { Object.assign(M.set, body);
+    if (body) {
+      if (body.swMaxRuntimeSec !== undefined &&
+          !(body.swMaxRuntimeSec >= 60 && body.swMaxRuntimeSec <= 1800))
+        return e422('swMaxRuntimeSec out of range');
+      if (body.zoneDefaults && body.zoneDefaults.some(s => !(s >= 10 && s <= 7200)))
+        return e422('zoneDefault out of range');
+      Object.assign(M.set, body);
       if (body.wifi) M.set.wifi = { ssid:body.wifi.ssid, configured:true }; }
     return { ok:true, code:200, zoneDefaults:M.set.zoneDefaults,
       swMaxRuntimeSec:M.set.swMaxRuntimeSec, pulsesPerGallon:M.set.pulsesPerGallon,
@@ -564,7 +607,10 @@ function mock(path, body) {
     const iv = setInterval(() => { M.cal.pulses += 37;
       if (M.cal.pulses > 800) { M.cal.phase = 'awaiting'; clearInterval(iv); } }, 500);
     return { ok:true, code:200, started:true }; }
-  if (path === '/api/calibrate/finish') { const k = M.cal.pulses / body.measuredGallons;
+  if (path === '/api/calibrate/finish') {
+    if (!(body.measuredGallons >= 0.01 && body.measuredGallons <= 100))
+      return e422('measuredGallons out of range');
+    const k = M.cal.pulses / body.measuredGallons;
     M.set.pulsesPerGallon = k; M.cal = { phase:'idle', pulses:0, lastK:k };
     return { ok:true, code:200, k:k }; }
   if (path === '/api/fault/clear') { const was = M.fault; M.fault = 'none';
@@ -574,6 +620,8 @@ function mock(path, body) {
 }
 
 /* ---- boot ---- */
+fillZoneSelect($('#run-zone'));   // 3-zone fallback NOW — a failed settings fetch
+fillZoneSelect($('#cal-zone'));   // must never leave an empty select posting zone 0
 loadSettings();
 poll();
 </script>
