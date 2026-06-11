@@ -2263,6 +2263,7 @@ static void test_api_status_shape() {
     TEST_ASSERT_EQUAL_INT(200, r.api.getStatus(out, 0));
     TEST_ASSERT_EQUAL_STRING("idle", out["state"]);
     TEST_ASSERT_EQUAL_INT(-1, out["activeZone"].as<int>());
+    TEST_ASSERT_FALSE(out["activeFert"].as<bool>());
     TEST_ASSERT_EQUAL_UINT32(0, out["remainingSec"].as<uint32_t>());
     TEST_ASSERT_EQUAL_FLOAT(Persistence::DEFAULT_PULSES_PER_GALLON, out["flow"]["k"]);
     TEST_ASSERT_FALSE(out["flow"]["overrideActive"].as<bool>());
