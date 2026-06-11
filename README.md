@@ -87,9 +87,17 @@ hardware; build `esp32_sim` for the simulator. `wokwi.toml` points at
 ## Running the simulation (Wokwi)
 
 Wokwi boots the **real ESP32 firmware** in a virtual breadboard (DEC-004 tier 2):
-the TM1637 panel, the three zone buttons, and status LEDs for the pump, the zone
-valve FETs, and the diverter legs — enough to watch a full run sequence
-(zone-open → pump → live countdown → unwind) without hardware.
+the TM1637 panel, the three zone buttons, status LEDs for the pump, the zone
+valve FETs, and the diverter legs, plus a **flow-pulse chip** (`chips/`) behind a
+"FLOW on/off" slide switch — enough to watch a full run sequence without
+hardware, and to provoke the flow faults (switch down mid-run → E1 no-flow;
+up while idle → E2 unexpected flow).
+
+The sim also brings up the **whole web stack** (#62): with empty sim NVS the
+firmware joins `Wokwi-GUEST` automatically, NTP syncs the clock (so schedules
+fire), and `wokwi.toml` forwards the SPA/API to the host —
+**`http://localhost:8180/`** while the sim runs (on a remote VPS, let VS Code
+forward port 8180, or `?mock=1` is unnecessary here — this is the real API).
 
 **Always `pio run -e esp32_sim` first** (the sim runs the built binary, it does not
 compile — and `esp32_sim` is the one with the watchable short timings).

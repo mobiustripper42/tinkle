@@ -1,0 +1,5 @@
+{
+  "name": "flow-pulse",
+  "author": "tinkle",
+  "pins": ["OUT", "EN", "VCC", "GND"]
+}

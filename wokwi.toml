@@ -1,4 +1,4 @@
-# Wokwi simulation config — DEC-004 tier 2 (Phase 0.7 / #7).
+# Wokwi simulation config — DEC-004 tier 2 (Phase 0.7 / #7, full-sim session #62).
 #
 # Boots the real esp32 firmware in simulation: TM1637 panel, the three zone buttons
 # (B1/B2/B3 each run their own zone; any press stops a running zone; >=3 s long-press
@@ -7,11 +7,19 @@
 # run sequence (zone -> pump -> unwind, button-driven, live countdown). v1.4: no master
 # valve (DEC-012); the pump is the source gate.
 #
-# Run:
+# Run (#62):
 #   1. pio run -e esp32_sim                       # build first; paths below point at the output.
 #                                                 # esp32_sim defines TINKLE_SIM -> short valve
 #                                                 # travel + run duration so a run is watchable.
 #   2. VS Code: F1 -> "Wokwi: Start Simulator"    # needs the (free) Wokwi extension license
+#   3. The firmware joins Wokwi-GUEST by itself (empty sim NVS -> TINKLE_SIM default
+#      creds), NTP syncs, and the SPA/API forward to the host: http://localhost:8180/
+#      (remote VPS: let VS Code forward 8180, or tunnel it).
+#
+# Flow sensor: the chips/flow-pulse custom chip feeds ~15 pulses/s (~2.0 GPM at the
+# 450 p/gal K seed) into GPIO27 while the "FLOW on/off" slide switch is up. Slide it
+# down mid-run to provoke FAULT_NO_FLOW (3 s sim grace); slide it up while idle to
+# provoke FAULT_UNEXPECTED_FLOW (50 pulses over a 5 s window).
 #
 # Diagram omits LED series resistors (sim convenience); the breadboard bench (tier 3)
 # uses real current-limiting per the wiring doc.
@@ -20,3 +28,8 @@
 version = 1
 firmware = ".pio/build/esp32_sim/firmware.bin"
 elf = ".pio/build/esp32_sim/firmware.elf"
+
+# SPA + API reachable from a host browser against the simulated device (#62).
+[[net.forward]]
+from = "localhost:8180"
+to = "target:80"
