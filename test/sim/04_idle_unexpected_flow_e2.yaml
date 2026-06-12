@@ -1,0 +1,18 @@
+name: 'Unexpected flow at idle -> fault (E2), runs refused'
+version: 1
+author: 'Tinkle'
+# Flow seen while idle (no run commanded) is "unexpected" -> FAULT_UNEXPECTED_FLOW
+# once >50 pulses accumulate over a 5s window (~3.3s at the 15 Hz sim source).
+# A latched fault must refuse new runs: pressing B1 afterward leaves the pump OFF.
+# That refusal is the deterministic gate; the panel shows E2.
+steps:
+  - delay: 3s
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on at idle
+  - delay: 6s                                          # cross the 50-pulse threshold
+  - take-screenshot: { part-id: tm, save-to: screenshots/04_fault_e2.png }
+  - set-control: { part-id: btn1, control: pressed, value: 1 }    # try to start a run
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 2s
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # run REFUSED (fault latched)
+  - expect-pin: { part-id: esp, pin: 13, value: 0 }   # valve stayed closed

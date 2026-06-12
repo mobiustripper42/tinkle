@@ -1,0 +1,32 @@
+name: 'Flow drops mid-run -> fail dry (E1)'
+version: 1
+author: 'Tinkle'
+# A run that loses flow partway through must fail dry. Start with flow, confirm the
+# pump is running, then cut FLOW mid-run -> the no-flow check (post-grace) trips
+# FAULT_NO_FLOW. This is the checklist's "FLOW down mid-run -> E1".
+#
+# Timing note: the GPM rate is an 8-sample 1 Hz ring, so it takes ~7s to decay to
+# zero after flow stops, and the SIM run is only 10s -> the fault fires close to the
+# run's natural end. Rather than race that boundary, we gate on the LATCH: after the
+# event, a fresh press is REFUSED iff the run faulted (a normal completion would be
+# idle and accept the press). That distinguishes "faulted" from "finished" cleanly,
+# independent of the exact fault instant.
+steps:
+  - delay: 3s
+  - set-control: { part-id: btn1, control: pressed, value: 1 }
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on
+  - delay: 1800ms
+  - expect-pin: { part-id: esp, pin: 22, value: 1 }   # running with flow
+  - set-control: { part-id: flow_sw, control: value, value: 0 }   # FLOW cut mid-run
+  - delay: 10s                                         # past the fault AND the 10s run's end
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump off
+  - expect-pin: { part-id: esp, pin: 13, value: 0 }   # valve closed
+  - take-screenshot: { part-id: tm, save-to: screenshots/03_fault_e1.png }
+  # Prove it LATCHED (faulted), not merely finished: a new run must be refused.
+  - set-control: { part-id: btn1, control: pressed, value: 1 }
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 1500ms
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # REFUSED -> latched E1, the drop faulted it

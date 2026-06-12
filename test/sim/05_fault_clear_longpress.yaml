@@ -1,0 +1,25 @@
+name: 'Long-press clears a latched fault -> runs again'
+version: 1
+author: 'Tinkle'
+# Provoke E1 (no-flow run), then clear it with a >=3s long-press on B1 (DEC-006).
+# After the clear the controller returns to idle, so a fresh short press WITH flow
+# starts a normal run -> proves the latch released and the run path recovered.
+steps:
+  - delay: 3s
+  - set-control: { part-id: btn1, control: pressed, value: 1 }    # start a run (no flow)
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 4500ms                                      # let no-flow fault latch
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # faulted, pump off
+  - set-control: { part-id: btn1, control: pressed, value: 1 }    # LONG-press to clear
+  - delay: 3300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 700ms
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on for recovery run
+  - set-control: { part-id: btn1, control: pressed, value: 1 }    # fresh short press
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 1800ms
+  - expect-pin: { part-id: esp, pin: 22, value: 1 }   # run STARTED -> fault was cleared
+  - set-control: { part-id: flow_sw, control: value, value: 0 }
+  - take-screenshot: { part-id: tm, save-to: screenshots/05_recovered.png }

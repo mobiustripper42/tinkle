@@ -1,0 +1,24 @@
+name: 'Zone 1 happy path with flow -> clean auto-stop'
+version: 1
+author: 'Tinkle'
+# Full successful run. Press B1, flip FLOW on during staging so pulses reach the
+# sensor, run proceeds past the 3s grace (pump stays on -> proves flow satisfied
+# the check), then the ~10s run completes and the controller auto-stops clean:
+# pump off, valve closed, back to idle.
+steps:
+  - delay: 3s
+  - set-control: { part-id: btn1, control: pressed, value: 1 }
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on
+  - delay: 1800ms
+  - expect-pin: { part-id: esp, pin: 22, value: 1 }   # pump on (running)
+  - delay: 4s                                          # past grace, flow present
+  - expect-pin: { part-id: esp, pin: 22, value: 1 }   # STILL on -> no false no-flow fault
+  - take-screenshot: { part-id: tm, save-to: screenshots/02_running.png }
+  - delay: 6s                                          # let the 10s run complete
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # clean auto-stop
+  - delay: 1500ms
+  - expect-pin: { part-id: esp, pin: 13, value: 0 }   # valve closed after unwind
+  - set-control: { part-id: flow_sw, control: value, value: 0 }
+  - take-screenshot: { part-id: tm, save-to: screenshots/02_idle.png }

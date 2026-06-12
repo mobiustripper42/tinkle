@@ -1,0 +1,41 @@
+name: 'Each button runs its own zone (B2, B3)'
+version: 1
+author: 'Tinkle'
+# DEC-006: one button per zone. B2 drives Zone 2 (Z2_FET = GPIO14), B3 drives
+# Zone 3 (Z3_FET = GPIO16); both pull the shared pump (GPIO22). Flow is supplied
+# during each run (on after the press, off at stop) so neither the no-flow nor the
+# idle-flow fault can arm -- the assertions have a wide, jitter-proof margin. Each
+# zone is stopped with a second press before moving to the next.
+steps:
+  - delay: 3s
+  # --- Zone 2 ---
+  - set-control: { part-id: btn2, control: pressed, value: 1 }
+  - delay: 300ms
+  - set-control: { part-id: btn2, control: pressed, value: 0 }
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on for the run
+  - delay: 2400ms
+  - expect-pin: { part-id: esp, pin: 14, value: 1 }   # Z2_FET energized
+  - expect-pin: { part-id: esp, pin: 22, value: 1 }   # shared pump on
+  - expect-pin: { part-id: esp, pin: 13, value: 0 }   # Z1 stays closed
+  - set-control: { part-id: btn2, control: pressed, value: 1 }    # stop Zone 2
+  - delay: 300ms
+  - set-control: { part-id: btn2, control: pressed, value: 0 }
+  - set-control: { part-id: flow_sw, control: value, value: 0 }   # FLOW off at idle
+  - delay: 2000ms
+  - expect-pin: { part-id: esp, pin: 14, value: 0 }   # Z2 closed
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump off
+  # --- Zone 3 ---
+  - set-control: { part-id: btn3, control: pressed, value: 1 }
+  - delay: 300ms
+  - set-control: { part-id: btn3, control: pressed, value: 0 }
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on for the run
+  - delay: 2400ms
+  - expect-pin: { part-id: esp, pin: 16, value: 1 }   # Z3_FET energized
+  - expect-pin: { part-id: esp, pin: 22, value: 1 }   # shared pump on
+  - set-control: { part-id: btn3, control: pressed, value: 1 }    # stop Zone 3
+  - delay: 300ms
+  - set-control: { part-id: btn3, control: pressed, value: 0 }
+  - set-control: { part-id: flow_sw, control: value, value: 0 }   # FLOW off at idle
+  - delay: 2000ms
+  - expect-pin: { part-id: esp, pin: 16, value: 0 }   # Z3 closed
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump off

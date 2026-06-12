@@ -1,0 +1,21 @@
+name: 'Zone 1 no-flow -> fail dry (E1)'
+version: 1
+author: 'Tinkle'
+# Safety-critical path: a run with no flow must fail dry. Press B1, valve opens,
+# pump energizes, 3s flow grace elapses with no pulses -> FAULT_NO_FLOW -> pump
+# off + valve closed (the fail-dry response) + E1 latched on the panel.
+# FLOW switch left quiet (boot default) -> no pulses reach GPIO27.
+steps:
+  - delay: 3s
+  - set-control: { part-id: btn1, control: pressed, value: 1 }
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 600ms
+  - expect-pin: { part-id: esp, pin: 13, value: 1 }   # Z1_FET energized (valve opening)
+  - delay: 1800ms                                      # to ~press+2.4s: pump up (~1.3s), grace ends ~4.3s
+  - expect-pin: { part-id: esp, pin: 22, value: 1 }   # PUMP_RELAY on
+  - take-screenshot: { part-id: tm, save-to: screenshots/01_running.png }
+  - delay: 4s                                          # past 3s grace, no flow
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump FAILED DRY
+  - expect-pin: { part-id: esp, pin: 13, value: 0 }   # valve de-energized
+  - take-screenshot: { part-id: tm, save-to: screenshots/01_fault_e1.png }

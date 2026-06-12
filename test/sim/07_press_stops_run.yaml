@@ -1,0 +1,22 @@
+name: 'A press stops a running zone (DEC-006)'
+version: 1
+author: 'Tinkle'
+# Manual override: pressing the running zone's button stops it immediately. Start
+# Zone 1 with flow, confirm it is running, press B1 again -> clean stop (pump off,
+# valve closed). No fault involved; this is the manual stop path.
+steps:
+  - delay: 3s
+  - set-control: { part-id: btn1, control: pressed, value: 1 }
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on
+  - delay: 1800ms
+  - expect-pin: { part-id: esp, pin: 22, value: 1 }   # running
+  - set-control: { part-id: btn1, control: pressed, value: 1 }    # press again -> stop
+  - delay: 300ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 1800ms
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # stopped, pump off
+  - expect-pin: { part-id: esp, pin: 13, value: 0 }   # valve closed
+  - set-control: { part-id: flow_sw, control: value, value: 0 }
+  - take-screenshot: { part-id: tm, save-to: screenshots/07_stopped.png }
