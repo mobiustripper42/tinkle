@@ -356,3 +356,38 @@ watchdog-first is strictly less rework. Bench work needs no UI — buttons + TM1
 (DEC-006).
 **Tradeoff:** The phone UI arrives last among software phases; acceptable because wet validation
 (the only consumer that *needs* it) is parts-gated to Winter 2026–27.
+
+---
+
+## DEC-017: Low-tank pump lockout — V2 integration seam with Soundings (not built)
+**Status:** **V2, not built.** This records the *seam* so the V1 design leaves room for it;
+the implementation is deferred and **@architect-gated** (the transport choice below is unresolved).
+**Decision (shape, not implementation):** The Soundings mesh will grow a tank-cluster level sensor
+(one A02YYUW ultrasonic node over the farm's three plumbed-together catchment tanks, 2530 gal —
+see Soundings `DEC-005`/`DEC-006` and `docs/tank-level-sensor.md`), publishing
+`farm/water/cluster/level_gal`, `.../percent`, and raw `.../distance_mm`. Tinkle consumes that level
+to **lock the pump out before it runs the cluster dry**. The consumer seam is a future `src/core`
+module — call it `TankMonitor` — that:
+- gates `RunController::requestRun()` (reject a new run below a configurable threshold, like the
+  FAULT gate already does), and
+- raises a new `FAULT_LOW_TANK` if the level crosses the floor mid-run,
+following the existing `FlowFaultDetector` pattern (push a fault through `RunController::raiseFault`)
+with a FaultManager resolved-condition clear gate (level recovered), exactly as DEC-006's
+fault-clear works.
+**Why it fits cleanly:** the fault-detector seam (`FlowFaultDetector`, `ValveRestMonitor`) and the
+`requestRun` precondition gate already exist — a tank lockout is another detector, not new
+plumbing. Threshold persists through the DEC-008 store like `swMaxRuntimeSec`.
+**Open question for @architect (why it's not built yet):**
+1. **Transport.** MQTT subscribe (pulls in a broker dependency + AsyncMqttClient) vs. HTTP poll of
+   the Soundings gateway vs. a **hardwired GPIO** from a local float/level switch. GPIO is the only
+   option that respects **local autonomy** (DEC philosophy: watering never depends on the network);
+   the MQTT/HTTP options make the lockout depend on the mesh being up.
+2. **Fail-dry direction conflict.** A *missing* tank signal is ambiguous: lock out
+   conservatively (protects the pump, but a dead sensor or down mesh then blocks *all* watering — the
+   exact failure DEC-015 added the flow-check override to avoid) vs. allow watering (preserves
+   autonomy, but exposes the pump to a dry run). The pump's dry-run is an **equipment** risk, not the
+   flood risk the fail-dry chain (DEC-012) is built around — so this lockout is a *protection* layer,
+   **not** part of the fail-dry safety chain, and must not be allowed to compromise it. The resolution
+   (likely: GPIO float-switch + a DEC-015-style override) is an architecture decision, deferred.
+**Crosses into Not V1:** "Closed-loop / sensor-driven irrigation" and "MQTT to the Soundings stack"
+are already parked there (SPEC.md); this DEC names the specific lockout case and its seam.
