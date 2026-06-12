@@ -79,6 +79,9 @@ parts — calibrate K, confirm `ZONE_TRAVEL_MS` / `DIVERTER_TRAVEL_MS`. Parts-ga
   only; no second pump/valves/sensor wired.
 - **Closed-loop / sensor-driven irrigation** — Soundings soil-moisture sensors
   driving valves is V2.
+- **Low-tank pump lockout** — consuming the Soundings tank-cluster level sensor to
+  lock out the pump before it runs the catchment dry is V2. Seam recorded in
+  DEC-017 (a future `TankMonitor` gate); source is Soundings `docs/tank-level-sensor.md`.
 - **Server, MQTT broker, database, Grafana** — telemetry is local-only in V1; MQTT
   publishing to the Soundings stack comes later.
 - **On-box menu / UI beyond the countdown** — the TM1637 is read-only MM:SS status.
