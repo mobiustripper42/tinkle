@@ -1,4 +1,4 @@
-SEEDS WORKFLOW CHEATSHEET                                v2026-05-05
+SEEDS WORKFLOW CHEATSHEET                                v2026-06-12
 
   /its-alive  ->  [ work ]  ->  /kill-this  ->  /its-dead
                      ^                              v
@@ -11,14 +11,14 @@ SESSION
   /pause-this      walking away. build check + WIP commit.
   /restart-this    resume from /pause-this. reloads context.
   /kill-this       end pt 1. build + commit + PR + @code-review.
-  /its-dead        end pt 2. duration + points + finalize file.
-                   arg: "subtract 30 minutes for lunch"
+  /its-dead        end pt 2. stamps ended, tallies points,
+                   shows wall_clock gut-check, finalizes file.
 
 PHASE
   /start-phase     materialize current phase as Issues
                    ( phase:N + points:X labels )
   /retro           close phase. mark [x], reconcile drift,
-                   compute velocity, write retro, bump minor.
+                   compute throughput, write retro, bump minor.
 
 SEMVER  ( dev projects only — needs package.json )
   /bump-major      breaking change. manual. tag on main.
