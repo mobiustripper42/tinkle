@@ -25,6 +25,25 @@ out = root / "src" / "esp32" / "spa_gz.h"
 
 html = src.read_bytes()
 
+# SIM build only (TINKLE_SIM): Wokwi's net.forward proxy opens a fresh socket per
+# SPA poll, and the device's small TCP pool exhausts in ~20s at the production 1 Hz
+# cadence (the SPA then can't reconnect though WiFi/sim stay up). Real hardware talks
+# to the phone directly — keep-alive reuse, more sockets — so production keeps the
+# snappy poll. Slow the poll for the sim build only, by substituting the named knob.
+# Detect from the resolved build_flags (CPPDEFINES isn't merged yet at pre-script time).
+_flags = str(env.GetProjectOption("build_flags", "")) + " " + env.subst("$BUILD_FLAGS")  # noqa: F821
+if "TINKLE_SIM" in _flags:
+    _needle = b"const POLL_ACTIVE_MS = 1000, POLL_IDLE_MS = 2000;"
+    _repl = b"const POLL_ACTIVE_MS = 5000, POLL_IDLE_MS = 8000;"
+    _n = html.count(_needle)
+    if _n != 1:
+        raise SystemExit(
+            "build_spa: TINKLE_SIM poll knob matched %d times (expected 1) — "
+            "web/index.html changed; update the marker in tools/build_spa.py." % _n
+        )
+    html = html.replace(_needle, _repl)
+    print("build_spa: TINKLE_SIM -> SPA poll slowed to 5s/8s (Wokwi net.forward socket churn)")
+
 # mtime=0 => byte-identical output for identical input (write-on-change works).
 buf = io.BytesIO()
 with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=9, mtime=0) as gz:

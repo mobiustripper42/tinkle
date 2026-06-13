@@ -266,12 +266,18 @@ let SET = null;                     // last /api/settings
 let schedDirty = false;             // unsaved schedule edits — don't clobber on tab switch
 let setDirty   = false;             // unsaved settings edits
 
+// Poll cadence (ms). PRODUCTION values — snappy. The Wokwi SIM build slows these
+// via tools/build_spa.py: Wokwi's net.forward proxy opens a fresh socket per poll
+// and the device's small TCP pool exhausts in ~20s at 1 Hz. Real hardware talks to
+// the phone directly (keep-alive, more sockets), so it keeps the fast cadence.
+const POLL_ACTIVE_MS = 1000, POLL_IDLE_MS = 2000;
+
 async function poll() {
   const s = await api('/api/status');
   if (s.ok) { S = s; statusAt = Date.now(); }
   renderAll();
   const active = S && S.state !== 'idle' && S.state !== 'fault';
-  setTimeout(poll, active ? 1000 : 2000);
+  setTimeout(poll, active ? POLL_ACTIVE_MS : POLL_IDLE_MS);
 }
 // Smooth countdown even when a slow/disconnected poll stretches the cycle.
 setInterval(() => { if (S && S.state === 'running') renderHome(); }, 1000);
