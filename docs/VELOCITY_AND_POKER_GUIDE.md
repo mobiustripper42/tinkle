@@ -6,39 +6,54 @@ A lightweight solo-dev process for tracking effort, estimating work, and knowing
 
 ## Part 1: Velocity Tracking
 
+> **The quick version** — how to *read* the numbers, with worked examples — lives in [`THROUGHPUT_QUICKREF.md`](THROUGHPUT_QUICKREF.md). This part is the *why*. The full decision record is DEC-S026 in `DECISIONS.md`.
+
 ### What it measures
 
-**Velocity = active hours per effort point (active h/pt).** Active time is wall-clock minus idle: `active = wall_clock - breaks`. Lower is faster. It's the time you were actually at the keyboard on the work — and it's the only velocity number you forecast on.
+**Velocity = throughput: effort points shipped per calendar week.** Higher is faster. It's read straight from GitHub — issue `closedAt` dates + `points:N` labels — so it measures the rate at which work *clears the board*, not hours at the keyboard.
+
+Two lifetime rates come out of it:
+- **points / calendar-week** — realized pace, *including* idle weeks. This is your honest clearance rate.
+- **points / active-week** — intensity in the weeks you actually shipped something.
+
+This is the metric *after* three failed attempts (DEC-S013 → S015 → S024) to measure "active hours per point" by reconstructing keyboard time from the session transcript. That metric is **retired** — the transcript lives on an unreachable path for nearly every web/Desktop session, so the number rotted by default. For a solo + Claude shop the insight was that effort-hours aren't even the scarce quantity: Claude does the labor, so what you actually care about is *calendar clearance rate* and *estimate stability*. Both are measurable from GitHub forever. (Full autopsy: DEC-S026.)
 
 ### Where it comes from — you don't log anything
 
-There is no tracker to maintain and no "log your hours" step. The numbers are extracted after the fact from data you keep anyway:
+There is no tracker to maintain and no "log your hours" step — same promise as before, now actually kept, because the inputs are data GitHub holds whether you think about it or not:
 
-- Each session file records `started` and `ended` (stamped by `/its-alive` and `/its-dead`) plus the path to its transcript.
-- `/retro` does the math at phase close: `wall_clock = ended - started`; `breaks` = idle gaps > 15 min inferred from the transcript; `active = wall_clock - breaks`; `active / points` = the velocity.
-- Results land in two places: **`docs/RETROSPECTIVES.md`** (the source of truth — one block per phase, carrying the raw active hours + points so the number is always recomputable) and the **velocity table at the top of `docs/PROJECT_PLAN.md`** (an at-a-glance mirror).
+- Every task is a GitHub Issue with a `points:N` label (added by `/start-phase`) and a `closedAt` date (stamped when its PR merges). That's the entire dataset.
+- `/retro` does the math at phase close: it groups closed issues by phase, sums points, and divides by the calendar span — no session file, no transcript, no `started`/`ended` arithmetic.
+- The **source of truth is GitHub itself.** RETROSPECTIVES.md and the PROJECT_PLAN.md table are now *mirrors* of a number that's always recomputable from issue dates + labels — they can't drift the headline, because the headline isn't stored in them.
 
-If a number ever feels off, it's recomputable from `started`/`ended` + the transcript. Nothing depends on you remembering to write hours down — that's the whole point. The moment velocity becomes a logging chore it gets abandoned; here it's a read, not a chore.
+The one thing that makes a project invisible: no `points:N` labels. Throughput reaches back exactly as far as the labelling ritual and no further — a project from before you labelled issues returns nothing (same blind spot the old metric had).
 
 ### Your overall number, and across projects
 
-For one phase, read RETROSPECTIVES.md. For your lifetime number — or a combined number across several repos — run the **velocity extractor** (`dev/claude/scripts/velocity.py`): it reads points off closed issues + active hours out of each repo's retros and prints lifetime active h/pt, a per-phase breakdown, and how much your per-session pace scatters.
+For your lifetime number — or a combined number across several repos — run the **throughput extractor** (`dev/claude/scripts/throughput.py`), pointing it at one or more project paths:
 
-**Do not average the per-phase h/pt numbers.** Correct overall velocity is `Σ active-hours ÷ Σ points`, not the mean of each phase's ratio — averaging ratios silently overweights small phases. The extractor sums them properly. Grep for a quick eyeball; run the extractor for the real number.
+```bash
+python3 dev/claude/scripts/throughput.py ~/bushel
+python3 dev/claude/scripts/throughput.py ~/bushel ~/muster ~/helm   # cross-repo rollup
+python3 dev/claude/scripts/throughput.py --issues ~/bushel          # + points histogram
+```
+
+It reads GitHub directly (needs `gh` installed and authed): points off closed issues, dates off the issues and merged PRs. It prints the two lifetime rates, a per-phase breakdown with pointing-stability and span, and PR merge latency. A project with no `points:N`-labelled closed issues prints "nothing to measure" — not an error, just a project that predates the ritual.
 
 ### Reading the numbers
 
-- **`active / point` is the forecast number.** That's it. `wall_clock` is kept as raw bookkeeping (it includes overnight gaps and idle), but `wall / point` is *not* a velocity — don't quote it as one.
-- **Ignore `Dev` / `Review` columns in older retros.** They came from a retired per-PR split that mis-attributed time on multi-PR sessions (it once reported more "review" hours than the session was even long). The `Active` figure in those same retros was always the real headline.
-- **Velocity is project-shape-specific.** A Supabase CRUD app and an agent pipeline have very different active h/pt. Don't forecast one from the other's history.
-- **Use the ramp, not your best-ever.** Early phases on a new project run high (dialing in the workflow) and settle later; a new project starts at the high end again, so quote the early band, not your record phase. (Phases predating the active-time model carry only a legacy `Velocity: X hrs/pt` — a different, older metric; don't blend it with active h/pt.)
+- **Throughput is an active-time rate, not a calendar date.** A slow week and a vacation week look identical to it. To forecast "when does it ship," divide remaining points by *your* real availability — the tool measures the work, you supply the calendar. Never quote it as at-keyboard speed.
+- **Pointing stability (`pts/issue`) is the estimate-calibration signal.** The per-phase breakdown prints a `tight` / `drifting` verdict on how consistent your `pts/issue` is. Tight = your estimates hold their value over time; drifting = scope is growing or points are inflating. This is the number to watch, and the one the old metric was secretly also trying to measure.
+- **Per-phase `pts/wk` only appears for phases spanning ≥7 days.** A phase you closed in an afternoon has no meaningful weekly rate — it's recorded as `burst — N pts over Dd` instead. Dividing points by a sub-week denominator produces nonsense (one project showed 516 pts/wk off a single 1-pointer).
+- **PR merge latency is flow-health, NOT effort.** The extractor reports median + p85 hours from PR-open to merge. That answers "do my PRs sit unmerged?" — it does **not** scale with task size (the PR opens *after* the build is done, so it can't see build time; it comes back flat across 2/3/5-pointers by design). Read it as "is the pipe clogged," nothing more.
+- **Throughput is even more project-shape-specific than the old metric.** Never forecast a new project from another's throughput — project shapes differ too much. The number describes the project you ran it on, full stop. (Historical phases closed under the retired model keep their old columns; `throughput.py` recomputes from GitHub independently, so history needs no backfill.)
 
 ### Rules of thumb
 
-- **It only works if your pointing is consistent.** Velocity is a conversion factor between your estimate and clock time; if you point the same task a 3 on Tuesday and an 8 on Friday, velocity is measuring estimation noise, not speed. Consistent-but-biased pointing is fine — the bias is in both the history and the forecast, so it cancels. Random pointing is not. The extractor's per-session h/pt spread is the test: tight = your pointing holds; scattered = it doesn't.
+- **It only works if your pointing is consistent.** Throughput converts your estimate into a clearance rate; if you point the same task a 3 on Tuesday and an 8 on Friday, the rate measures estimation noise, not speed. Consistent-but-biased pointing is fine — the bias is in both the history and the forecast, so it cancels. Random pointing is not. The `pts/issue` stability verdict is the test: tight = your pointing holds; drifting = it doesn't.
+- **It's coarse — treat it as ±50%.** Solo work is bursty (every project in the fleet has been a 1–6 week sprint, then done). Read the headline as a band ("ships in ~5–8 weeks"), never a precise date.
 - **Don't fudge.** The point is accurate forecasting, not looking fast.
 - **Re-estimate when surprised** — if a 3 turns into an 8, update the plan. That's data, not failure.
-- **Velocity stabilizes after ~10 sessions.** Before that, take projections with a grain of salt.
 
 ---
 
@@ -101,16 +116,16 @@ Claude: "Agreed — 8. I'll note the merge complexity in the task description."
 
 ### Rhythm
 
-**Per session:** run `/its-alive` at the start and `/its-dead` at the end. That's the entire time-tracking obligation — those two stamps plus the transcript are everything `/retro` needs. No timer, no logging.
+**Per phase start:** run `/start-phase`. It turns the phase's tasks into GitHub Issues with `points:N` labels — which *is* the throughput dataset. No labels, no velocity, so this is the step that matters.
 
-**Per phase boundary:** run `/retro`. It computes the per-session and phase active h/pt, writes RETROSPECTIVES.md, and updates the PROJECT_PLAN.md velocity table. If you're starting a new phase, do estimation poker (Part 2) on its tasks.
+**Per phase boundary:** run `/retro`. It computes the phase throughput + the pointing-stability tally off GitHub issue dates and labels, writes RETROSPECTIVES.md, and updates the PROJECT_PLAN.md velocity table. If you're starting a new phase, do estimation poker (Part 2) on its tasks.
 
-**When you want the big picture:** run the velocity extractor (Part 1) for your lifetime or cross-repo number. Check it against your remaining points — if projected active hours exceed the time you've got before a deadline, cut scope (PROJECT_PLAN.md has a cuttable-tasks list). The number doesn't lie.
+**When you want the big picture:** run the throughput extractor (Part 1) for your lifetime or cross-repo number. Check remaining points against *your* available calendar time — throughput is a clearance rate, not a date, so you supply the availability. If the work won't fit before a deadline, cut scope (PROJECT_PLAN.md has a cuttable-tasks list).
 
 ### Cross-project tracking
 
-Each project keeps its own RETROSPECTIVES.md and PROJECT_PLAN.md velocity table. Velocity is per-project and per-shape — don't average a CRUD app against an agent pipeline. When you want a combined view, the extractor takes multiple repo paths and reports each repo plus the properly-summed total (`Σ active ÷ Σ points`).
+Each project's throughput is read from its own GitHub issues. Throughput is per-project and per-shape — don't average a CRUD app against an agent pipeline. When you want a combined view, the extractor takes multiple repo paths and reports each repo plus the rollup.
 
 ### The one thing that matters
 
-**Point consistently and run the two stamps.** Everything downstream — the per-phase velocity, the forecasts, the cross-repo rollup — is recomputed from `started`/`ended` + the transcript, so there's nothing to log and nothing to forget. The only input that can quietly poison the number is inconsistent pointing, because velocity can't tell "I got slower" from "I pointed it lower." Keep your pointing honest and the system does the rest.
+**Point consistently and label every issue.** Everything downstream — the per-phase throughput, the forecasts, the cross-repo rollup — is recomputed from GitHub issue dates + `points:N` labels, so there's nothing to log and nothing to forget. The only input that can quietly poison the number is inconsistent pointing, because throughput can't tell "I got slower" from "I pointed it lower." Keep your pointing honest and the system does the rest.
