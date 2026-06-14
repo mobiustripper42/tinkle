@@ -130,25 +130,37 @@ to safe state, driven by a button, with a live countdown.
 
 **Phase 4 total: 27 pts** — DEC-016 batches: Unit C = 4.1+4.2+4.x (one PR), Unit D = 4.3+4.4 (one PR).
 
-### Run history — "what ran when, and faults" (added 2026-06-14, post-plan)
+### Run history — "what ran when, and faults" (added 2026-06-14, post-plan; @architect-ratified → DEC-018)
 
 The fault history already ships (`FaultManager` ring → `/api/status` → Faults screen).
 The **run** history does not: every run is logged at SETTLE (zone/start/duration/gallons/
 fert/result, §4 step 7) but only the single **last-run** summary is kept and exposed.
 This unit makes the run log a persisted, browsable history beside the fault ring.
-**Decisions taken:** dedicated **7th SPA screen**; **NVS-persisted** run ring, as deep as
-the NVS budget practically allows; lazy **`GET /api/history`** (not on the 1–2 s status poll).
-Not excluded by SPEC "Not V1" — that bars *remote* telemetry (server/MQTT/DB/Grafana), not a
-local log. Spec-amending (adds a screen past the documented "six"), so it gates on @architect.
+**Decisions (DEC-018):** dedicated **7th SPA screen**; **NVS-persisted** run ring, **32**
+entries in one packed `runlog` blob (≈356 B; one-constant bump to 64 if the field asks —
+the real ceiling is write-wear, not space, and one debounced ~360 B write/run barely touches
+it); lazy **`GET /api/history`** (read-only, off the 1–2 s status poll). Not excluded by SPEC
+"Not V1" — that bars *remote* telemetry (server/MQTT/DB/Grafana), not a local log. Spec-amending
+(adds a screen past the documented "six"). **Packed record (11 B):** `startEpoch u32 · zone u8 ·
+durationSec u16 · centigallons u16 · flags u8 (fert | result | clockWasValid) · faultCode u8`
+— centigallons not float (NVS-blob-portable), per-entry `clockWasValid` bit (validity varies
+across the ring), and an implausible-epoch (pre-2025) guard stores the entry with that bit clear
+rather than a 1970 wall-clock. SPA renders wall-clock when the bit is set, else relative-to-uptime
+(mirrors the fault log's `ago(uptimeMs − atMs)`).
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 4.5 | @architect ratify + DEC-NNN + doc updates (SPEC §10.1, firmware §8/§10/§10.1) — ring depth vs NVS budget/wear, `/api/history` shape, 7th-screen amendment | 2 | gate; lands before 4.6 |
-| 4.6 | `RunLog` core module — packed ring `{startEpoch,zone,durationSec,gallons,fert,result,faultCode}`; `RunController` pushes at SETTLE (last-run = head); NVS `runlog` blob (write-on-change, rehydrate at boot, DEC-008 additive); host-tested w/ fake clock | 5 | src/core; §4 step 7, §8 |
-| 4.7 | `GET /api/history` — `Api` serializes run ring + fault ring + clock-valid flag; host-tested JSON shapes; read-only (no FAULT gate) | 3 | §10; one firmware PR with 4.6 |
-| 4.8 | SPA History screen (7th tab) — runs list (wall-clock if synced else relative, zone, MM:SS, gallons, fert, result/fault) + fault entries; lazy-fetch on open + refresh; mock-API rows; DISCONNECTED degrade; tab-bar update | 3 | §10.1; own PR (DEC-016 Unit-style) |
+| 4.5 | @architect ratify (✓ DEC-018) + write DEC-018 + doc updates: SPEC §4/L66+L85, firmware §4-step7/§8/§10/§10.1/§15 (`RUNLOG_DEPTH=32`); flip "six screens" → seven | 2 | gate; lands before 4.6 |
+| 4.6 | `RunLog` core module — 11 B packed ring (record above), depth 32; `RunController` pushes at SETTLE so `/api/status` `lastRun` becomes the ring **head** (one source of truth); NVS `runlog` blob (write-on-change + debounce, rehydrate read-with-default, DEC-008 additive — no `schema_ver` bump); epoch sanity + `clockWasValid` bit; host-tested w/ fake clock | 5 | src/core; §4 step 7, §8 |
+| 4.7 | `GET /api/history` — `Api` serializes run ring + fault ring (as-is, RAM); host-tested JSON shapes; read-only, no FAULT gate (§10 mutating-only rule). Payload ≈ 3 KB at depth | 3 | §10; one firmware PR with 4.6 |
+| 4.8 | SPA History screen (7th tab) — runs list (wall-clock if `clockWasValid` else relative, zone, MM:SS, gallons, fert, result/fault) + fault entries; lazy-fetch on open + refresh; mock-API rows; DISCONNECTED degrade; bottom tab-bar gains a 7th button | 3 | §10.1; own PR (DEC-016 Unit-style) |
 
 **Run-history subtotal: 13 pts.** Batches: firmware (4.6+4.7) one PR, SPA (4.8) one PR, after the 4.5 gate.
+
+> **Separate bug (not in this unit):** §8 lists the fault log as "ring buffer (~16 entries) …
+> survives reboot," but `FaultManager` is **RAM-only, `LOG_SIZE = 8`, millis-domain** — not
+> persisted, half the depth. File as `bug`: either persist the fault ring (mirroring `runlog`)
+> or correct §8's wording. Deliberately kept out of the 13-pt run-history estimate.
 
 ---
 
