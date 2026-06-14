@@ -130,6 +130,26 @@ to safe state, driven by a button, with a live countdown.
 
 **Phase 4 total: 27 pts** — DEC-016 batches: Unit C = 4.1+4.2+4.x (one PR), Unit D = 4.3+4.4 (one PR).
 
+### Run history — "what ran when, and faults" (added 2026-06-14, post-plan)
+
+The fault history already ships (`FaultManager` ring → `/api/status` → Faults screen).
+The **run** history does not: every run is logged at SETTLE (zone/start/duration/gallons/
+fert/result, §4 step 7) but only the single **last-run** summary is kept and exposed.
+This unit makes the run log a persisted, browsable history beside the fault ring.
+**Decisions taken:** dedicated **7th SPA screen**; **NVS-persisted** run ring, as deep as
+the NVS budget practically allows; lazy **`GET /api/history`** (not on the 1–2 s status poll).
+Not excluded by SPEC "Not V1" — that bars *remote* telemetry (server/MQTT/DB/Grafana), not a
+local log. Spec-amending (adds a screen past the documented "six"), so it gates on @architect.
+
+| # | Task | Effort | Notes |
+|---|------|--------|-------|
+| 4.5 | @architect ratify + DEC-NNN + doc updates (SPEC §10.1, firmware §8/§10/§10.1) — ring depth vs NVS budget/wear, `/api/history` shape, 7th-screen amendment | 2 | gate; lands before 4.6 |
+| 4.6 | `RunLog` core module — packed ring `{startEpoch,zone,durationSec,gallons,fert,result,faultCode}`; `RunController` pushes at SETTLE (last-run = head); NVS `runlog` blob (write-on-change, rehydrate at boot, DEC-008 additive); host-tested w/ fake clock | 5 | src/core; §4 step 7, §8 |
+| 4.7 | `GET /api/history` — `Api` serializes run ring + fault ring + clock-valid flag; host-tested JSON shapes; read-only (no FAULT gate) | 3 | §10; one firmware PR with 4.6 |
+| 4.8 | SPA History screen (7th tab) — runs list (wall-clock if synced else relative, zone, MM:SS, gallons, fert, result/fault) + fault entries; lazy-fetch on open + refresh; mock-API rows; DISCONNECTED degrade; tab-bar update | 3 | §10.1; own PR (DEC-016 Unit-style) |
+
+**Run-history subtotal: 13 pts.** Batches: firmware (4.6+4.7) one PR, SPA (4.8) one PR, after the 4.5 gate.
+
 ---
 
 ## Phase 5: Watchdog + integration
