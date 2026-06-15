@@ -108,7 +108,7 @@ Sequence (each step non-blocking, advancing on its own timer/confirmation):
 4. **RUNNING** — run for `durationSec`. Continuously: update countdown display, run flow checks (§7), watch software max-runtime. Any fault → jump to STOP_PUMP path then FAULT.
 5. **STOP_PUMP** — open pump relay (this is what stops water — the source).
 6. **CLOSE_ZONE** — de-energize the zone FET; the cap auto-return drives it closed over `ZONE_TRAVEL_MS`. (Pump is already off, so the valve closes against no pressure.)
-7. **SETTLE** — brief dwell, log the run (zone, start, duration, gallons, fert y/n, result). Diverter legs left as-is. → IDLE (or next queued run).
+7. **SETTLE** — brief dwell, push the run entry (zone, start epoch, duration, gallons, fert y/n, result) onto the `RunLog` ring (DEC-018) — the ring **head** is the "last run" the status API exposes. Diverter legs left as-is. → IDLE (or next queued run).
 
 Only one run active at a time. Queued requests run sequentially with a short inter-run gap. A stop/cancel request unwinds straight to STOP_PUMP → CLOSE_ZONE from any active step.
 
@@ -176,7 +176,13 @@ Survives reboot and power loss:
 - Fertigation policy + per-entry overrides.
 - Flow-fault override flag (DEC-015).
 - Wi-Fi credentials.
-- Fault log: ring buffer (~16 entries) of `{ts, code, context}`.
+- Run log: `RunLog` ring (`RUNLOG_DEPTH` = 32 entries) as one packed `runlog` blob — 11 B/entry
+  `{startEpoch, zone, durationSec, centigallons, flags(fert|result|clockWasValid), faultCode}`,
+  write-on-change + debounce, rehydrate read-with-default (DEC-018; additive under DEC-008).
+- Fault log: ring buffer of `{ts, code}`. **⚠ Doc drift — not actually persisted:** the shipped
+  `FaultManager` ring is RAM-only, `LOG_SIZE = 8`, millis-domain, lost on reboot. Tracked as a `bug`
+  ([#72](https://github.com/mobiustripper42/tinkle/issues/72)) — persist it (mirroring `runlog`) or
+  correct this line; DEC-018 leaves it as-is and `/api/history` serializes the RAM ring.
 
 (No cached diverter position — the two-leg NO/NC diverter has no hold-state to remember, DEC-013.)
 
@@ -234,8 +240,9 @@ Endpoints:
 - `POST /api/stop` → cancel all, unwind to safe state.
 - `POST /api/calibrate/start` `{zoneIndex}` · `POST /api/calibrate/finish` `{measuredGallons}`.
 - `POST /api/fault/clear` → clear latched faults (only succeeds if condition resolved).
+- `GET /api/history` → the `RunLog` run ring (DEC-018) + the fault-log ring + a clock-valid flag. **Read-only** — no FAULT gate, no range validation. Lazy-fetched by the History screen, **not** on the `/api/status` poll. Payload ≈ 3 KB at full depth.
 
-All mutating endpoints validate ranges and reject if currently in FAULT (except `/stop` and `/fault/clear`).
+All mutating endpoints validate ranges and reject if currently in FAULT (except `/stop` and `/fault/clear`). `GET /api/history` is read-only and ungated.
 
 - **Implemented (#55/#56/#57, Unit C / DEC-016).** Policy and plumbing are split on the platform line:
   - **`Api` (core, `api.{h,cpp}`)** owns everything decidable — range validation, FAULT gating, JSON shapes, the DEC-015 clear-on-enable — and is host-tested against the real wire shapes (ArduinoJson compiles on native; the tests parse/assert actual JSON, no parallel model). Codes: 200 OK · 400 malformed · 409 wrong state · 422 out of range. Validation seeds (tune like §15): run/schedule durations 10–7200 s, `swMaxRuntimeSec` 60–1800 s (never above the ATtiny ceiling), K 50–5000.
@@ -263,12 +270,13 @@ The firmware **serves a single-page app** that is the phone UI; it is a first-cl
 4. **Settings** — default durations, software max-runtime, fert policy, Wi-Fi → `GET`/`POST /api/settings`.
 5. **Calibration** — guided flow-sensor calibration: start (`/api/calibrate/start`), prompt to measure collected volume, finish (`/api/calibrate/finish`); shows resulting pulses/gallon.
 6. **Faults** — current latched faults + recent fault-log entries; clear button → `POST /api/fault/clear`.
+7. **History** (DEC-018) — browsable run log: each past run with *when* (wall-clock if the clock was synced when it ran, else relative-to-uptime — the entry carries a `clockWasValid` bit), zone, MM:SS, gallons, fert y/n, result (ok / faulted + code); plus recent fault entries. Lazy-fetches `GET /api/history` on open + a manual refresh; **not** polled. Read-only — no actuation, no display role.
 
 **Boundaries the SPA must respect:**
 - The SPA can never bypass the API or touch actuation directly — same validation and FAULT gating applies.
 - The SPA has **no role in fail-dry**. Watchdog, safety relay, and the pump-power gate are hardware; losing the phone, the page, or Wi-Fi must never affect safety or stop a scheduled run (the schedule lives in flash and runs headless). The flow-fault override (DEC-015) is the one SPA-reachable safety-adjacent setting, and it is firmware-gated and cannot touch any of that hardware.
 - Treat the SPA as one of potentially several API clients (curl, future tooling); it gets no special privileges.
-- **Implemented (#58/#59, Unit D / DEC-016).** One self-contained `web/index.html` (inline CSS+JS, no external fetches): six screens behind a bottom tab bar, max-contrast light theme for sunlight, STOP ALL fixed above the tabs on every screen (never confirms). Status polls at 2 s idle / 1 s active with a local countdown tick between polls; fetch failure flips the persistent DISCONNECTED banner over last-known state. The DEC-015 "FLOW CHECK DISABLED" and latched-fault banners ride the same poll. Calibration screen carries the operator guidance (any zone into a measured container; Zone 3 preferred when plumbed; common-line meter ⇒ one K for all zones) and walks idle → running (live pulses) → awaiting → K. Faults screen renders the §14 log ring + DEC-014 `valveRestFlags` as per-zone service warnings. **Dev/mock:** the mock API is in-page — `file://` or `?mock=1` runs every screen against an in-memory stub. **Pipeline (#59):** `tools/build_spa.py` runs as a PlatformIO pre-action on every esp32/esp32_sim build — deterministic gzip (mtime=0) into the generated, gitignored `src/esp32/spa_gz.h`; the <50 KB budget is a hard build gate (currently ~26 KB raw → ~8.6 KB gzipped); served from PROGMEM with `Content-Encoding: gzip` + ETag/`no-cache` (reflash ⇒ fresh UI, unchanged ⇒ one 304).
+- **Implemented (#58/#59, Unit D / DEC-016).** One self-contained `web/index.html` (inline CSS+JS, no external fetches): six screens behind a bottom tab bar (History is the 7th, added by DEC-018 / [#71](https://github.com/mobiustripper42/tinkle/issues/71)), max-contrast light theme for sunlight, STOP ALL fixed above the tabs on every screen (never confirms). Status polls at 2 s idle / 1 s active with a local countdown tick between polls; fetch failure flips the persistent DISCONNECTED banner over last-known state. The DEC-015 "FLOW CHECK DISABLED" and latched-fault banners ride the same poll. Calibration screen carries the operator guidance (any zone into a measured container; Zone 3 preferred when plumbed; common-line meter ⇒ one K for all zones) and walks idle → running (live pulses) → awaiting → K. Faults screen renders the §14 log ring + DEC-014 `valveRestFlags` as per-zone service warnings. **Dev/mock:** the mock API is in-page — `file://` or `?mock=1` runs every screen against an in-memory stub. **Pipeline (#59):** `tools/build_spa.py` runs as a PlatformIO pre-action on every esp32/esp32_sim build — deterministic gzip (mtime=0) into the generated, gitignored `src/esp32/spa_gz.h`; the <50 KB budget is a hard build gate (currently ~26 KB raw → ~8.6 KB gzipped); served from PROGMEM with `Content-Encoding: gzip` + ETag/`no-cache` (reflash ⇒ fresh UI, unchanged ⇒ one 304).
 
 ---
 
@@ -373,6 +381,7 @@ struct ScheduleEntry {
 | cal sanity bounds | K ∈ [50, 5000] p/gal, ≥ 0.25 gal | reject absurd calibrations → `FAULT_CAL_RANGE` (#36; seeds, tune) |
 | `REST_WINDOW_MS` | 10000 (seed; `TINKLE_SIM`: 3000) | DEC-014 post-close rest window (#52) |
 | `REST_MAX_PULSES` | 5 (seed, tune) | pulses at rest above which the closed zone is flagged (#52) |
+| `RUNLOG_DEPTH` | 32 | run-history ring entries (DEC-018); 11 B/entry packed `runlog` NVS blob (~356 B); bumpable to 64 (wear, not space, is the ceiling) |
 | button debounce | 30 ms | on top of RC |
 
 Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
