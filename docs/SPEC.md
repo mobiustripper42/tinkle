@@ -63,8 +63,8 @@ override), NTP with free-run fallback.
 Hall-pulse ISR, rate window, no-flow / unexpected-flow faults, web calibration mode.
 
 ### Phase 4 — Web API + SPA
-ESPAsyncWebServer endpoints (§10), then the 6-screen vanilla SPA + gzip-embed
-pipeline (< 50 KB).
+ESPAsyncWebServer endpoints (§10), then the vanilla SPA (6 screens, + a 7th
+**History** screen — DEC-018) + gzip-embed pipeline (< 50 KB).
 
 ### Phase 5 — Watchdog + integration
 ATtiny85 sketch (DEC-003 encoding), safety relay, ESP32 `Watchdog` module, run the
@@ -83,7 +83,8 @@ parts — calibrate K, confirm `ZONE_TRAVEL_MS` / `DIVERTER_TRAVEL_MS`. Parts-ga
   lock out the pump before it runs the catchment dry is V2. Seam recorded in
   DEC-017 (a future `TankMonitor` gate); source is Soundings `docs/tank-level-sensor.md`.
 - **Server, MQTT broker, database, Grafana** — telemetry is local-only in V1; MQTT
-  publishing to the Soundings stack comes later.
+  publishing to the Soundings stack comes later. (A *local* on-device run/fault history
+  served over the same local API — DEC-018 — is in scope; this line bars *remote* telemetry.)
 - **On-box menu / UI beyond the countdown** — the TM1637 is read-only MM:SS status.
   Config stays on the web page. Hard line: do not let the display grow an input role.
 - **Second Green irrigation tank** — separate decision, parked.

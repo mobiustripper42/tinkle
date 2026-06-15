@@ -391,3 +391,54 @@ plumbing. Threshold persists through the DEC-008 store like `swMaxRuntimeSec`.
    (likely: GPIO float-switch + a DEC-015-style override) is an architecture decision, deferred.
 **Crosses into Not V1:** "Closed-loop / sensor-driven irrigation" and "MQTT to the Soundings stack"
 are already parked there (SPEC.md); this DEC names the specific lockout case and its seam.
+
+---
+
+## DEC-018: Run history — persisted `RunLog` ring, `GET /api/history`, 7th SPA screen
+**Status:** **decided; built in Phase 4** ([#68](https://github.com/mobiustripper42/tinkle/issues/68)
+gate/docs · [#69](https://github.com/mobiustripper42/tinkle/issues/69) core ·
+[#70](https://github.com/mobiustripper42/tinkle/issues/70) API ·
+[#71](https://github.com/mobiustripper42/tinkle/issues/71) SPA). @architect-ratified.
+**Context:** "What ran when, and faults" wants a browsable history. The fault side already ships
+(`FaultManager` ring → `/api/status` → Faults screen). The **run** side does not: every run is
+logged at SETTLE (§4 step 7 — zone, start, duration, gallons, fert, result) but only the single
+**last-run** summary is kept and exposed. The data is already produced; this persists and surfaces
+the rest.
+**Decision:**
+- **`RunLog` (`src/core`, host-tested):** a fixed ring of **32** entries (`RUNLOG_DEPTH`, §15).
+  `RunController` pushes one entry at SETTLE; the existing single "last run" becomes the ring **head**
+  (one source of truth — `/api/status` `lastRun` reads `runlog[head]`).
+- **Packed record, 11 bytes:** `startEpoch u32 · zoneIndex u8 · durationSec u16 · centigallons u16 ·
+  flags u8 (fert | result | clockWasValid) · faultCode u8`. `centigallons` (uint16, 0–655.35 gal),
+  **not** float — NVS-blob-portable and padding-free.
+- **Persistence:** one packed `runlog` NVS blob (write-on-change + debounce, rehydrate at boot
+  read-with-default → absent = empty ring), the same shape as the `sched` blob — **not** per-entry
+  keys (15-char key cap, DEC-008) and **not** append-style (needless at a few runs/day; the real
+  constraint is write-wear, which one debounced ~356 B blob/run barely touches). Additive under
+  DEC-008: new key, no `schema_ver` bump. Depth 32 ≈ 356 B; `RUNLOG_DEPTH` is one constant, bumpable
+  to 64 if the field asks (space is not the ceiling, wear is).
+- **Timestamps:** store local `startEpoch` + a **per-entry** `clockWasValid` bit (NTP had synced when
+  the run started — validity varies *across* the ring, so a single global flag won't do). The SPA
+  renders wall-clock only when the bit is set, else relative-to-uptime (mirrors the fault log's
+  `ago(uptimeMs − atMs)`). An implausible epoch (pre-2025) is stored with the bit **clear**, never as
+  a 1970 wall-clock — this bounds the NTP-syncs-mid-history clock-jump: early free-run entries render
+  relative, not silently mis-dated.
+- **`GET /api/history`:** a new **read-only** endpoint (no FAULT gate — §10's gating rule is
+  mutating-endpoints-only; no range validation), lazy-fetched when the History screen opens — **not**
+  folded into the 1–2 s `/api/status` poll. `Api` (core) serializes the run ring + the fault ring + a
+  clock-valid flag; host-tested against real JSON. Payload at depth ≈ 3 KB, well under the body cap.
+- **7th SPA screen — "History":** a dedicated tab (runs list: wall-clock-or-relative, zone, MM:SS,
+  gallons, fert, result/fault; plus fault entries), lazy fetch + manual refresh, DISCONNECTED degrade,
+  mock-API rows. Amends the "six screens" wording in firmware §10.1 / SPEC Phase 4.
+**Why it fits:** local telemetry, inside "local autonomy" — **not** the remote server/MQTT/DB/Grafana
+class barred by SPEC "Not V1" (that line bars *remote* telemetry, not an on-device log). The read-only
+endpoint off the hot path, the additive NVS key, and a read-only screen are the lowest-novelty
+extension of four existing patterns (fault ring, `sched` blob, status poll, tab bar). No fail-dry
+surface touched — the SPA has no safety role (§10.1) and a read path can't actuate.
+**Scope guard — fault ring stays RAM-only:** §8 *described* the fault log as NVS-persisted ~16
+entries, but the shipped `FaultManager` ring is RAM-only, `LOG_SIZE = 8`, millis-domain. This DEC does
+**not** persist or migrate the fault ring — `/api/history` serializes it as-is. Persisting it (or
+fixing the doc) is tracked separately as a `bug` ([#72](https://github.com/mobiustripper42/tinkle/issues/72)),
+deliberately out of this unit's estimate.
+**Consequences:** a new `runlog` NVS key; `RunController` gains a SETTLE-time push; `/api/status`
+`lastRun` becomes a view onto the ring head; the "six screens" line in two docs becomes "seven".
