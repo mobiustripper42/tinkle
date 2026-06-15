@@ -150,17 +150,17 @@ rather than a 1970 wall-clock. SPA renders wall-clock when the bit is set, else 
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 4.5 | @architect ratify (✓ DEC-018) + write DEC-018 + doc updates: SPEC §4/L66+L85, firmware §4-step7/§8/§10/§10.1/§15 (`RUNLOG_DEPTH=32`); flip "six screens" → seven | 2 | gate; lands before 4.6 |
-| 4.6 | `RunLog` core module — 11 B packed ring (record above), depth 32; `RunController` pushes at SETTLE so `/api/status` `lastRun` becomes the ring **head** (one source of truth); NVS `runlog` blob (write-on-change + debounce, rehydrate read-with-default, DEC-008 additive — no `schema_ver` bump); epoch sanity + `clockWasValid` bit; host-tested w/ fake clock | 5 | src/core; §4 step 7, §8 |
-| 4.7 | `GET /api/history` — `Api` serializes run ring + fault ring (as-is, RAM); host-tested JSON shapes; read-only, no FAULT gate (§10 mutating-only rule). Payload ≈ 3 KB at depth | 3 | §10; one firmware PR with 4.6 |
-| 4.8 | SPA History screen (7th tab) — runs list (wall-clock if `clockWasValid` else relative, zone, MM:SS, gallons, fert, result/fault) + fault entries; lazy-fetch on open + refresh; mock-API rows; DISCONNECTED degrade; bottom tab-bar gains a 7th button | 3 | §10.1; own PR (DEC-016 Unit-style) |
+| 4.5 | @architect ratify (✓ DEC-018) + write DEC-018 + doc updates: SPEC §4/L66+L85, firmware §4-step7/§8/§10/§10.1/§15 (`RUNLOG_DEPTH=32`); flip "six screens" → seven | 2 | [#68](https://github.com/mobiustripper42/tinkle/issues/68) · gate; lands before 4.6 |
+| 4.6 | `RunLog` core module — 11 B packed ring (record above), depth 32; `RunController` pushes at SETTLE so `/api/status` `lastRun` becomes the ring **head** (one source of truth); NVS `runlog` blob (write-on-change + debounce, rehydrate read-with-default, DEC-008 additive — no `schema_ver` bump); epoch sanity + `clockWasValid` bit; host-tested w/ fake clock | 5 | [#69](https://github.com/mobiustripper42/tinkle/issues/69) · src/core; §4 step 7, §8 |
+| 4.7 | `GET /api/history` — `Api` serializes run ring + fault ring (as-is, RAM); host-tested JSON shapes; read-only, no FAULT gate (§10 mutating-only rule). Payload ≈ 3 KB at depth | 3 | [#70](https://github.com/mobiustripper42/tinkle/issues/70) · §10; one firmware PR with 4.6 |
+| 4.8 | SPA History screen (7th tab) — runs list (wall-clock if `clockWasValid` else relative, zone, MM:SS, gallons, fert, result/fault) + fault entries; lazy-fetch on open + refresh; mock-API rows; DISCONNECTED degrade; bottom tab-bar gains a 7th button | 3 | [#71](https://github.com/mobiustripper42/tinkle/issues/71) · §10.1; own PR (DEC-016 Unit-style) |
 
 **Run-history subtotal: 13 pts.** Batches: firmware (4.6+4.7) one PR, SPA (4.8) one PR, after the 4.5 gate.
 
-> **Separate bug (not in this unit):** §8 lists the fault log as "ring buffer (~16 entries) …
-> survives reboot," but `FaultManager` is **RAM-only, `LOG_SIZE = 8`, millis-domain** — not
-> persisted, half the depth. File as `bug`: either persist the fault ring (mirroring `runlog`)
-> or correct §8's wording. Deliberately kept out of the 13-pt run-history estimate.
+> **Separate bug (not in this unit):** [#72](https://github.com/mobiustripper42/tinkle/issues/72) —
+> §8 lists the fault log as "ring buffer (~16 entries) … survives reboot," but `FaultManager` is
+> **RAM-only, `LOG_SIZE = 8`, millis-domain** — not persisted, half the depth. Fix: either persist
+> the fault ring (mirroring `runlog`) or correct §8's wording. Kept out of the 13-pt estimate.
 
 ---
 
