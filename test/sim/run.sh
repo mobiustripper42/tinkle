@@ -39,6 +39,11 @@ fi
 if [ ! -f .pio/build/esp32_sim/firmware.bin ]; then
   echo "esp32_sim not built -- run: pio run -e esp32_sim" >&2; exit 2
 fi
+# screenshots/ is gitignored (runtime artifact), so it's absent on a fresh clone.
+# take-screenshot can't create the parent dir -- without this, every screenshot-
+# bearing scenario fails on first run after checkout, and (since the error text
+# lacks 'expected to be') run_one() burns its retries on it. Create it up front.
+mkdir -p "$ROOT/$SIM_DIR/screenshots"
 
 filter=("$@")
 match() { [ ${#filter[@]} -eq 0 ] && return 0; for f in "${filter[@]}"; do [[ "$1" == *"$f"* ]] && return 0; done; return 1; }
@@ -57,6 +62,10 @@ run_one() {
       echo "    Free-tier Wokwi CI monthly minutes are exhausted -- aborting (resets monthly)." >&2
       exit 3                                  # hard stop: no retry helps a spent monthly quota
     fi
+    # COUPLING: this distinguishes a real assertion failure from a transient cloud
+    # failure by wokwi-cli's wording ('GPIO ... expected to be X but was Y'). If a
+    # future wokwi-cli changes that phrasing, a real failure would be mis-read as
+    # transient and retried/masked. Pinned to wokwi-cli 0.26.1 (see README prereqs).
     if echo "$out" | grep -q 'expected to be'; then
       return 1                                # real assertion failure -- do not retry
     fi

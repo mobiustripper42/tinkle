@@ -29,6 +29,11 @@ scraping. Screenshots of the TM1637 are captured alongside for human diagnostics
 
 ## Running
 
+Pinned to **`wokwi-cli` 0.26.1** — `run.sh` tells a real failure from a transient one
+by wokwi-cli's assertion wording (`... expected to be X but was Y`); a future version
+that rephrases it could mask a real failure as a retryable transient. Check the version
+(`wokwi-cli --version`) if assertions start behaving oddly after an upgrade.
+
 ```bash
 pio run -e esp32_sim                              # build the binary wokwi.toml points at
 export WOKWI_CLI_TOKEN=...                         # https://wokwi.com/dashboard/ci (free)
