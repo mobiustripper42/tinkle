@@ -87,25 +87,19 @@ Project coding conventions — typing, component structure, data fetching, auth/
 
 ## Model Selection
 
-Default to the cheapest model that does the job. **Opus 4.8 is the standing model** for real development and architecture; Sonnet handles cheap/scoped work; Fable is a deliberate, on-demand escalation for *bundled* long-horizon work — never the default, because $10/$50 per MTok (2× Opus) drains usage fast.
+Default to the cheapest model that does the job. **Opus 4.8 is the standing model** for real development and architecture; Sonnet handles cheap/scoped work.
+
+> **Fable is disabled for now (DEC-S029).** The frontier `claude-fable-5` tier and its bundle-then-escalate trigger are withdrawn from this guidance until re-enabled. Everything below routes between Opus (default) and Sonnet (cheap). DEC-S027 retains the prior Fable tiering as history for when it comes back.
 
 | Tier | Model | Use for |
 |------|-------|---------|
 | Cheap | `claude-sonnet-4-6` | Trivial/scoped agents and reviews — fast, low-cost. |
 | Default | `claude-opus-4-8` | The standing model for development and architecture. Most work runs here. |
-| Frontier (on demand) | `claude-fable-5` | A *bundled* long-horizon unit — several related tasks combined into one coherent multi-file run. Spawned deliberately and scope-confirmed; the bundling is what amortizes the premium. One-off task → stay on Opus. |
 
-**The Fable trigger — bundle, then escalate.** Fable's lead is largest on long, coherent, multi-file work, which is also where its cost amortizes across the most output — so don't route individual tasks to it.
-- When several queued/related tasks form one coherent unit, **Claude suggests** bundling them into a single Fable run *before* starting, with the proposed scope.
-- The **operator can request the same**: say `bundle for fable` (or describe the bundle). Either party can raise it.
-- A Fable run is opt-in and announced — confirm scope before spawning. Give it the full combined spec up front (Fable holds coherence across millions of tokens) and run it at high effort. That front-loaded spec is what makes the premium pay off.
-
-- **Reach for `effort` before reaching for a tier.** `effort` (`low`/`medium`/`high`/`xhigh`/`max`, via `output_config`) buys quality more cheaply than a model jump on a task the current model can already do. `xhigh` is the floor for coding/agentic work, `high` for intelligence-sensitive work, `max` only when correctness must beat cost.
-- **File memory is a force multiplier — ~3× more effective on Fable than Opus 4.8.** Session files, `design/`, `docs/DECISIONS.md`, and acceptance criteria are the persistent notes the model exploits to improve its own output. Keep them current and reference them explicitly — this matters most on a bundled Fable run.
-- **Vision.** Fable 5 is state-of-the-art at vision and rebuilds UI from screenshots with minimal scaffolding — a legitimate reason to escalate a vision-heavy unit (mockup-vs-build, `design/*.jsx`).
-- **Silent fallback caveat.** Fable routes <5% of sessions (cyber / bio-chem / distillation classifiers, conservatively tuned) to Opus 4.8 automatically and tells you when it does. Defensive RLS/auth work won't trip it in normal use — but if a Fable run unexpectedly feels a tier weaker, check for a fallback notice before chasing a phantom regression.
-- **Agents:** model in agent frontmatter. `@architect` runs Opus 4.8; escalate it to a Fable run for genuinely hard or bundled design work (Claude or operator suggests). Reviewers (`@code-review`, `@pm`, `@doc-consistency`, `@tape-reader`) and `@ui-reviewer` stay Sonnet.
-- **New agents:** default to Sonnet; pin `model: opus` only when the agent's standing job needs it. Don't pin Fable — reach it via the on-demand bundle trigger.
+- **Reach for `effort` before reaching for a bigger model.** `effort` (`low`/`medium`/`high`/`xhigh`/`max`, via `output_config`) buys quality more cheaply than a model jump on a task the current model can already do. `xhigh` is the floor for coding/agentic work, `high` for intelligence-sensitive work, `max` only when correctness must beat cost.
+- **File memory is a force multiplier.** Session files, `design/`, `docs/DECISIONS.md`, and acceptance criteria are the persistent notes the model exploits to improve its own output. Keep them current and reference them explicitly.
+- **Agents:** model in agent frontmatter. `@architect` runs Opus 4.8. Reviewers (`@code-review`, `@pm`, `@doc-consistency`, `@tape-reader`) and `@ui-reviewer` stay Sonnet.
+- **New agents:** default to Sonnet; pin `model: opus` only when the agent's standing job needs it.
 
 ## PR Workflow
 
@@ -214,7 +208,7 @@ If a task feels bigger than its estimate:
 2. Update PROJECT_PLAN.md (at next phase boundary, or via Issue if mid-phase)
 3. If scope creep, flag and move on
 
-**Splitting is a reviewability call, not a model-capability one.** Points size *estimation*; they don't cap how much gets built in one run. Fable holds coherence across far more than an 8, and splitting a *coherent* task fragments context — two stitched-together 5s can land worse than one well-specified 8. So:
+**Splitting is a reviewability call, not a model-capability one.** Points size *estimation*; they don't cap how much gets built in one run. A capable model holds coherence across far more than an 8, and splitting a *coherent* task fragments context — two stitched-together 5s can land worse than one well-specified 8. So:
 - **Don't split a coherent 8** (one feature, one migration, one subsystem) just to honor a ceiling — run it as one unit with the full spec up front.
 - **Do split** when the diff is too large to review well, the blast radius or reversibility worries you, there's a migration conflict (see PR Workflow), or an "8" is secretly two unrelated things.
 - **Still break genuine 13s** — for review and risk, and because a 13 usually means the task isn't understood well enough yet. Not because the model can't hold it.
@@ -243,7 +237,7 @@ This rule applies double at session end. The session-summary block is the first 
 
 ## Narration
 
-`Response Length` and `Verbosity` above are the standing baseline. This is the switchable knob on top of them — Opus 4.8 / Fable narrate more by default, so name the level and I'll hold it for the session.
+`Response Length` and `Verbosity` above are the standing baseline. This is the switchable knob on top of them — Opus 4.8 narrates more by default, so name the level and I'll hold it for the session.
 
 - **Terse** (default): Silence between tool calls. One sentence only when I find something, change direction, or hit a blocker. No "Now I'll…", "Let me check…", "Looking at…", no recapping what you just watched. Close with one or two sentences on the outcome.
 - **Normal**: Brief progress notes at meaningful steps — not every action.
@@ -252,7 +246,7 @@ This rule applies double at session end. The session-summary block is the first 
 Switch any time: `narration: terse|normal|narrate`.
 
 Two mechanics move narration the same direction, independent of level:
-- **Keep adaptive thinking on.** With thinking disabled, 4.8 / Fable spill reasoning into the visible answer — which reads as *more* narrative. Adaptive keeps reasoning in thinking blocks and the response clean.
+- **Keep adaptive thinking on.** With thinking disabled, 4.8 spills reasoning into the visible answer — which reads as *more* narrative. Adaptive keeps reasoning in thinking blocks and the response clean.
 - **Lower `effort`** (`low` / `medium`) trims preamble and confirmations — a coarser lever than the levels above.
 
 ## Cost and Waste

@@ -100,20 +100,17 @@ Follows the shell, with one note: **no `production` branch by default** — PRs 
 
 ## Model Selection (project override)
 
-Tinkle runs a **three-tier, escalate-by-complexity** rubric that overrides the shell's DEC-S027 Opus-default — default low and step up by task length and complexity (Fable's lead is smallest on short scoped tasks, widest on state-machine reworks / cross-cutting refactors / long autonomous runs):
+Tinkle runs an **escalate-by-complexity** rubric — default low and step up by task length and complexity. **Fable is disabled (seeds DEC-S029)**, so the former three-tier rubric collapses to two; the Frontier tier returns if/when Fable is re-enabled.
 
 | Tier | Model | Use for |
 |------|-------|---------|
 | Workhorse | `claude-sonnet-4-6` | **Default main session** and most agents. Single-file edits, scoped tasks, reviews. |
-| Hard | `claude-opus-4-8` | The "stuck" escalation; **fail-dry / safety-chain logic**; anything where being wrong is expensive but the task is bounded. |
-| Frontier | `claude-fable-5` | Long-horizon, multi-file, high-autonomy work where holding coherence is the bottleneck — and architecture decisions (see `@architect`). 2× Opus both directions; reserve accordingly. |
+| Hard | `claude-opus-4-8` | The "stuck" escalation; **fail-dry / safety-chain logic**; architecture decisions (see `@architect`); long-horizon, multi-file work where holding coherence is the bottleneck. |
 
-- **Reach for `effort` before a tier.** `xhigh` floor for coding/agentic work, `high` for intelligence-sensitive, `max` only when correctness must beat cost. Fable reaches production quality at *medium* effort.
+- **Reach for `effort` before a tier.** `xhigh` floor for coding/agentic work, `high` for intelligence-sensitive, `max` only when correctness must beat cost.
 - **Spec up front, then let it run.** The firmware spec (`docs/tinkle_firmware_spec.md`) + the Issue's acceptance criteria **are** the spec — point the model at them rather than over-decomposing.
-- **File memory is a force multiplier** (~3× on Fable). Session files, `docs/DECISIONS.md`, acceptance criteria — keep current, reference explicitly.
-- **Vision is first-class** — lean on Fable for the wiring doc, bench/breadboard photos, datasheet figures.
-- **Silent fallback caveat.** Fable routes <5% of sessions to Opus 4.8 automatically and says so. Defensive watchdog/fail-safe work won't trip it; if a session feels a tier weaker, check for a fallback notice first.
-- **`@architect` pins `claude-fable-5`** (frontmatter authoritative — matches `.claude/agents/architect.md`). Reviewers stay Sonnet. New agents default Sonnet; add a `model:` line only for architecture/vision-level reasoning.
+- **File memory is a force multiplier.** Session files, `docs/DECISIONS.md`, acceptance criteria — keep current, reference explicitly.
+- **`@architect` runs `claude-opus-4-8`** (frontmatter authoritative — matches `.claude/agents/architect.md`). Reviewers stay Sonnet. New agents default Sonnet; add a `model:` line only for architecture-level reasoning.
 
 ## Approach to Action (project override)
 
