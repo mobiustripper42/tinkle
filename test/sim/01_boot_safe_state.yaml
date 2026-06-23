@@ -1,0 +1,18 @@
+name: 'Boot leaves everything dry (fail-dry safe state)'
+version: 1
+author: 'Tinkle'
+# At boot, RunController::begin() drives the fail-dry safe state and parks at IDLE:
+# pump off, all three zone valves closed (NC, FET low), the diverter resting plain
+# (NO clean leg low = open; NC fert leg low = closed). Phone-only (DEC-019) — there
+# are no buttons to trigger anything, so this asserts the resting actuator levels
+# directly. The FLOW switch boots quiet (common to GND), so no idle-flow fault fires.
+# expect-pin reads SIMULATION time, so the timeline is deterministic regardless of
+# how fast the cloud runs the sim.
+steps:
+  - delay: 2s
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump relay off (the source gate)
+  - expect-pin: { part-id: esp, pin: 13, value: 0 }   # Zone 1 valve FET low -> NC closed
+  - expect-pin: { part-id: esp, pin: 14, value: 0 }   # Zone 2 closed
+  - expect-pin: { part-id: esp, pin: 16, value: 0 }   # Zone 3 closed
+  - expect-pin: { part-id: esp, pin: 17, value: 0 }   # diverter clean leg low -> NO open (plain, rest)
+  - expect-pin: { part-id: esp, pin: 18, value: 0 }   # diverter fert leg low -> NC closed (rest)
