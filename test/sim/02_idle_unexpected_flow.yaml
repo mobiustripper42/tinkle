@@ -13,8 +13,12 @@ author: 'Tinkle'
 # /api/status) is confirmed in the interactive SPA session — see MANUAL.md.
 steps:
   - delay: 2s
-  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on while IDLE
-  - delay: 8s                                                      # past the 5 s detect window
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on while IDLE (sim t~2s)
+  # The detector evaluates on tumbling 5 s window boundaries. The first boundary
+  # (~t=5s) spans t=0-5s and sees only ~3 s of flow (~45 pulses, under the 50
+  # threshold); it LATCHES at the SECOND boundary (~t=10s, a full 5 s of flow). So
+  # this delay must reach that second boundary -- don't tighten it below ~7 s.
+  - delay: 8s
   - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump never energizes
   - expect-pin: { part-id: esp, pin: 13, value: 0 }   # no zone opens
   - expect-pin: { part-id: esp, pin: 14, value: 0 }
