@@ -39,10 +39,11 @@ scope guardrail.
 ## Roles / interfaces
 - **Operator (phone):** sets schedules, default durations, fert policy, max-runtime,
   runs calibration, starts/stops manual runs — via the local web UI.
-- **Operator (at the box):** 3 momentary buttons, one per zone (Z1/Z2 Red Tunnel +
-  Z3 hose outlet) — idle press starts that zone; any press stops a running zone (no
-  switch); ≥3 s long-press of any button clears a latched fault (DEC-006). LED rings
-  show "watering now"; TM1637 shows MM:SS.
+- **Operator (at the box):** no on-box controls (DEC-019, v1.5 phone-only). The AC master
+  switch on the Mean Well input is the physical kill / service disconnect (whole-system → fail-dry,
+  no firmware); a single onboard LED blinks ~1 Hz to show the firmware is alive. All start / stop /
+  fault-clear is via the phone. (V1 originally had 3 zone buttons + a TM1637 panel — DEC-006, cut
+  by DEC-019.)
 - **Headless:** the schedule runs from flash with no phone, no network present.
 
 ## V1 Scope
@@ -53,7 +54,8 @@ the wiring doc, native test harness + Wokwi sim config, docs.
 
 ### Phase 1 — Actuation core
 `ValveDriver` (on/off FET per valve — zones + two diverter legs, no master, pump relay, safe state),
-`RunController` state machine (§4), non-blocking loop, buttons, TM1637 display.
+`RunController` state machine (§4), non-blocking loop. (The original buttons + TM1637 display were
+cut to phone-only by DEC-019; the modules are git-recoverable.)
 
 ### Phase 2 — Persistence + Scheduler + Clock
 NVS write-on-change, schedule model + evaluation, fert policy (one fert run/day +
@@ -85,6 +87,8 @@ parts — calibrate K, confirm `ZONE_TRAVEL_MS` / `DIVERTER_TRAVEL_MS`. Parts-ga
 - **Server, MQTT broker, database, Grafana** — telemetry is local-only in V1; MQTT
   publishing to the Soundings stack comes later. (A *local* on-device run/fault history
   served over the same local API — DEC-018 — is in scope; this line bars *remote* telemetry.)
-- **On-box menu / UI beyond the countdown** — the TM1637 is read-only MM:SS status.
-  Config stays on the web page. Hard line: do not let the display grow an input role.
+- **Any physical operator UI** — V1 is phone-only (DEC-019). No buttons, no display, no on-box
+  menu; the SPA is the sole interface and the AC master switch is the only physical control. Hard
+  line: do not re-add a panel (buttons/display/encoder) as "convenience" — that's a deliberate V1.5
+  cut, not an oversight.
 - **Second Green irrigation tank** — separate decision, parked.

@@ -4,7 +4,7 @@ Everything specific to **this** project. The seeds-managed `CLAUDE.md` shell rea
 
 ## What We're Building
 
-Tinkle is an automated drip-irrigation controller for Bay Branch Farm's high tunnels — scheduled, per-zone watering with reliable manual override, replacing a dumb smart-plug-on-the-pump. V1 runs the **Red Tunnel** (2 zones) plus a general-purpose **hose-outlet zone** (Zone 3) and a Dosatron fertigation diverter — three zone channels, one button each (DEC-006) — on a controller/board/enclosure **sized for three tunnels**.
+Tinkle is an automated drip-irrigation controller for Bay Branch Farm's high tunnels — scheduled, per-zone watering with reliable manual override, replacing a dumb smart-plug-on-the-pump. V1 runs the **Red Tunnel** (2 zones) plus a general-purpose **hose-outlet zone** (Zone 3) and a Dosatron fertigation diverter — three zone channels, **phone-controlled** (DEC-019 made V1 phone-only; the per-zone buttons of DEC-006 were cut) — on a controller/board/enclosure **sized for three tunnels**.
 
 It is an embedded project: **ESP32 firmware** + an **ATtiny85 hardware watchdog** + a **vanilla-JS phone UI** served from flash. Guiding philosophy — **fail dry** (prevent runaway-on, never fear the missed cycle), **local autonomy** (no network/cloud dependency), **build-for-three/populate-one**, **scheduled-now/closed-loop-later**.
 
@@ -18,12 +18,12 @@ It is an embedded project: **ESP32 firmware** + an **ATtiny85 hardware watchdog*
 - **Watchdog:** ATtiny85, separate binary (atmelavr), dependency-free.
 - **UI:** vanilla HTML/CSS/JS SPA, gzipped into PROGMEM, served by ESPAsyncWebServer at `http://tinkle.local`.
 - **Persistence:** NVS / Preferences.
-- **Libs (starting set):** ESPAsyncWebServer + AsyncTCP, ArduinoJson, Preferences, a TM1637 driver, ESPmDNS, `configTime`/SNTP.
+- **Libs (starting set):** ESPAsyncWebServer + AsyncTCP, ArduinoJson, Preferences, ESPmDNS, `configTime`/SNTP. (The TM1637 driver was dropped — DEC-019, phone-only.)
 - **Build/test tiers (DEC-004):** native unit tests (host) → Wokwi sim (laptop) → breadboard bench (LED/pulse stand-ins) → wet hardware (final gate).
 
 ## Architecture
 
-Single-core cooperative loop, **fully non-blocking** — no `delay()` in the run path, target tick ≤ 10 ms. Long actions (valve travel, run durations) time against `millis()`. Eleven modules (firmware spec §2); **`RunController` is the only module allowed to command `ValveDriver` actuators** — every actuation flows through one auditable sequence (§4).
+Single-core cooperative loop, **fully non-blocking** — no `delay()` in the run path, target tick ≤ 10 ms. Long actions (valve travel, run durations) time against `millis()`. Nine modules (firmware spec §2 — the `Buttons` + `Display` modules were cut by DEC-019); **`RunController` is the only module allowed to command `ValveDriver` actuators** — every actuation flows through one auditable sequence (§4).
 
 **Two-key fail-dry chain (source control, no master — DEC-012):**
 - **ESP32** *commands* each actuator (energizes the zone + diverter-leg FETs, enables the pump). There is no master valve.
@@ -71,7 +71,7 @@ The shell's `## Micro Workflow` is webapp-shaped (Playwright + pgTAP + 375px scr
 ## Testing
 
 - **Native (host):** the load-bearing tier. Run state machine, scheduler, fert policy, flow math, calibration — fake clock + fake GPIO + injected faults. `pio test -e native`.
-- **Sim (Wokwi):** full-firmware integration — virtual GPIO, TM1637, buttons, an injectable flow-pulse source.
+- **Sim (Wokwi):** full-firmware integration — virtual GPIO, the SPA over a forwarded port, an injectable flow-pulse source (phone-only since DEC-019 — no TM1637/buttons in the diagram).
 - **Bench:** breadboard, LEDs standing in for valves/pump, a square-wave source faking the flow sensor. Runs firmware spec **§17**.
 - **Wet confirm:** real parts, real water — the final gate (Phase 6).
 

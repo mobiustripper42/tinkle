@@ -105,10 +105,10 @@
   <path class="pw" d="M285,72 L285,140 L240,140 L240,275 L248,275" marker-end="url(#arP)"/>
   <text class="tm" x="210" y="135" fill="#b8761f">3.3V</text>
 
-  <!-- LEFT inputs: buttons, flow -->
+  <!-- LEFT inputs: phone (SPA), flow -->
   <rect class="blk" x="20" y="200" width="150" height="48" rx="5"/>
-  <text class="tb" x="95" y="220" text-anchor="middle">3× Buttons</text>
-  <text class="tm" x="95" y="237" text-anchor="middle">momentary + LED ring</text>
+  <text class="tb" x="95" y="220" text-anchor="middle">Phone (SPA)</text>
+  <text class="tm" x="95" y="237" text-anchor="middle">Wi-Fi · start/stop (DEC-019)</text>
   <path class="sig" d="M170,224 L248,224" marker-end="url(#ar)"/>
 
   <rect class="blk" x="20" y="300" width="150" height="48" rx="5"/>
@@ -116,10 +116,10 @@
   <text class="tm" x="95" y="337" text-anchor="middle">hall pulse → level-shift</text>
   <path class="sig" d="M170,324 L248,324" marker-end="url(#ar)"/>
 
-  <!-- TM1637 below esp-left -->
+  <!-- Alive LED below esp-left (DEC-019: phone-only, panel cut) -->
   <rect class="blk" x="20" y="400" width="150" height="48" rx="5"/>
-  <text class="tb" x="95" y="420" text-anchor="middle">TM1637 display</text>
-  <text class="tm" x="95" y="437" text-anchor="middle">CLK / DIO · MM:SS</text>
+  <text class="tb" x="95" y="420" text-anchor="middle">Alive LED</text>
+  <text class="tm" x="95" y="437" text-anchor="middle">GPIO2 · ~1 Hz blink</text>
   <path class="sig" d="M248,330 L210,330 L210,424 L170,424" marker-end="url(#ar)"/>
 
   <!-- RIGHT: drivers -->
@@ -195,7 +195,7 @@
 
 <h2><span class="n">B</span>ESP32 GPIO assignment</h2>
 <table>
-  <caption>Avoids flash pins (6–11) and TX/RX (1/3). v1.4: one low-side FET per valve (1 GPIO each), no H-bridges — so no strapping pins are needed and DEC-007 is retired. ~16 of ~24 usable GPIO used.</caption>
+  <caption>Avoids flash pins (6–11) and TX/RX (1/3). v1.4: one low-side FET per valve (1 GPIO each), no H-bridges — so no strapping pins are needed and DEC-007 is retired. v1.5 (DEC-019): phone-only — the TM1637, 3 buttons, and 3 LED rings are cut, freeing 8 GPIO; only a single alive LED (GPIO2) remains. ~10 of ~24 usable GPIO used.</caption>
   <thead><tr><th>GPIO</th><th>Dir</th><th>Connects to</th><th>Notes</th></tr></thead>
   <tbody>
     <tr class="grp"><td colspan="4">Valve FETs (low-side, one IRLZ44N per valve · energize = actuate)</td></tr>
@@ -205,23 +205,18 @@
     <tr><td class="pin">17</td><td class="io">OUT</td><td>Diverter clean leg — FET gate</td><td>NO: low (rest) = open = plain water</td></tr>
     <tr><td class="pin">18</td><td class="io">OUT</td><td>Diverter fert leg — FET gate</td><td>NC: high = open (fertigate via Dosatron)</td></tr>
     <tr class="grp"><td colspan="4">Pump</td></tr>
-    <tr><td class="pin">22</td><td class="io">OUT</td><td>Pump relay — trigger</td><td>relay on the <b>armed 24V</b> (source gate); flyback on coil. (GPIO 19/21/12/15 free for more zones.)</td></tr>
+    <tr><td class="pin">22</td><td class="io">OUT</td><td>Pump relay — trigger</td><td>relay on the <b>armed 24V</b> (source gate); flyback on coil. (Free for more zones: 19/21/12/15 + DEC-019's freed 23/25/26/32/33/34/35/39.)</td></tr>
     <tr class="grp"><td colspan="4">Sensing</td></tr>
     <tr><td class="pin">27</td><td class="io">IN ⚡</td><td>Flow sensor pulse</td><td>interrupt; <span class="warn">level-shift 5V→3.3V</span>; INPUT_PULLUP</td></tr>
-    <tr class="grp"><td colspan="4">Display (TM1637)</td></tr>
-    <tr><td class="pin">25</td><td class="io">OUT</td><td>TM1637 CLK</td><td></td></tr>
-    <tr><td class="pin">26</td><td class="io">OUT</td><td>TM1637 DIO</td><td>power module from 3.3V or 5V</td></tr>
-    <tr class="grp"><td colspan="4">Buttons — momentary, to GND</td></tr>
-    <tr><td class="pin">34</td><td class="io">IN</td><td>Button 1 → Zone 1 run / stop / long-press fault-clear</td><td><span class="warn">input-only: external 10k pull-up + 100nF</span></td></tr>
-    <tr><td class="pin">35</td><td class="io">IN</td><td>Button 2 → Zone 2 run / stop / long-press fault-clear</td><td>external pull-up + debounce cap</td></tr>
-    <tr><td class="pin">39</td><td class="io">IN</td><td>Button 3 → Zone 3 run / stop / long-press fault-clear</td><td>one button per zone, no dedicated stop (DEC-006)</td></tr>
-    <tr class="grp"><td colspan="4">Button LED rings — 24V, low-side FET per ring</td></tr>
-    <tr><td class="pin">32</td><td class="io">OUT</td><td>LED ring 1 → low-side FET</td><td>24V ring+, FET sinks to GND (no 12V buck, no ULN2803)</td></tr>
-    <tr><td class="pin">33</td><td class="io">OUT</td><td>LED ring 2 → low-side FET</td><td></td></tr>
-    <tr><td class="pin">23</td><td class="io">OUT</td><td>LED ring 3 → low-side FET</td><td></td></tr>
+    <tr class="grp"><td colspan="4">Status — alive LED (DEC-019: phone-only, no on-box panel)</td></tr>
+    <tr><td class="pin">2</td><td class="io">OUT</td><td>Alive / board-health LED</td><td>DevKitC onboard LED; ~1 Hz blink = firmware ticking. Read-only, gates nothing. <b>Not</b> the ATtiny heartbeat (GPIO4)</td></tr>
+    <tr class="grp"><td colspan="4">Freed by DEC-019 (phone-only) — bank for future zones</td></tr>
+    <tr><td class="pin">25 26</td><td class="io">—</td><td>was TM1637 CLK / DIO</td><td>free</td></tr>
+    <tr><td class="pin">23 32 33</td><td class="io">—</td><td>was button LED rings 1–3</td><td>free (output-capable)</td></tr>
+    <tr><td class="pin">34 35 39</td><td class="io">—</td><td>was buttons 1–3</td><td>free (input-only: 10k pull-up + 100nF if reused as inputs)</td></tr>
     <tr class="grp"><td colspan="4">Watchdog handshake (ATtiny85)</td></tr>
-    <tr><td class="pin">4</td><td class="io">OUT</td><td>Heartbeat → ATtiny IN</td><td>square wave while firmware healthy</td></tr>
-    <tr><td class="pin">36</td><td class="io">IN</td><td>ATtiny "tripped" → ESP32</td><td>VP, input-only; for logging/fault display</td></tr>
+    <tr><td class="pin">4</td><td class="io">OUT</td><td>Heartbeat → ATtiny IN</td><td>square wave while firmware healthy. The safety handshake — not the GPIO2 alive LED</td></tr>
+    <tr><td class="pin">36</td><td class="io">IN</td><td>ATtiny "tripped" → ESP32</td><td>VP, input-only; for logging / SPA status</td></tr>
   </tbody>
 </table>
 
@@ -239,7 +234,7 @@
 <div class="cards">
   <div class="ncard"><h3>Clamp coils + valve FETs</h3><p>1N4007 (or Schottky) flyback across the pump-relay coil and the safety-relay coil. Each <b>valve FET</b> gets a TVS (SMAJ30A) drain-to-source instead — the valves have an internal bridge rectifier, so a freewheel diode across the valve won't clamp the turn-off transient.</p></div>
   <div class="ncard"><h3>Flow sensor level shift</h3><p>Power the sensor at 5V, but its pulse output swings to 5V — drop it to 3.3V (divider or the level-shifter module) before GPIO27, or you cook the input over time.</p></div>
-  <div class="ncard"><h3>Input-only button pins</h3><p>GPIO 34/35/39/36 have <b>no internal pull-ups</b>. Add 10k to 3.3V + a 100nF debounce cap on each button, even though firmware also debounces.</p></div>
+  <div class="ncard"><h3>Input-only pins</h3><p>GPIO 34/35/36/39 have <b>no internal pull-ups</b>. Only <b>36</b> (ATtiny trip line) is used now — it needs an external 10k to 3.3V. 34/35/39 were the zone buttons, freed by DEC-019 (phone-only); add a pull-up only if you ever reuse one as an input.</p></div>
   <div class="ncard"><h3>Valves: on/off FET, no H-bridge</h3><p>Every valve is a 2-wire on/off motorized ball valve (NC zones + NC fert leg + NO clean leg). Energize the FET to actuate; the valve travels ~6–10 s, self-cuts at its limit, then holds with negligible draw. De-energize and a capacitor auto-returns it to rest. One GPIO per valve — no H-bridge, no IN1/IN2, no never-both-high.</p></div>
   <div class="ncard"><h3>Common ground</h3><p>Tie all buck grounds + 24V return + ESP32 GND together at one star point. Floating logic ground against a switching 24V rail is the classic intermittent-glitch source.</p></div>
   <div class="ncard"><h3>Valve FET gates</h3><p>Each valve FET (IRLZ44N, logic-level, fine at the valve's ~0.1A with a 3.3V gate) gets a 100&#8486; series gate resistor + 100k gate-to-GND pulldown so it sits <b>off</b> — valve at rest (NC closed / NO open) — during ESP32 boot.</p></div>

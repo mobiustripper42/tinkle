@@ -87,9 +87,11 @@ hardware; build `esp32_sim` for the simulator. `wokwi.toml` points at
 ## Running the simulation (Wokwi)
 
 Wokwi boots the **real ESP32 firmware** in a virtual breadboard (DEC-004 tier 2):
-the TM1637 panel, the three zone buttons, and status LEDs for the pump, the zone
-valve FETs, and the diverter legs — enough to watch a full run sequence
-(zone-open → pump → live countdown → unwind) without hardware.
+the SPA driven over a forwarded port (phone-only since DEC-019), the alive LED, and
+status LEDs for the pump, the zone valve FETs, and the diverter legs — enough to
+watch a full run sequence (zone-open → pump → live countdown → unwind) without
+hardware. (The TM1637 + button parts are gone with the panel; the SPA-driven e2e is
+rebuilt under issue #62.)
 
 **Always `pio run -e esp32_sim` first** (the sim runs the built binary, it does not
 compile — and `esp32_sim` is the one with the watchable short timings).

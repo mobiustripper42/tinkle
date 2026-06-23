@@ -61,8 +61,8 @@ The safety-critical heart. Bench-testable on LEDs/scope; no water.
 | 1.2 | `ValveDriver` — diverter travel, master FET, pump relay, safe state | 3 | [x] [#10](https://github.com/mobiustripper42/tinkle/issues/10) · §5 |
 | 1.3 | `RunController` state machine (IDLE→…→SETTLE, fault unwind) | 8 | [x] [#11](https://github.com/mobiustripper42/tinkle/issues/11) · §4; src/core, fake clock/GPIO |
 | 1.4 | Non-blocking cooperative loop scaffold (tick ≤10ms, per-actuator timers) | 3 | [x] [#12](https://github.com/mobiustripper42/tinkle/issues/12) · §2 |
-| 1.5 | Buttons — debounce, edge events, single-active invariant | 3 | [x] [#13](https://github.com/mobiustripper42/tinkle/issues/13) · §11 |
-| 1.6 | TM1637 display — idle clock / MM:SS countdown / fault code | 3 | [x] [#14](https://github.com/mobiustripper42/tinkle/issues/14) · §12 |
+| 1.5 | Buttons — debounce, edge events, single-active invariant | 3 | [x] [#13](https://github.com/mobiustripper42/tinkle/issues/13) · §11 · *built, then cut by DEC-019 (5.7) — phone-only; module git-recoverable* |
+| 1.6 | TM1637 display — idle clock / MM:SS countdown / fault code | 3 | [x] [#14](https://github.com/mobiustripper42/tinkle/issues/14) · §12 · *built, then cut by DEC-019 (5.7) — phone-only; module git-recoverable* |
 
 **Phase 1 total: 25 pts** — complete (all closed). Ejection point met: full master→zone→pump→countdown→unwind sequence runs button-driven in the Wokwi sim (#7).
 
@@ -173,9 +173,10 @@ rather than a 1970 wall-clock. SPA renders wall-clock when the bit is set, else 
 | 5.3 | Safety relay wiring + `FaultManager` integration | 3 | [#50](https://github.com/mobiustripper42/tinkle/issues/50) · §14; software half only — wiring under 5.4 |
 | 5.4 | §17 acceptance checklist — full pass on the bench | 5 | [#51](https://github.com/mobiustripper42/tinkle/issues/51) · LED/pulse stand-ins; parts-gated |
 | 5.5 | DEC-014 auto-return self-test — rest-closed verify, degraded-valve flag | 3 | [#52](https://github.com/mobiustripper42/tinkle/issues/52) · DEC-014, DEC-016; follow-on PR after Unit B |
-| 5.6 | Full sim test — end-to-end Wokwi session (SPA-driven schedule start/stop) | 3 | [#62](https://github.com/mobiustripper42/tinkle/issues/62) · sim tier; gates the bench (5.4) |
+| 5.6 | Full sim test — end-to-end Wokwi session (SPA-driven schedule start/stop) | 3 | [#62](https://github.com/mobiustripper42/tinkle/issues/62) · sim tier; gates the bench (5.4); **diagram + scenarios rebuilt SPA-driven after 5.7 (was button-driven)** |
+| 5.7 | Phone-only pivot (DEC-019) — delete buttons + TM1637 + LED rings; keep one alive LED; SPA is sole interface | 5 | [#77](https://github.com/mobiustripper42/tinkle/issues/77) · DEC-019; firmware + 9 docs; modules git-recoverable |
 
-**Phase 5 total: 27 pts** — DEC-016 batches: Unit B = 5.1+5.2+5.3-software (one PR), 5.5 follow-on, 5.4 parts-gated.
+**Phase 5 total: 32 pts** — DEC-016 batches: Unit B = 5.1+5.2+5.3-software (one PR), 5.5 follow-on, 5.4 parts-gated. 5.7 = the phone-only pivot (DEC-019).
 **Validation ladder:** full sim (5.6) → full bench (5.4/#51) → install (Phase 6 wet confirm).
 
 ---
@@ -227,5 +228,5 @@ Parts-gated (Winter 2026–27). Does not block Phases 1–5.
 
 | Task | Why it's cuttable | Defer to |
 |------|------------------|---------|
-| 1.6 TM1637 display | Status nicety; web UI shows the same countdown | later in V1 |
+| 1.6 TM1637 display | Status nicety; web UI shows the same countdown | **CUT — DEC-019 (5.7).** Realized this cut and went further (buttons too): V1 is phone-only. |
 | 4.3 SPA polish | API + a minimal page is enough to operate; full 6-screen polish can trail | later in V1 |
