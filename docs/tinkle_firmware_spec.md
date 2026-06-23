@@ -17,7 +17,7 @@ In scope for V1:
 - Monitor flow as a sanity cross-check; fault on mismatch.
 - Serve a local web config UI over Wi-Fi.
 - Field-calibrate the flow sensor without reflashing.
-- Drive a TM1637 countdown display and three button LED rings.
+- Blink a board-level alive LED (~1 Hz) as a liveness indicator. (v1.5 / DEC-019 is phone-only — the former TM1637 countdown display and three button LED rings are cut; all status now lives in the SPA, §10.1.)
 - Maintain a cooperative heartbeat with the ATtiny watchdog and honor its trips.
 - Fail dry on every fault and on power loss.
 
@@ -37,8 +37,6 @@ Suggested modules (one translation unit each):
 - `FlowMonitor` — ISR pulse count, rate calc, calibration, fault detection.
 - `RunController` — the state machine (§4); owns the actuation sequence.
 - `Scheduler` — evaluates schedule entries, enqueues due runs, assigns fert flag.
-- `Buttons` — debounce, edge events.
-- `Display` — TM1637 rendering of state.
 - `WebConfig` — async HTTP server + JSON API (§10).
 - `Watchdog` — heartbeat emitter + reads ATtiny trip line; forces safe state on trip.
 - `FaultManager` — fault state, latch, clear, log ring buffer.
@@ -65,27 +63,26 @@ DIV_FERT_FET=18    // NC Dosatron leg (de-energized = closed)
 PUMP_RELAY=22      // on the ARMED 24V (the fail-dry source gate, DEC-012)
 // Sensing
 FLOW_PIN=27            // interrupt, level-shifted to 3.3V
-// Display
-TM_CLK=25  TM_DIO=26
-// Buttons (external pull-up, active-low) — one per zone, no dedicated stop (DEC-006)
-BTN1=34  BTN2=35  BTN3=39
-// Button LED rings — 24V rings, one low-side switch each
-LED1=32  LED2=33  LED3=23
+// Alive / board-health LED (DEC-019) — DevKitC onboard LED, ~1 Hz blink, gates nothing
+ALIVE_LED=2
 // Watchdog
-HEARTBEAT_OUT=4
+HEARTBEAT_OUT=4        // ATtiny heartbeat handshake — NOT the alive LED above
 WD_TRIPPED_IN=36
-// Free for more zones (build-for-three): 19, 21, 5, 2, 12, 15
+// Phone-only (DEC-019): the TM1637 display (was 25/26), the three zone buttons
+// (was input-only 34/35/39), and the three button LED rings (was 23/32/33) are gone.
+// Free for more zones (build-for-three): 21, 5, 12, 15 + the freed 23/25/26/32/33/34/35/39
+// (and 19, used only by the TINKLE_SIM flow loopback)
 ```
 
 Each FET gate gets a series resistor + a gate-to-GND pulldown so the valve sits **off**
 (closed/rest) through ESP32 boot. Model zones as a table so the count is data-driven:
 
 ```
-struct Zone { uint8_t fetPin, ledPin, btnPin; const char* name; };
+struct Zone { uint8_t fetPin; const char* name; };   // v1.5: no per-zone LED/button (DEC-019)
 Zone zones[] = {
-  {Z1_FET, LED1, BTN1, "Zone 1"},   // Red Tunnel beds 1–3
-  {Z2_FET, LED2, BTN2, "Zone 2"},   // Red Tunnel beds 4–6
-  {Z3_FET, LED3, BTN3, "Zone 3"},   // general-purpose hose outlet (build-for-three)
+  {Z1_FET, "Zone 1"},   // Red Tunnel beds 1–3
+  {Z2_FET, "Zone 2"},   // Red Tunnel beds 4–6
+  {Z3_FET, "Zone 3"},   // general-purpose hose outlet (build-for-three)
 };
 ```
 
@@ -105,7 +102,7 @@ Sequence (each step non-blocking, advancing on its own timer/confirmation):
 1. **PREP_DIVERTER** — set the two diverter legs for `fertigate` (fert → both leg FETs energized: fert-leg opens, bypass closes; plain → both de-energized: bypass rests open, fert-leg rests closed). Wait `DIVERTER_TRAVEL_MS` if anything changed; skip if already in the wanted state.
 2. **OPEN_ZONE** — energize the zone FET (NC valve drives open); wait `ZONE_TRAVEL_MS`. The pump waits for this (the state machine gates on the valve no longer being busy), so the pump never loads against a closed/mid-travel valve. If `WD_TRIPPED_IN` is asserted, abort to FAULT.
 3. **START_PUMP** — close `PUMP_RELAY`. Begin `RUNNING`.
-4. **RUNNING** — run for `durationSec`. Continuously: update countdown display, run flow checks (§7), watch software max-runtime. Any fault → jump to STOP_PUMP path then FAULT.
+4. **RUNNING** — run for `durationSec`. Continuously: run flow checks (§7), watch software max-runtime, surface the live countdown to the SPA (§10.1). Any fault → jump to STOP_PUMP path then FAULT.
 5. **STOP_PUMP** — open pump relay (this is what stops water — the source).
 6. **CLOSE_ZONE** — de-energize the zone FET; the cap auto-return drives it closed over `ZONE_TRAVEL_MS`. (Pump is already off, so the valve closes against no pressure.)
 7. **SETTLE** — brief dwell, push the run entry (zone, start epoch, duration, gallons, fert y/n, result) onto the `RunLog` ring (DEC-018) — the ring **head** is the "last run" the status API exposes. Diverter legs left as-is. → IDLE (or next queued run).
@@ -246,7 +243,7 @@ All mutating endpoints validate ranges and reject if currently in FAULT (except 
 
 - **Implemented (#55/#56/#57, Unit C / DEC-016).** Policy and plumbing are split on the platform line:
   - **`Api` (core, `api.{h,cpp}`)** owns everything decidable — range validation, FAULT gating, JSON shapes, the DEC-015 clear-on-enable — and is host-tested against the real wire shapes (ArduinoJson compiles on native; the tests parse/assert actual JSON, no parallel model). Codes: 200 OK · 400 malformed · 409 wrong state · 422 out of range. Validation seeds (tune like §15): run/schedule durations 10–7200 s, `swMaxRuntimeSec` 60–1800 s (never above the ATtiny ceiling), K 50–5000.
-  - **One documented deviation:** `POST /api/settings` is allowed in FAULT — settings command no actuation, and DEC-015's enable-while-latched *is* the recovery path for a lying flow sensor. `/api/fault/clear` routes through `FaultManager::requestClear()` (the resolved-condition gate applies to HTTP exactly as to the button). `/api/stop` also voids an active calibration (operator bailed: no K, no CalRange).
+  - **One documented deviation:** `POST /api/settings` is allowed in FAULT — settings command no actuation, and DEC-015's enable-while-latched *is* the recovery path for a lying flow sensor. `/api/fault/clear` routes through `FaultManager::requestClear()` (the resolved-condition gate applies to the HTTP clear — the only clear path now that the button is gone, DEC-019). `/api/stop` also voids an active calibration (operator bailed: no K, no CalRange).
   - **Schedule** posts are atomic full-replaces: validate everything, then `clear()`+`add()`+NVS save (packed 10-byte entries, `sched` blob) + `evalNow()`. The blob rehydrates at boot — the schedule runs headless off flash (§17 local autonomy).
   - **`WebServer` (esp32, `web_server.h`)** is routes + body collection + one FreeRTOS mutex: async handlers run on the other core, so every `Api` call serializes against the loop (loop holds the lock per pass, releases between passes; handlers answer 503 after 250 ms rather than block the TCP task). Bodies cap at 4 KB (413).
   - **`WifiManager` (esp32, `wifi_manager.h`)**: non-blocking STA join with NVS creds → 20 s timeout → open SoftAP `Tinkle-Setup`; mDNS `tinkle.local` either way. Creds written via `/api/settings` apply at next boot. WiFi has no role in watering.
@@ -264,7 +261,7 @@ The firmware **serves a single-page app** that is the phone UI; it is a first-cl
 - Degrade gracefully: if an API call fails, show the last known state and a clear "disconnected" banner rather than a blank screen.
 
 **Screens (all driven by the existing API):**
-1. **Status / home** — current state, active zone, big MM:SS countdown (mirrors the TM1637), live flow GPM, diverter state (plain/fert), last-run summary, a persistent banner if the flow check is disabled (DEC-015), and any latched fault prominently. Polls `GET /api/status` (~1–2 s while active). Default screen.
+1. **Status / home** — current state, active zone, big MM:SS countdown (the sole countdown now — DEC-019 cut the TM1637), live flow GPM, diverter state (plain/fert), last-run summary, a persistent banner if the flow check is disabled (DEC-015), and any latched fault prominently. Polls `GET /api/status` (~1–2 s while active). Default screen.
 2. **Manual run** — pick zone, duration (defaults pre-filled), fertigate toggle → `POST /api/run`; a big **STOP ALL** button → `POST /api/stop` always visible.
 3. **Schedule editor** — list/add/edit/delete entries (time, zone, duration, days-of-week, fert override, enable) → `GET`/`POST /api/schedule`.
 4. **Settings** — default durations, software max-runtime, fert policy, Wi-Fi → `GET`/`POST /api/settings`.
@@ -280,54 +277,31 @@ The firmware **serves a single-page app** that is the phone UI; it is a first-cl
 
 ---
 
-## 11. Manual buttons
+## 11. Operator interface — phone-only (DEC-019)
 
-**Three buttons, one per zone, no dedicated stop button** (DEC-006). B1/B2/B3
-(GPIO34/35/39) map to Zone 1 / Zone 2 / Zone 3. One uniform policy keyed on
-`{run state, hold duration}`:
+V1.5 has **no on-box controls**. The three zone buttons that lived here (DEC-006: idle press
+started that zone, any press stopped a running zone, a ≥3 s long-press cleared a latched fault)
+are **cut**. All manual action — **start, stop, fault-clear** — is the SPA over the device's own
+Wi-Fi/SoftAP (§10 / §10.1), routed into the same `RunController` / `FaultManager` seams the buttons
+used to hit. The only physical control is the **AC master switch** on the Mean Well input: a
+whole-system kill → fail-dry (purely electrical, no firmware), doubling as the service disconnect.
+The `Buttons` module is removed from the build but git-recoverable if a panel is ever resurrected.
 
-- **IDLE → press button N:** start a timed run on Zone N at that zone's stored default
-  duration, `fertigate=false`.
-- **Any zone running → press *any* button:** **stop** — unwind the active run to safe
-  state. It does **not** switch or auto-start; to change zones, one press stops, the next
-  starts. This is what enforces the single-active invariant (you must stop before you can
-  start) and is fail-dry-friendly — an explicit stop, never a surprise switch.
-- **FAULT → short press:** no-op. **FAULT → ≥3 s long-press of any button:** request a
-  fault-clear, still gated on "condition resolved" (§14); a premature clear simply
-  re-faults on the next run (harmless). The hold **must give explicit feedback** — see
-  §12 (a held button must never read as a dead panel).
-- Firmware debounces (~30 ms) on top of the RC hardware debounce. Act on the press edge;
-  the long-press fires once per hold at the 3 s threshold.
-
-> **Zone 3** is a real third zone — a general-purpose hose outlet, separate from the Red
-> Tunnel's Z1/Z2 — wired now under build-for-three (DEC-007), plumbed when that line goes
-> in. B3 was previously (and wrongly) specced as a dedicated Stop button; that was a spec
-> error corrected by DEC-006.
+> The single-active invariant, the fert-default, and Zone 3's build-for-three status are unchanged
+> — only the *input path* moved to the phone. See DEC-019 for the stop-vs-start/clear tradeoff.
 
 ---
 
-## 12. Display (TM1637)
+## 12. Status indication — alive LED + SPA (DEC-019)
 
-- **IDLE:** wall clock `HH:MM`, colon on. (If clock unsynced, show `--:--`.)
-- **RUNNING:** `MM:SS` countdown of the active run; colon blinks at 1 Hz.
-- **PREP/SETTLE:** short animation or hold last value — minor, implementer's choice.
-- **FAULT:** `E` + code, e.g. `E1` no-flow, `E2` unexpected flow, `E3` watchdog. Flash.
-- Display is **read-only status** — it never gates actuation and has no input role.
+The TM1637 4-digit panel (idle `HH:MM` clock, `MM:SS` countdown, `E#` fault codes) and the three
+button LED rings are **cut**. Their job — run state, countdown, active zone, latched faults — now
+lives entirely in the SPA status/home screen (§10.1), which polls `GET /api/status`.
 
-Button LED rings: off = idle/that zone not running; solid = that zone running. With no
-dedicated stop ring (DEC-006), **fault/attention blinks every ring** (the panel as a
-whole says "attention"), overriding the per-zone level.
-
-**Fault-clear hold feedback** (DEC-006): the ≥3 s fault-clear long-press must produce
-explicit feedback so a held button never reads as a dead panel —
-
-- **Successful clear** (latched → cleared) → a brief ring/display **ack** (all rings
-  flash solid). *Today this ack means "was faulted, now cleared," not "the fault
-  condition is gone"* — `clearFault()` currently clears unconditionally when faulted.
-- **Held while latched-but-unresolved** → a *visible* no-op (a brief flash), not silence.
-  This branch is **gated on the FaultManager resolved-condition signal (Phase 3/5)** —
-  there is no "resolved" signal until FlowMonitor/Watchdog land, so it is speced here but
-  not yet implemented.
+The only on-board indicator is a single **alive LED** (`ALIVE_LED`, the DevKitC onboard LED on
+GPIO2) blinking ~1 Hz to show the firmware is still ticking. It is **read-only and gates nothing**,
+and is **distinct from** the ATtiny `HEARTBEAT_OUT` watchdog handshake (§9) — do not conflate. The
+`Display` core module + the TM1637 esp32 shim are removed from the build, git-recoverable.
 
 ---
 
@@ -356,11 +330,11 @@ struct ScheduleEntry {
 
 ## 14. Fault handling & safe state
 
-- Faults latch. Entering any fault: command safe state (pump off → all valve FETs de-energized: zones cap-close, diverter returns to plain), set fault code, light attention LED + display code, log.
-- Recovery requires explicit clear (`/api/fault/clear` or B3 long-press) **and** the underlying condition resolved.
+- Faults latch. Entering any fault: command safe state (pump off → all valve FETs de-energized: zones cap-close, diverter returns to plain), set fault code, surface it on the SPA status/Faults screen (§10.1), log. (No on-box fault display under DEC-019 — the alive LED keeps blinking; it is not a fault indicator.)
+- Recovery requires explicit clear (`/api/fault/clear` — phone-only since DEC-019) **and** the underlying condition resolved.
 - Fault codes: `FAULT_NO_FLOW`, `FAULT_UNEXPECTED_FLOW`, `FAULT_WATCHDOG`, `FAULT_CAL_RANGE`, `FAULT_CLOCK` (optional/non-blocking).
 - Hierarchy of trust: software stops first; the ATtiny + safety relay **cutting pump power** is the hardware backstop (the source gate, DEC-012). Firmware must never assume it is the only thing keeping water off.
-- **Implemented (#50, software half).** `FaultManager` (core, `fault_manager.{h,cpp}`) on top of `RunController`'s latch: a fixed ring of recent fault entries (code + millis timestamp — the §10 status/Faults surface), and the **resolved-condition clear gate**. Detectors push their condition's current truth in each tick (`setConditionActive`): watchdog resolved = trip line released; unexpected-flow resolved = no flow while idle (the rolling rate decayed to 0). One-shot codes nobody pushes (`FAULT_CAL_RANGE`) clear freely. Every clear path — button long-press now, `POST /api/fault/clear` in Phase 4 — goes through `requestClear()`, so a latched-but-unresolved fault is a visible no-op (no §12 ack flash), not a false clear. The physical safety-relay wiring half of 5.3 is bench/parts-gated and verifies under §17 (#51).
+- **Implemented (#50, software half).** `FaultManager` (core, `fault_manager.{h,cpp}`) on top of `RunController`'s latch: a fixed ring of recent fault entries (code + millis timestamp — the §10 status/Faults surface), and the **resolved-condition clear gate**. Detectors push their condition's current truth in each tick (`setConditionActive`): watchdog resolved = trip line released; unexpected-flow resolved = no flow while idle (the rolling rate decayed to 0). One-shot codes nobody pushes (`FAULT_CAL_RANGE`) clear freely. The clear path — `POST /api/fault/clear` (phone-only since DEC-019 retired the button long-press) — goes through `requestClear()`, so a latched-but-unresolved fault is a visible no-op (the SPA reports the clear didn't take), not a false clear. The physical safety-relay wiring half of 5.3 is bench/parts-gated and verifies under §17 (#51).
 - **Implemented (#52, DEC-014).** `ValveRestMonitor` (core, `valve_rest_monitor.{h,cpp}`) — the auto-return self-test. After a run's close travel, it watches the flow meter from SETTLE entry through IDLE for `REST_WINDOW_MS`: more than `REST_MAX_PULSES` means the just-closed zone still passes water → that zone is flagged. **Non-latching by design** — the flag becomes a `FaultManager::note()` ring entry (`FAULT_VALVE_REST`, E6, log-only) + a serial line + `flaggedMask()` for the Phase 4 status API, never a `raiseFault` (a dribble must not halt irrigation; a gross leak still latches via the §7 idle check, a decade above this threshold). The flag **self-heals**: a later clean rest window on the same zone clears it. A queued run chaining SETTLE→next aborts the check silently (the window would measure the next run's flow) — the last run of a queue session is still checked, so every used zone gets covered. Diverter legs are out of scope for V1 (no flow signature at rest); the §17 bench item exercises the zone path.
 
 ---
@@ -382,7 +356,6 @@ struct ScheduleEntry {
 | `REST_WINDOW_MS` | 10000 (seed; `TINKLE_SIM`: 3000) | DEC-014 post-close rest window (#52) |
 | `REST_MAX_PULSES` | 5 (seed, tune) | pulses at rest above which the closed zone is flagged (#52) |
 | `RUNLOG_DEPTH` | 32 | run-history ring entries (DEC-018); 11 B/entry packed `runlog` NVS blob (~356 B); bumpable to 64 (wear, not space, is the ceiling) |
-| button debounce | 30 ms | on top of RC |
 
 Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
 
@@ -390,7 +363,7 @@ Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts
 
 ## 16. Suggested stack
 
-PlatformIO + Arduino-ESP32. Libraries: ESPAsyncWebServer + AsyncTCP, ArduinoJson, Preferences (NVS), a TM1637 driver, `configTime`/SNTP, ESPmDNS (for `tinkle.local`), LittleFS (or PROGMEM) to hold the gzipped SPA bundle. Custom thin button + state-machine code (avoid heavyweight RTOS framing for V1). ATtiny85 sketch built via Arduino-as-ISP or micronucleus if a Digispark board is used; keep it dependency-free and tiny.
+PlatformIO + Arduino-ESP32. Libraries: ESPAsyncWebServer + AsyncTCP, ArduinoJson, Preferences (NVS), `configTime`/SNTP, ESPmDNS (for `tinkle.local`), LittleFS (or PROGMEM) to hold the gzipped SPA bundle. (No TM1637 driver — DEC-019 cut the display.) Custom thin state-machine code (avoid heavyweight RTOS framing for V1). ATtiny85 sketch built via Arduino-as-ISP or micronucleus if a Digispark board is used; keep it dependency-free and tiny.
 
 ---
 

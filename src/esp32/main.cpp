@@ -4,8 +4,6 @@
 #include "../core/valve_driver.h"
 #include "../core/run_controller.h"
 #include "../core/loop_monitor.h"
-#include "../core/buttons.h"
-#include "../core/display.h"
 #include "../core/persistence.h"
 #include "../core/clock.h"
 #include "../core/scheduler.h"
@@ -16,7 +14,6 @@
 #include "../core/fault_manager.h"
 #include "../core/valve_rest_monitor.h"
 #include "../core/api.h"
-#include "display_tm1637.h"
 #include "wifi_manager.h"
 #include "web_server.h"
 #include "preferences_store.h"
@@ -31,10 +28,10 @@
 // 10 ms budget.
 //
 // RunController is the sole actuator commander; the loop ticks it (which ticks the
-// ValveDriver in turn) and ticks Buttons (§11), mapping debounced edges onto run
-// requests, then renders the TM1637 panel + LED rings (§12). The scheduler / flow /
-// web / watchdog modules (Phase 2+) hang off this same loop as they land — each is
-// one more non-blocking tick().
+// ValveDriver in turn). v1.5 (DEC-019) is phone-only: there is no button panel or
+// TM1637 display — all interaction is the SPA over the web layer (§10.1), and the only
+// on-board indicator is a ~1 Hz heartbeat LED. The scheduler / flow / web / watchdog
+// modules hang off this same loop — each is one more non-blocking tick().
 
 using namespace tinkle;
 
@@ -65,8 +62,8 @@ static PreferencesStore  prefsStore;
 static Persistence       persistence(prefsStore, ZONE_COUNT);
 
 // Clock (§13 / DEC-009). NTP sync + free-running millis() fallback behind the SystemClock
-// shim (the only SNTP/timezone code). valid() drives the display's clockValid; until NTP
-// lands (no WiFi before Phase 4) it stays false and the panel holds "--:--".
+// shim (the only SNTP/timezone code). valid() feeds the SPA status clock (§10.1); until
+// NTP lands (no WiFi before Phase 4) it stays false and the SPA shows the clock as unsynced.
 static SystemClock       systemClock;
 static Clock             wallClock(systemClock);
 
@@ -127,36 +124,6 @@ static Api         api(Api::Deps{runController, scheduler, persistence, faultMan
 static WifiManager wifiManager(persistence);
 static WebServer   webServer(api, flowSensor, wifiManager);
 
-// Button panel (§11 / DEC-006): one button per zone, no dedicated stop button. Pins
-// come straight from the pins.h zone table (data-driven). The press policy lives in
-// loop(); the panel module only produces clean debounced edges.
-static Buttons::Config makeButtonConfig() {
-    static_assert(ZONE_COUNT <= Buttons::MAX_BUTTONS,
-                  "button panel: one button per zone must fit MAX_BUTTONS");
-    Buttons::Config cfg;
-    for (uint8_t i = 0; i < ZONE_COUNT; ++i) cfg.pins[i] = ZONES[i].btnPin;  // one per zone
-    cfg.count = ZONE_COUNT;
-    return cfg;
-}
-
-static ArduinoButtonInput   btnInput;
-static const Buttons::Config btnCfg = makeButtonConfig();
-static Buttons              buttons(btnInput, btnCfg);
-
-// Fault-clear success ack (DEC-006 / §12): when a long-press clear takes, flash every
-// ring solid for this long so a held button never reads as a dead panel. The clear
-// now routes through FaultManager::requestClear() (§14, #5.3), so a long-press on a
-// latched-but-UNRESOLVED fault is refused — no ack fires, the visible no-op cue.
-static constexpr uint32_t FAULT_ACK_MS  = 750;
-static uint32_t           faultAckUntilMs = 0;
-
-static DisplayTM1637 display;            // §12 panel; pushes only on content change
-
-// LED ring level (§11/§12): Solid -> on; Blink -> on during the blink phase; Off.
-static bool ledLevel(LedMode m, bool blinkOn) {
-    return m == LedMode::Solid || (m == LedMode::Blink && blinkOn);
-}
-
 // §2 tick budget. micros() resolution so sub-millisecond ticks still register.
 static constexpr uint32_t TICK_BUDGET_US     = 10000;   // 10 ms
 static constexpr uint32_t REPORT_INTERVAL_MS = 5000;
@@ -202,12 +169,12 @@ void setup() {
     flowMonitor.begin(flowSensor.pulses(), millis());
     flowFault.begin(flowSensor.pulses(), millis());   // seed the idle window past boot
 
-    buttons.begin();              // configure the panel pins as inputs (§11)
-    display.begin();              // TM1637 init + clear (§12)
-
-    // Button LED rings (§11/§12) are outputs (active-high via ULN2803); off at boot.
-    // ZONE_COUNT now covers all three rings (LED3 is Zone 3's), so no separate handling.
-    for (uint8_t z = 0; z < ZONE_COUNT; ++z) { pinMode(ZONES[z].ledPin, OUTPUT); digitalWrite(ZONES[z].ledPin, LOW); }
+    // Heartbeat "alive" LED (DEC-019): the only on-board indicator now that the TM1637
+    // panel and button rings are gone. Off at boot; the loop blinks it at ~1 Hz so a
+    // glance confirms the firmware is still ticking. It gates nothing — status proper
+    // is the SPA (§10.1).
+    pinMode(ALIVE_LED, OUTPUT);
+    digitalWrite(ALIVE_LED, LOW);
 
     // Watchdog handshake pins (§9 / #5.2). begin() parks the heartbeat LOW (no run,
     // no beat); the trip line is input-only with an external pull-up — idles HIGH,
@@ -239,37 +206,14 @@ void loop() {
                                // reads the mode this mutates — both need the bracket.
 
     runController.tick(now);   // sole actuator commander; ticks the ValveDriver too
-    buttons.tick(now);         // debounce + edge detect (§11)
     wallClock.tick(now);       // poll NTP / free-run the wall clock (§13)
     scheduler.tick(now);       // per-minute eval of due runs -> RunController (§13)
     flowMonitor.tick(flowSensor.pulses(), now);   // pulses -> gallons + rolling GPM (§7)
 
-    // §11 manual buttons (DEC-006). RunController owns the single-active invariant; we
-    // only map debounced edges onto it. One uniform policy for every zone button:
-    //   FAULT      -> short press is a no-op (only the long-press clears);
-    //   any run on -> any press STOPS it (no switching, no auto-start);
-    //   IDLE       -> press starts that button's own zone.
-    // A >=3 s long-press of any button clears a latched fault. A long hold fires
-    // pressEdge first, but in FAULT that press is a no-op, so it harmlessly precedes
-    // the clear 3 s later. requestClear() refuses unless actually faulted AND the
-    // underlying condition has resolved (§14), so the ack only fires on a real clear.
-    for (uint8_t z = 0; z < ZONE_COUNT; ++z) {
-        if (buttons.pressEdge(z)) {
-            if (runController.isFaulted()) {
-                /* short press in FAULT: no-op (§11 / DEC-006) */
-            } else if (!runController.isIdle()) {
-                runController.stop(now);                  // any zone running -> stop
-            } else {
-                RunRequest req;
-                req.zoneIndex   = z;
-                req.durationSec = persistence.zoneDefaultSec(z);   // stored per-zone default (§8)
-                req.fertigate   = false;
-                runController.requestRun(req, now);       // idle -> start this zone
-            }
-        }
-        if (buttons.longPressEdge(z) && faultManager.requestClear())
-            faultAckUntilMs = now + FAULT_ACK_MS;         // §12 success ack
-    }
+    // Manual run / stop / fault-clear are phone-only now (DEC-019): the SPA drives them
+    // through the web layer (§10 — POST /api/run, /api/stop, /api/fault/clear), each
+    // routed into the same RunController / FaultManager seams the buttons used to hit.
+    // No on-box input path remains; the AC master switch is the physical kill (fail-dry).
 
     // Per-run flow tally (§7): re-baseline gallons when a run starts pumping, and log the
     // measured volume when it stops. Edge-detected off the RUNNING state. (#35 adds the
@@ -340,32 +284,11 @@ void loop() {
                       " — auto-return cap suspect, service the valve\n", restFlagged);
     }
 
-    // §12 panel. Render the frame from controller state; the shim pushes to the
-    // TM1637 only when it changes (bit-bang cost vs the tick budget). The idle clock
-    // shows HH:MM once NTP syncs, "--:--" until then (§13).
-    const WallTime wt = wallClock.wall(now);
-    DisplayInputs di;
-    di.state        = runController.state();
-    di.fault        = runController.activeFault();
-    di.remainingSec = runController.remainingSec(now);
-    di.clockValid   = wallClock.valid();
-    di.hours        = wt.hour;
-    di.minutes      = wt.minute;
-    display.show(renderDisplay(di, now));
-
-    // LED rings (DEC-006): active zone solid; ALL rings blink on fault (no dedicated
-    // stop ring); ALL rings flash solid briefly after a successful fault-clear (§12
-    // ack). digitalWrite is cheap, so drive every loop. Same 1 Hz phase as the display
-    // colon (one stretched blink at the ~49.7-day millis wrap — cosmetic). The ack
-    // window comparison is millis()-rollover safe via the signed difference.
-    const bool blinkOn = (now / 500u) % 2u == 0u;
-    const bool ackOn   = (int32_t)(faultAckUntilMs - now) > 0;
-    const int  az      = runController.activeZone();
-    const bool faulted = runController.isFaulted();
-    for (uint8_t z = 0; z < ZONE_COUNT; ++z) {
-        const LedMode m = ackOn ? LedMode::Solid : zoneLedMode(az, z, faulted);
-        digitalWrite(ZONES[z].ledPin, ledLevel(m, blinkOn) ? HIGH : LOW);
-    }
+    // Heartbeat "alive" LED (DEC-019): ~1 Hz square wave = the firmware is still ticking.
+    // Cosmetic only (gates nothing); the run state / fault / countdown that the TM1637
+    // used to show now live in the SPA status screen (§10.1). digitalWrite is cheap, so
+    // drive it every loop. One stretched blink at the ~49.7-day millis() wrap is harmless.
+    digitalWrite(ALIVE_LED, (now / 500u) % 2u == 0u ? HIGH : LOW);
 
     // (No diverter-position persistence in v1.4: the two-leg NO/NC diverter rests plain
     // by construction, so there is no hold-state to cache — RunController sets the legs

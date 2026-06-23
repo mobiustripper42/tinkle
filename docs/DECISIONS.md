@@ -73,6 +73,8 @@ K-factor) stay at seeded defaults until tiers 3–4 confirm them.
 ---
 
 ## DEC-005: TM1637 display driver — `robtillaart/TM1637_RT`
+> **Superseded by DEC-019** (v1.5 phone-only): the TM1637 display is cut and this driver leaves
+> `lib_deps`. Retained for history; the `src/core/display` glyph logic is git-recoverable.
 **Decision:** Use `robtillaart/TM1637_RT` for the 4-digit panel (§12), replacing the
 delisted `avishorp/TM1637` (commented out in #20). Glyph *logic* (countdown format,
 fault codes, blink/flash phases, dashes) lives in host-tested `src/core/display`
@@ -95,6 +97,9 @@ exact per-frame cost, and the colon cell position are bench-confirmable (Phase 6
 ---
 
 ## DEC-006: Button/zone model — 3 buttons = 3 zones, any-press-stops, long-press-clears
+> **Superseded by DEC-019** (v1.5 phone-only): the buttons are cut; manual start/stop/fault-clear
+> are now SPA-only. The zone *model* (three zones, build-for-three) survives — only the button
+> *input* is gone. DEC-006's "local autonomy at the enclosure" sub-claim is retired (see DEC-019).
 **Decision:** The panel is **three buttons, one per zone**, with no dedicated stop
 button (resolves #23). Behavior (§11):
 - **IDLE** → press button N starts Zone N at its stored default duration, `fertigate=false`.
@@ -270,7 +275,8 @@ the valves' resting states are a convenience, not the safety mechanism.
 **Driver / clamp (sourcing):** IRLZ44N per valve (margin makes the cap-inrush spec moot), gate
 resistor + gate-to-GND pulldown (boot-off), and a **TVS (SMAJ30A) drain-to-source per FET** —
 the valves have an internal bridge rectifier, so a freewheel diode won't clamp; clamp the FET.
-Valves on **raw 24 V**; button LED rings are 24 V (12 V buck dropped).
+Valves on **raw 24 V**. (The button LED rings that previously shared the 24 V rail are gone under
+DEC-019 — their load leaves the power budget.)
 **Firmware impact (done — task 1.8):** `ValveDriver` and `pins.h` are now the on/off model —
 `openZone`/`closeZone` set/clear one low-side FET per valve, per-valve travel timers
 (`ZONE_TRAVEL_MS`/`DIVERTER_TRAVEL_MS` = 10 s seeds), the never-both-high invariant and the
@@ -352,8 +358,9 @@ as a separate follow-on PR (~3 pts), not bundled. **Unit C** = 4.1+4.2+DEC-015 (
 **Why:** Phase 5 is the critical path (PROJECT_PLAN: fail-dry proven on the bench before any wet
 run); FaultManager (5.3) shapes the fault surface `/api/status`, `/api/fault/clear`, and the SPA
 Faults screen consume (firmware spec §10/§10.1, DEC-006's resolved-condition gate), so
-watchdog-first is strictly less rework. Bench work needs no UI — buttons + TM1637 suffice
-(DEC-006).
+watchdog-first is strictly less rework. (The original rationale added "bench work needs no UI —
+buttons + TM1637 suffice"; **DEC-019** cut both, so bench and sim now drive through the SPA / `curl`
+against the §10 API. The watchdog-first ordering is unaffected.)
 **Tradeoff:** The phone UI arrives last among software phases; acceptable because wet validation
 (the only consumer that *needs* it) is parts-gated to Winter 2026–27.
 
@@ -442,3 +449,49 @@ fixing the doc) is tracked separately as a `bug` ([#72](https://github.com/mobiu
 deliberately out of this unit's estimate.
 **Consequences:** a new `runlog` NVS key; `RunController` gains a SETTLE-time push; `/api/status`
 `lastRun` becomes a view onto the ring head; the "six screens" line in two docs becomes "seven".
+
+---
+
+## DEC-019: Phone-only operator interface — physical panel cut for V1 (supersedes DEC-005, DEC-006)
+**Decision:** Delete the on-box operator panel — the **TM1637 4-digit display** (§12), the **three
+zone buttons** (DEC-006), and the **three button LED rings** — keeping **one** board-level
+alive/health LED (the DevKitC onboard LED, GPIO2, `ALIVE_LED`) that blinks at ~1 Hz to show the
+firmware is ticking. The **SPA** over the device's own Wi-Fi/SoftAP (§10.1) is now the **sole**
+interface. This is **v1.5**.
+**Why:** The panel is physical fabrication, parts, and enclosure cutouts Eric can't afford against
+the deploy date — and the SPA already delivers every panel function it would replace: Manual-run +
+the always-visible **STOP ALL** (§10.1 screen 2) cover the buttons; Status/History mirror the
+display. PROJECT_PLAN already listed "1.6 TM1637 display" under *Cuttable Tasks* ("web UI shows the
+same countdown"); this realizes that cut and goes one step further by also dropping the buttons.
+**Supersedes DEC-005** (the `robtillaart/TM1637_RT` driver leaves `lib_deps`) and **DEC-006** (the
+3-button model). **Amends DEC-016**, whose "bench needs no UI — buttons + TM1637 suffice" rationale
+is now false: bench and sim drive through the SPA / `curl` against the §10 API.
+**Local autonomy is unchanged — and SPEC's claim stands as written.** Scheduled runs still execute
+headless from local flash regardless of network (the load-bearing guarantee, untouched), and the
+phone reaches the box over the ESP32's **own SoftAP** (`Tinkle-Setup`, §10) — local I/O, not
+infrastructure — so phone-only adds **no** network / server / cloud dependency. What is retired is
+the *narrower* sub-claim only DEC-006 ever made: "the button preserves local autonomy **at the
+enclosure**," i.e. finger-only operation standing at the box with no phone.
+**The honest tradeoff (stop vs. start/clear asymmetry):**
+- Phoneless **stop** is *preserved and broadened*: a new **AC master switch on the Mean Well input**
+  is a whole-system kill → fail-dry (purely electrical, **no firmware involvement**), documented as
+  the **service disconnect** and the phoneless emergency stop. It realizes §17 item 1 (power loss →
+  pump unpowered → dry) as a deliberate act — a hard cut, not a graceful unwind, which the design
+  already treats as a first-class fail-dry path.
+- Phoneless **start** and phoneless **fault-clear** are *gone*: a dead phone in the truck means you
+  can't hand-start Zone 2 or clear a latched fault at the box. §14's two clear paths collapse to one
+  (`/api/fault/clear` only; the B3 long-press is removed). Removing a *resume* path can only make
+  the system more conservative, never less dry.
+**Safety chain untouched (DEC-003 / DEC-012).** The buttons only *requested* guarded transitions and
+the display was read-only (§12) — neither was ever in the pump-power fail-dry gate, and the §17
+acceptance checklist has **no** panel dependency (its lone UI item is the SPA). The `ALIVE_LED` is a
+local health blink, **distinct from** `HEARTBEAT_OUT` (GPIO4), the ATtiny watchdog handshake — do
+not conflate the two.
+**Deferred, not deleted.** The `Buttons` / `Display` core modules + the `display_tm1637.h` shim are
+removed from the build but remain **recoverable from git history** if a panel is ever resurrected
+(no current plans). The freed GPIO (ex-display 25/26, ex-rings 23/32/33, ex-buttons input-only
+34/35/39) bank toward the build-for-three future zones — no remap needed for Red.
+**Status:** Decided + built (task 5.7). Firmware: modules deleted, `pins.h` reshaped (`Zone` sheds
+`ledPin`/`btnPin`), `main.cpp` drops the button policy / display / ring render for the alive blink,
+`TM1637_RT` out of `lib_deps`; native suite 109/109; `esp32` / `esp32_sim` / `attiny85` green. The
+SPA-driven e2e sim (the former button-driven Wokwi scenarios) is redone separately (issue #62).

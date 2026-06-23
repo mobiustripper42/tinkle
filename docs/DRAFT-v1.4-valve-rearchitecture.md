@@ -1,5 +1,7 @@
 # Tinkle — v1.4 Valve Re-Architecture (DRAFT for review)
 
+> **⚠ Partially superseded by DEC-019 (v1.5, phone-only).** This draft predates the panel cut. Any references to the **TM1637 display, the 3 zone buttons, the 3 LED rings**, their GPIO/pin budget, or the 24 V ring rail are **historical** — V1 is phone-only (SPA + a single GPIO2 alive LED + an AC master switch). The valve/diverter/pump content here is unaffected.
+
 **Status:** proposal — not yet propagated to the canonical docs (SPEC, DECISIONS,
 hardware/firmware specs, wiring). Drafted for `@architect` review and to seed a BOM.
 Supersedes the v1.3 zone-valve scheme (and the DEC-011 currently committed, which

@@ -1,5 +1,7 @@
 # Tinkle V1 — Bill of Materials (DRAFT, post-v1.4 rearchitecture)
 
+> **⚠ Superseded in part by DEC-019 (v1.5, phone-only).** Any line items for the **TM1637 display, the 3 momentary buttons, the 3 LED rings**, and their 24 V ring rail / driver are **cut** — V1 has no on-box panel, only a single onboard alive LED (GPIO2). Add an **AC master switch** on the Mean Well input as the service disconnect. Treat the panel rows below as historical.
+
 **For:** Red Tunnel build, on a chassis sized for three tunnels. Pairs with
 `DRAFT-v1.4-valve-rearchitecture.md`. **Not yet propagated to the canonical docs.**
 **Sourcing scope:** "now" = needed to build + bench + wet-confirm Red. "later" =

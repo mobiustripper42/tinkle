@@ -5,6 +5,9 @@
 **Build target:** Winter 2026–27, running the 2027 season
 **Scope of V1:** Red Tunnel only, built on a chassis sized for three tunnels
 
+**Changelog (v1.5):**
+- **Phone-only operator interface (DEC-019).** The on-box panel is cut: **TM1637 4-digit display, 3 momentary buttons, 3 button LED rings — all removed.** The SPA over the device's own Wi-Fi/SoftAP is the sole interface (start/stop/fault-clear/config/calibration). Kept: a single **alive LED** (DevKitC onboard, GPIO2, ~1 Hz blink = firmware ticking). **Why:** the panel is fabrication + parts + enclosure cutouts that don't fit the deploy date, and the SPA already does every panel job. **Physical kill:** a new **AC master switch on the Mean Well input** = whole-system off → fail-dry (no firmware), doubling as the service disconnect / phoneless emergency stop. **Power:** the 24 V LED-ring load and its driver leave the budget (the 12 V buck was already dropped). Reverses the v1.1 "on-box display" addition; the firmware modules are git-recoverable if a panel is ever resurrected.
+
 **Changelog (v1.4):**
 - **Corrects the v1.3 valve framing (wrong part).** The as-sourced valve is a U.S. Solid 3/4" brass **2-wire auto-return, normally-closed** motorized ball valve (9–36 V AC/DC, ~2 W, 6–10 s, **capacitor** return) — **on/off, not reverse-polarity**. So it drives off a **single low-side FET** (1 GPIO), not an H-bridge. Every actuated valve is this family; **all DRV8871 H-bridges and the never-both-high invariant are gone.** See DEC-011.
 - **Master valve removed.** Fail-dry is now **source control**: the pump sits on the armed 24 V (ATtiny safety relay, DEC-003), powered only during a run → no run / hang / trip / power loss = no pump power = no water. The master's only unique job (block a gravity siphon through a stuck-open zone) doesn't apply here — negligible tank head + the SEAFLO's internal checks block reverse flow. The valves are **not** a safety barrier; their resting-closed state is convenience. See DEC-012.
@@ -81,8 +84,8 @@ ESP32 controller (east end of Red)
    ├── low-side FET ×2        → diverter legs (NO clean + NC fert, energize-to-actuate)
    ├── pump-enable output     → pump power on the armed 24V (pump self-manages via pressure switch)
    ├── flow-sensor input      → hall-effect pulse counter
-   ├── TM1637 4-digit LED      → MM:SS countdown of active run (read-only status)
-   ├── 3× momentary button + LED ring (one per zone, DEC-006)
+   ├── alive LED (GPIO2)       → ~1 Hz blink = firmware ticking (DEC-019; no on-box panel)
+   ├── phone (SPA over Wi-Fi)  → the sole interface: start/stop/fault-clear/config/calibrate
    └── independent hardware watchdog → arms the safety relay feeding the pump (fail-dry source gate)
 ```
 
@@ -174,14 +177,11 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - **ATtiny85**, separate from the ESP32: watches an ESP32 heartbeat *and* enforces a hard max-runtime ceiling. Its output (the safety relay) sits in series with **pump** power — trip it and the pump de-powers → no source → no water. Fail-dry cutoff in hardware (DEC-012), regardless of what the ESP32 believes.
 - This is the automated stand-in for the human who used to watch the hose.
 
-**Manual interface:**
-- **3× IP67 momentary buttons with LED rings** — one per zone, all three live: Z1/Z2 (Red Tunnel) + Z3 (hose outlet). No dedicated stop button (DEC-006).
-- Button is an **input to the ESP32**, never wired across a valve — all watering paths stay under the pump-power gate + watchdog control.
-- Press while idle = trigger a **timed run** of that button's zone for a stored default duration; the run auto-stops itself.
-- **Any** button press during an active run = **stop** (cancel the run; no switch, no auto-start). A **≥3 s long-press of any button** clears a latched fault (DEC-006).
-- LED ring = "this tunnel is watering right now." That is the only status needed at the box.
-- **LED countdown display:** TM1637 4-digit module (~$3, 2-wire, drives off 2 GPIO). Shows **MM:SS countdown** of the active run via the colon. Read-only status only — config stays on the web page; cannot affect any watering path. 7-segment reads better in sun than LCD behind the clear lid.
-  - *Hard line: countdown only. Do not let it grow into an on-box menu/UI.*
+**Manual interface — phone-only (DEC-019):**
+- **No on-box controls.** The three zone buttons, the three LED rings, and the TM1637 countdown display are all cut. The **SPA over the device's own Wi-Fi/SoftAP** is the sole interface: start/stop a manual run, clear a fault, edit the schedule, calibrate — everything the buttons + page used to split. (Original panel: 3 IP67 buttons + rings + TM1637, DEC-006 — git-recoverable if ever resurrected.)
+- **Physical kill:** an **AC master switch on the Mean Well input** (or unplug) cuts the whole system → fail-dry, purely electrical, no firmware. It is the service disconnect *and* the phoneless emergency stop — a superset of the old "any button stops."
+- **On-box status:** a single **alive LED** (DevKitC onboard, GPIO2) blinks ~1 Hz to show the firmware is ticking. Read-only, gates nothing, and distinct from the ATtiny heartbeat. Run state / countdown / faults all live on the SPA status screen.
+  - *Hard line: phone-only. Do not re-add a panel as "convenience" — that's a deliberate V1.5 cut (DEC-019).*
 
 **Power:** **fixed AC→24V DC supply, installed in the tunnel** (mains-fed). Replaces the earlier solar-bank dependency for V1 — Tinkle no longer waits on the Red solar build. Solar can later supplement or replace the supply on the same 24V rail; no redesign.
 - Candidate: Mean Well **LRS-150-24** (24V, 6.5A / 150W) — covers the pump's ~5A peak with margin. LRS-100-24 (4.5A) is marginal against the pump; size up.
@@ -189,7 +189,7 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - Confirm mains reaches the east-end header (the HAF fan GFCIs suggest AC is present in the tunnel).
 - Rails off the 24V supply:
   - **24V (armed, via the safety relay)** → pump. The watchdog gates this — the fail-dry source gate (DEC-012).
-  - **24V (raw)** → the valve FETs (zones + both diverter legs; valves are 9–36V) and the 24V button LED rings. **No 12V buck.**
+  - **24V (raw)** → the valve FETs (zones + both diverter legs; valves are 9–36V). (The 24V button LED rings that used to share this rail are gone — DEC-019. No 12V buck either.)
   - **24→5V buck** → flow sensor (level-shift its pulse down to 3.3V for the GPIO).
   - **24→3.3V buck** → ESP32 + logic.
 - Inline fuse (~10A) on 24V output, TVS across 24V, reverse-polarity protection, a per-FET TVS (SMAJ30A) on each valve channel, flyback on the pump-relay coil (brownout insurance — mains here is brownout-prone).
@@ -226,8 +226,8 @@ The enemy is *runaway-on*. The **pump-power gate (DEC-012)** — armed only duri
 - **Sequencing:** zones run one at a time within a tunnel. Open the active zone valve, then pump-enable on; the pump self-manages run/stop via its pressure switch. There is no master valve (DEC-012).
 - **Fertigation:** each scheduled run carries a **fertigate flag**. On a fert run, energize the Dosatron leg open + the bypass leg closed before starting the pump; otherwise leave both diverter legs at rest (plain water flows). Default policy: one fert run/day even when multiple watering runs fire.
 - **Flow override + self-test:** the flow-sensor faults are mute-able from the web UI (DEC-015, software-only); the firmware periodically verifies valves rest closed for agronomic correctness (DEC-014).
-- **Manual:** momentary button → timed run at stored default duration → auto-stop. Any button = cancel all.
-- **Display:** TM1637 shows MM:SS countdown of the active run; blank/idle otherwise.
+- **Manual:** phone (SPA) → timed run at stored default duration → auto-stop; STOP ALL cancels. The AC master switch is the phoneless whole-system kill (DEC-019).
+- **Status:** the SPA status screen shows run state, active zone, and the MM:SS countdown; on the box, a single alive LED blinks ~1 Hz (DEC-019).
 - **Flow-sensor calibration:** pulses-per-gallon stored in flash, set via a **calibration mode** on the web UI — start a run into a known container, enter the measured volume, firmware divides counted pulses by volume and saves the K-factor. No reflash to recalibrate. Default seeded from datasheet, overwritten by the field value.
 - **Watchdog:** firmware cooperates with the independent hardware watchdog; max-runtime ceiling enforced in hardware regardless of firmware state.
 - **Config:** minimal local web page served by the ESP32 over Wi-Fi — set schedules, per-run fert flag, default manual durations, max-runtime. Phone joins Wi-Fi, edits in the field.
@@ -239,7 +239,7 @@ The enemy is *runaway-on*. The **pump-power gate (DEC-012)** — armed only duri
 ## 8. Expansion Provisions (build now, populate later)
 
 - Valve driver: ~8–16 low-side FET valve channels (5 populated: Z1/Z2/Z3 + NO clean leg + NC Dosatron leg), 3 pump-enable (1 used), 3 flow inputs (1 used). No H-bridges, no master channel.
-- 3 button + LED footprints (1 used). TM1637 display populated for Red.
+- No on-box panel (DEC-019, phone-only): the 3 button + LED-ring footprints and the TM1637 are dropped; the freed GPIO bank toward future zones. A single alive LED (GPIO2) remains.
 - Enclosure sized for full three-tunnel wiring and terminal blocks **plus the 24V supply** (the open-frame LRS lives inside the sealed box).
 - Adding a tunnel = mount a pump + valves + sensor, pull wire home to the controller, populate channels, update config. No board or firmware redesign.
 
@@ -266,10 +266,10 @@ These are the specs to nail during sourcing. Several feed the driver design, so 
 6. ~~**Diverter**~~ — **DONE (DEC-013):** two 2-way US Solid auto-return valves — **NO** clean leg + **NC** Dosatron leg — + the existing GASHER check valve on the Dosatron outlet. Unions/camlocks each side of the Dosatron (+ pump, filter).
 7. ~~**Valve driver**~~ — **DONE:** discrete IRLZ44N low-side FET per valve + SMAJ30A TVS drain-to-source. No H-bridge.
 8. ~~**Watchdog**~~ — **DONE:** ATtiny85, safety relay in series with **pump** power (the source gate).
-9. **ESP32 board variant** (DevKitC 38-pin candidate) and GPIO budget against channel count + TM1637.
+9. **ESP32 board variant** (DevKitC 38-pin candidate) and GPIO budget against channel count (DEC-019 freed 8 GPIO by cutting the panel — budget is comfortable).
 10. **Enclosure:** IP65+, sized for three-tunnel terminal blocks **+ the 24V supply inside**, clear/vented lid, DIN rail + glands.
-11. **Buck converters:** 24→5V, 24→3.3V modules (12V buck dropped — LED rings run on 24V).
-12. **IP67 buttons** with LED rings, ×3. **TM1637 4-digit display**, ×1.
+11. **Buck converters:** 24→5V, 24→3.3V modules (12V buck dropped; the LED-ring load that needed 24V is gone — DEC-019).
+12. ~~**IP67 buttons** with LED rings, ×3. **TM1637 4-digit display**, ×1.~~ — **dropped (DEC-019, phone-only).** Only the DevKitC onboard alive LED (GPIO2) remains; no added BOM.
 13. **Burial wire / waterproof connectors:** 18 AWG, conductor count per §5, gel-filled splices, with spares.
 14. ~~**Power dependency**~~ — **RESOLVED:** fixed AC→24V supply in the tunnel (Mean Well LRS-150-24 candidate), not the solar bank. Confirm mains reaches the east-end header.
 
