@@ -51,10 +51,11 @@ Open **`https://mill-dev.tail7e2bfd.ts.net:8443/`** on the phone (Tailscale on, 
 2. Within the first ~2 s, slide **FLOW on**.
    *Expected:* the run survives the 3 s grace (flow is present); Status shows live GPM
    (~2.0). The run holds for the ~10 s duration.
-3. Let it finish (or hit **STOP ALL**).
+3. Let it finish (or hit **STOP ALL**), and slide **FLOW off the instant the PUMP LED
+   goes dark** — on real hardware pump-off stops flow; the switch is the manual stand-in,
+   so leaving it on while idle trips **E2 (unexpected flow)**.
    *Expected:* **PUMP** LED off first (source cut), then **VALVE Z1** off (~1 s
    cap-return); back to IDLE; the last-run summary shows the gallons.
-4. Slide **FLOW off**.
 
 ## 2 — No-flow fault (E1) during a run
 
