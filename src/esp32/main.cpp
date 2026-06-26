@@ -205,7 +205,7 @@ void setup() {
     // 15 Hz square wave on a free pin (LEDC), looped back to FLOW_PIN in the
     // Wokwi diagram through the "FLOW on/off" slide switch (stock parts; no
     // custom chip, which the VS Code Wokwi runtime can't compile). 15 p/s at
-    // the 450 K seed reads ~2.0 GPM. The switch BOOTS QUIET (common to GND):
+    // the 1670 K seed reads ~0.54 GPM. The switch BOOTS QUIET (common to GND):
     // a flow-on boot would cross the 50-pulse idle threshold in ~3.3 s and
     // latch FAULT_UNEXPECTED_FLOW unprompted. Slide it up as a run starts (the
     // phone via the SPA); leave it up while idle to provoke E2 in the headless

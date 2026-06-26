@@ -35,9 +35,10 @@ namespace tinkle {
 class ValveRestMonitor {
 public:
     struct Config {
-        // §15 seeds — bench-confirm. The window must be long enough to see a slow
-        // dribble (at K≈450 p/gal, 0.1 GPM is <1 pulse/s); TINKLE_SIM shortens it
-        // so the check resolves inside a watchable sim session.
+        // §15 seeds — bench-confirm. The window spans several seconds so a slow
+        // dribble registers against maxRestPulses (at K≈1670 p/gal, 0.1 GPM ≈ 2.8
+        // pulse/s); TINKLE_SIM shortens it so the check resolves inside a watchable
+        // sim session.
 #ifdef TINKLE_SIM
         uint32_t windowMs = 3000;
 #else

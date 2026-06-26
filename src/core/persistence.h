@@ -68,9 +68,12 @@ public:
     static constexpr uint32_t DEFAULT_RUN_SEC    = 600;   // retires BUTTON_RUN_SEC (main.cpp)
 #endif
     static constexpr uint32_t DEFAULT_SW_MAX_SEC = 1200;  // matches RunConfig::swMaxRuntimeSec
-    // Flow K (§7): a placeholder datasheet seed for the hall sensor — calibration (#36)
-    // overwrites it. §15: defaults are seeds, not gospel; bench-confirm the real K.
-    static constexpr float    DEFAULT_PULSES_PER_GALLON = 450.0f;
+    // Flow K (§7): a placeholder datasheet seed for the Leridian 3/4" hall sensor —
+    // calibration (#36) overwrites it. From its F = (8.1·Q − 5) Hz curve (Q in L/min),
+    // pulses/gallon ≈ 1670 at our ~1.78 GPM (6.74 L/min) zone flow; the −5 offset makes
+    // it flow-dependent, so this is only a nominal seed. §15: defaults are seeds, not
+    // gospel; bench-confirm the real K.
+    static constexpr float    DEFAULT_PULSES_PER_GALLON = 1670.0f;
 
     // zoneCount is the runtime number of live zones (<= ValveConfig::MAX_ZONES). Injected,
     // not redefined — ValveConfig owns the count so the two never drift (DEC-008).
