@@ -88,10 +88,10 @@
   <!-- POWER top -->
   <rect class="blk pwr" x="20" y="18" width="150" height="54" rx="5"/>
   <text class="tb" x="95" y="40" text-anchor="middle">24V PSU</text>
-  <text class="tm" x="95" y="56" text-anchor="middle">LRS-150-24</text>
+  <text class="tm" x="95" y="56" text-anchor="middle">LRS-150-24 · ext.</text>
   <rect class="blk pwr" x="200" y="18" width="170" height="54" rx="5"/>
-  <text class="t" x="285" y="38" text-anchor="middle">Bucks 5 / 3.3V</text>
-  <text class="tm" x="285" y="56" text-anchor="middle">logic + LED + sensor rails</text>
+  <text class="t" x="285" y="38" text-anchor="middle">Buck 24→5V</text>
+  <text class="tm" x="285" y="56" text-anchor="middle">ESP32 (→3.3V onboard) + sensor</text>
   <line class="pw" x1="170" y1="45" x2="198" y2="45" marker-end="url(#arP)"/>
 
   <!-- ESP32 center -->
@@ -101,9 +101,9 @@
   <text class="t tw" x="335" y="284" text-anchor="middle" font-size="11">commands actuators</text>
   <text class="t tw" x="335" y="300" text-anchor="middle" font-size="11">runs schedule + web</text>
   <text class="t tw" x="335" y="316" text-anchor="middle" font-size="11">heartbeat → watchdog</text>
-  <!-- 3.3V feed to esp -->
+  <!-- 5V feed to esp (onboard reg makes 3.3V) -->
   <path class="pw" d="M285,72 L285,140 L240,140 L240,275 L248,275" marker-end="url(#arP)"/>
-  <text class="tm" x="210" y="135" fill="#b8761f">3.3V</text>
+  <text class="tm" x="210" y="135" fill="#b8761f">5V</text>
 
   <!-- LEFT inputs: phone (SPA), flow -->
   <rect class="blk" x="20" y="200" width="150" height="48" rx="5"/>
@@ -232,7 +232,7 @@
 
 <h2><span class="n">D</span>Wiring notes that bite if skipped</h2>
 <div class="cards">
-  <div class="ncard"><h3>Clamp coils + valve FETs</h3><p>1N4007 (or Schottky) flyback across the pump-relay coil and the safety-relay coil. Each <b>valve FET</b> gets a TVS (SMAJ30A) drain-to-source instead — the valves have an internal bridge rectifier, so a freewheel diode across the valve won't clamp the turn-off transient.</p></div>
+  <div class="ncard"><h3>Clamp coils + valve FETs</h3><p>1N4007 (or Schottky) flyback across the pump-relay coil and the safety-relay coil. Each <b>valve FET</b> gets a TVS (1.5KE30A, through-hole) drain-to-source instead — the valves have an internal bridge rectifier, so a freewheel diode across the valve won't clamp the turn-off transient.</p></div>
   <div class="ncard"><h3>Flow sensor level shift</h3><p>Power the sensor at 5V, but its pulse output swings to 5V — drop it to 3.3V (divider or the level-shifter module) before GPIO27, or you cook the input over time.</p></div>
   <div class="ncard"><h3>Input-only pins</h3><p>GPIO 34/35/36/39 have <b>no internal pull-ups</b>. Only <b>36</b> (ATtiny trip line) is used now — it needs an external 10k to 3.3V. 34/35/39 were the zone buttons, freed by DEC-019 (phone-only); add a pull-up only if you ever reuse one as an input.</p></div>
   <div class="ncard"><h3>Valves: on/off FET, no H-bridge</h3><p>Every valve is a 2-wire on/off motorized ball valve (NC zones + NC fert leg + NO clean leg). Energize the FET to actuate; the valve travels ~6–10 s, self-cuts at its limit, then holds with negligible draw. De-energize and a capacitor auto-returns it to rest. One GPIO per valve — no H-bridge, no IN1/IN2, no never-both-high.</p></div>
