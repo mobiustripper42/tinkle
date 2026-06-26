@@ -15,7 +15,9 @@
 #      2. VS Code: F1 -> "Wokwi: Start Simulator" # needs the (free) Wokwi extension license
 #      3. The firmware joins Wokwi-GUEST by itself (empty sim NVS -> TINKLE_SIM default
 #         creds), NTP syncs, and the SPA/API forward to the host at http://localhost:8180/
-#         (remote VPS: let VS Code forward 8180, or tunnel it). Drive the run from the
+#         (remote VPS: let VS Code forward 8180, or tunnel it). On mill-dev that 8180
+#         forward drops the SPA after ~20s — prefer the Private Gateway ([net] block
+#         below + test/sim/MANUAL.md), stable at http://localhost:9080/. Drive the run from the
 #         phone UI: Manual run -> pick a zone -> start; slide FLOW on as it runs; watch
 #         the valve + pump LEDs and the live countdown; STOP ALL to stop. See
 #         test/sim/MANUAL.md for the full walkthrough.
@@ -43,7 +45,7 @@ elf = ".pio/build/esp32_sim/firmware.elf"
 
 # Private Wokwi IoT Gateway (paid). The extension connects to a locally-run gateway
 # over WebSocket; run the Linux gateway on THIS host (it prints "Listening on TCP
-# port 9011") BEFORE starting the sim, or the sim errors "Failed to connect to the
+# Port 9011") BEFORE starting the sim, or the sim errors "Failed to connect to the
 # IoT Gateway". With it, the ESP32 gets 10.13.37.2 (vs 10.10.0.2 public), incoming
 # connections are stable (real keep-alive — no net.forward socket churn), and the SPA
 # is reachable at http://localhost:9080/ (the gateway forwards 9080 -> target:80).

@@ -5,7 +5,7 @@ split this tier in two:
 
 | Mode | Driver | What it covers | Automatable? |
 |------|--------|----------------|--------------|
-| **A. Interactive** (VS Code Wokwi) | the **SPA**, over `net.forward` 8180→80 | the full run path — start/stop a run, fertigate, calibrate, watch the live countdown + valve/pump LEDs; provoke E1/E2 with the FLOW switch | no (manual — see `MANUAL.md`) |
+| **A. Interactive** (VS Code Wokwi) | the **SPA**, over the Private Gateway (`9080`, stable on mill-dev) or `net.forward` 8180→80 | the full run path — start/stop a run, fertigate, calibrate, watch the live countdown + valve/pump LEDs; provoke E1/E2 with the FLOW switch | no (manual — see `MANUAL.md`) |
 | **B. Headless** (`wokwi-cli` + `run.sh`) | the **FLOW switch** + `expect-pin` | the fail-dry checks that need **no run**: boot-safe-state and idle-unexpected-flow | yes |
 
 **Why the split.** The old (button-driven) scenarios triggered runs by pressing
@@ -21,9 +21,10 @@ that need no run, asserted via `expect-pin` on the actuator GPIOs.
 ## A — Interactive SPA session (primary, #62)
 
 The end-to-end "schedule/manual start → run → stop" walkthrough lives in
-**`MANUAL.md`**. In short: `pio run -e esp32_sim`, start the Wokwi sim in VS Code, let
-VS Code forward `localhost:8180`, open the SPA, and drive a run from the phone UI while
-watching the valve + pump LEDs and the FLOW switch.
+**`MANUAL.md`**. In short: `pio run -e esp32_sim`, start the Wokwi sim in VS Code, reach
+the SPA (on mill-dev prefer the Private Gateway at `localhost:9080` — stable; the
+`localhost:8180` forward works elsewhere but drops after ~20s), and drive a run from the
+phone UI while watching the valve + pump LEDs and the FLOW switch.
 
 ## B — Headless checks
 
