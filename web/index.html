@@ -66,6 +66,9 @@ input[type=checkbox]{width:1.6rem; height:1.6rem; min-height:0}
 .muted{color:var(--dim); font-size:.9rem}
 .ok-flash{color:var(--go); font-weight:700}
 .err-flash{color:var(--stop); font-weight:700}
+.dirtybar{display:none; align-items:center; justify-content:space-between; gap:.5rem; margin:.4rem 0}
+.dirtybar.show{display:flex}
+.dirty-tag{color:var(--warn); font-weight:700}
 
 #stopall{position:fixed; left:0; right:0; bottom:4.25rem; padding:0 .75rem; z-index:5}
 #stopall button{max-width:34rem; margin:0 auto; display:block; font-size:1.3rem; min-height:3.6rem;
@@ -134,6 +137,10 @@ nav .ico{display:block; font-size:1.3rem}
   <div id="sched-list"></div>
   <button id="sched-add">+ Add entry</button>
   <button class="go" id="sched-save">SAVE SCHEDULE</button>
+  <div class="dirtybar" id="sched-dirtybar">
+    <span class="dirty-tag">&#9679; Unsaved changes</span>
+    <button class="small shrink" id="sched-discard">Discard</button>
+  </div>
   <div id="sched-msg" class="muted" role="status"></div>
   <p class="muted">Saving replaces the whole schedule on the controller. The schedule
   runs from the controller's flash — phone and WiFi not required.</p>
@@ -163,6 +170,10 @@ nav .ico{display:block; font-size:1.3rem}
   leave it blank only for an open network. Applies at next power-up; if the join
   fails, the controller falls back to the Tinkle-Setup hotspot.</p>
   <button class="go" id="set-save">SAVE SETTINGS</button>
+  <div class="dirtybar" id="set-dirtybar">
+    <span class="dirty-tag">&#9679; Unsaved changes</span>
+    <button class="small shrink" id="set-discard">Discard</button>
+  </div>
   <div id="set-msg" class="muted" role="status"></div>
 </section>
 
@@ -206,7 +217,8 @@ nav .ico{display:block; font-size:1.3rem}
   <div id="fault-active" class="card">No fault.</div>
   <button class="go" id="fault-clear">CLEAR FAULT</button>
   <div id="fault-clear-msg" class="muted" role="status"></div>
-  <h2>Maintenance flags</h2>
+  <h2>Valve service alerts</h2>
+  <p class="muted">A valve that isn't sealing shut after a run shows here — service it (E6).</p>
   <div id="rest-flags" class="card">None.</div>
   <h2>Recent fault log</h2>
   <div id="fault-log" class="card">Empty.</div>
@@ -283,6 +295,10 @@ let SET = null;                     // last /api/settings
 let H = null;                       // last /api/history (lazy; kept for graceful degrade)
 let schedDirty = false;             // unsaved schedule edits — don't clobber on tab switch
 let setDirty   = false;             // unsaved settings edits
+// Flip a dirty flag AND its "● Unsaved changes" bar together (#82). Every edit site goes
+// through these so the indicator + Discard button can never drift out of sync with the flag.
+function schedSetDirty(v) { schedDirty = v; $('#sched-dirtybar').classList.toggle('show', v); }
+function setSetDirty(v)   { setDirty   = v; $('#set-dirtybar').classList.toggle('show', v); }
 
 async function poll() {
   const s = await api('/api/status');
@@ -406,20 +422,35 @@ async function loadHistory() {
 $('#hist-refresh').addEventListener('click', loadHistory);
 
 /* ---- navigation ---- */
+let current = 'home';                                       // active screen (for the dirty guard)
 function show(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   $('#scr-'+name).classList.add('active');
   document.querySelectorAll('nav button').forEach(b =>
     b.classList.toggle('active', b.dataset.scr === name));
+  // STOP ALL belongs where actuation happens — hide it on the config screens (#81).
+  $('#stopall').style.display = (name === 'sched' || name === 'set') ? 'none' : '';
+  current = name;
   if (name === 'sched' && !schedDirty) loadSchedule();      // never clobber edits
   if ((name === 'set' || name === 'run') && !setDirty) loadSettings();
   if (name === 'history') loadHistory();                    // lazy fetch on open (not polled)
 }
+// Guard a tab switch that would abandon unsaved Schedule/Settings edits (#82). OK reverts the
+// leaving screen in place from its cached device copy (offline-safe — no fetch dependency).
+function requestShow(name) {
+  const dirty = (current === 'sched' && schedDirty) || (current === 'set' && setDirty);
+  if (dirty && name !== current) {
+    if (!confirm('Discard unsaved changes?')) return;       // Cancel — stay put
+    if (current === 'sched') discardSched();                // revert in place (offline-safe)
+    if (current === 'set')   discardSettings();
+  }
+  show(name);
+}
 document.querySelectorAll('nav button').forEach(b =>
-  b.addEventListener('click', () => show(b.dataset.scr)));
-$('#fault-banner').addEventListener('click', () => show('faults'));
+  b.addEventListener('click', () => requestShow(b.dataset.scr)));
+$('#fault-banner').addEventListener('click', () => requestShow('faults'));
 
-/* ---- STOP ALL (always visible, never confirms) ---- */
+/* ---- STOP ALL (hidden on the config screens, #81; never confirms) ---- */
 $('#stop-btn').addEventListener('click', () => api('/api/stop', {}));
 
 /* ---- manual run ---- */
@@ -455,17 +486,23 @@ $('#run-go').addEventListener('click', async () => {
 
 /* ---- schedule ---- */
 let sched = [];
+let schedSaved = [];                          // last device-known schedule, for Discard (#82)
+const clone = x => JSON.parse(JSON.stringify(x));
 const DAY_CH = ['S','M','T','W','T','F','S'];
 async function loadSchedule() {
   const r = await api('/api/schedule');
-  if (r.ok) { sched = r.entries || []; schedDirty = false; renderSched(); }
+  if (r.ok) { sched = r.entries || []; schedSaved = clone(sched); schedSetDirty(false); renderSched(); }
 }
+// Revert in place from the cached device copy — no fetch, so Discard works offline and the
+// nav guard can never leave abandoned edits live behind a cleared flag (#82).
+function discardSched() { sched = clone(schedSaved); schedSetDirty(false); renderSched(); }
+$('#sched-discard').addEventListener('click', discardSched);
 // Any interaction inside the list is an edit (inputs, day toggles, deletes).
-$('#sched-list').addEventListener('input',  () => schedDirty = true);
-$('#sched-list').addEventListener('change', () => schedDirty = true);
+$('#sched-list').addEventListener('input',  () => schedSetDirty(true));
+$('#sched-list').addEventListener('change', () => schedSetDirty(true));
 $('#sched-list').addEventListener('click', e => {
   if (e.target.dataset.day !== undefined || e.target.hasAttribute('data-del'))
-    schedDirty = true;
+    schedSetDirty(true);
 });
 function renderSched() {
   const host = $('#sched-list');
@@ -519,7 +556,7 @@ function renderSched() {
 $('#sched-add').addEventListener('click', () => {
   sched.push({ zoneIndex:0, hour:6, minute:0, durationSec:600, daysMask:127,
                fertOverride:0, enabled:true });
-  schedDirty = true;
+  schedSetDirty(true);
   renderSched();
 });
 $('#sched-save').addEventListener('click', async () => {
@@ -530,17 +567,16 @@ $('#sched-save').addEventListener('click', async () => {
     flash('#sched-msg', 'Every entry needs a duration (1–120 minutes).', false); return;
   }
   const r = await api('/api/schedule', { entries: sched });
-  if (r.ok) schedDirty = false;
+  if (r.ok) { schedSetDirty(false); schedSaved = clone(sched); }   // saved copy is now the device copy
   flash('#sched-msg', r.ok ? 'Saved ' + r.count + ' entries.'
                            : 'Refused: ' + (r.error || r.code), r.ok);
 });
 
 /* ---- settings ---- */
-async function loadSettings() {
-  const r = await api('/api/settings');
-  if (!r.ok) return;
-  SET = r;
-  setDirty = false;
+// Render the form from the cached SET (the device copy). Programmatic value sets fire no
+// input events, so this never marks the form dirty.
+function populateSettings() {
+  const r = SET;
   fillZoneSelect($('#run-zone'));
   fillZoneSelect($('#cal-zone'));
   const host = $('#set-zones');
@@ -559,7 +595,17 @@ async function loadSettings() {
   $('#set-ssid').value = (r.wifi && r.wifi.ssid) || '';
   $('#set-pass').value = '';
 }
-$('#scr-set').addEventListener('input', () => setDirty = true);
+async function loadSettings() {
+  const r = await api('/api/settings');
+  if (!r.ok) return;
+  SET = r;
+  populateSettings();
+  setSetDirty(false);
+}
+// Revert in place from the cached SET — offline-safe, mirrors discardSched (#82).
+function discardSettings() { if (SET) { populateSettings(); setSetDirty(false); } }
+$('#scr-set').addEventListener('input', () => setSetDirty(true));
+$('#set-discard').addEventListener('click', discardSettings);
 $('#set-save').addEventListener('click', async () => {
   const mins = Array.prototype.map.call(
     document.querySelectorAll('#set-zones input'), i => +i.value);
@@ -575,7 +621,7 @@ $('#set-save').addEventListener('click', async () => {
   if (ssid && (!SET || !SET.wifi || ssid !== SET.wifi.ssid || $('#set-pass').value))
     body.wifi = { ssid: ssid, pass: $('#set-pass').value };
   const r = await api('/api/settings', body);
-  if (r.ok) { SET = r; setDirty = false; }
+  if (r.ok) { SET = r; setSetDirty(false); }
   flash('#set-msg', r.ok ? 'Saved.' + (r.wifiNote ? ' WiFi applies at next boot.' : '')
                          : 'Refused: ' + (r.error || r.code), r.ok);
 });
