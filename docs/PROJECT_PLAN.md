@@ -157,10 +157,11 @@ rather than a 1970 wall-clock. SPA renders wall-clock when the bit is set, else 
 
 **Run-history subtotal: 13 pts.** Batches: firmware (4.6+4.7) one PR, SPA (4.8) one PR, after the 4.5 gate.
 
-> **Separate bug (not in this unit):** [#72](https://github.com/mobiustripper42/tinkle/issues/72) —
-> §8 lists the fault log as "ring buffer (~16 entries) … survives reboot," but `FaultManager` is
-> **RAM-only, `LOG_SIZE = 8`, millis-domain** — not persisted, half the depth. Fix: either persist
-> the fault ring (mirroring `runlog`) or correct §8's wording. Kept out of the 13-pt estimate.
+> **Separate bug (resolved):** [#72](https://github.com/mobiustripper42/tinkle/issues/72) —
+> §8 claimed the fault log was a "ring buffer (~16 entries) … survives reboot," but `FaultManager` is
+> **RAM-only, `LOG_SIZE = 8`, millis-domain** — not persisted, half the depth. **Resolved by correcting
+> §8's wording** (the honest fix); the actual persistence feature (epoch-stamped entries mirroring
+> `runlog`) is deferred to [#90](https://github.com/mobiustripper42/tinkle/issues/90). Kept out of the 13-pt estimate.
 
 ---
 
