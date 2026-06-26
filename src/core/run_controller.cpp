@@ -2,22 +2,42 @@
 
 namespace tinkle {
 
-// Field assignment, not brace-aggregate-init: RunSummary carries default member
-// initializers, so it's only an aggregate under C++14+. The firmware builds at
-// -std=gnu++11 (arduino-esp32 2.0.x), where `RunSummary{a, b, ...}` is ill-formed.
-// One helper keeps the two summary sites in sync and C++11-clean.
-static RunSummary makeSummary(RunSummary::Result result, const RunRequest& req, Fault fault) {
-    RunSummary s;
-    s.result      = result;
-    s.zone        = req.zoneIndex;
-    s.durationSec = req.durationSec;
-    s.fertigate   = req.fertigate;
-    s.fault       = fault;
-    return s;
-}
-
 RunController::RunController(ValveDriver& valve, const RunConfig& cfg)
     : valve_(valve), cfg_(cfg) {}
+
+// Push the current run onto the history ring (DEC-018). Field assignment, not brace-init:
+// RunEntry carries default member initializers, so `RunEntry{...}` is ill-formed at the
+// firmware's -std=gnu++11 (arduino-esp32 2.0.x). centigallons + startEpoch come from the
+// pending metrics main pushed in (noteRunVolume / noteRunStart); the rest is RunController's
+// own. One helper keeps the SETTLE and fault sites in sync. Marks the log dirty for the
+// debounced NVS write in main.
+void RunController::logRun(RunResult result, Fault fault) {
+    RunEntry e;
+    e.startEpoch    = pendingStartEpoch_;
+    e.zoneIndex     = current_.zoneIndex;
+    e.durationSec   = current_.durationSec > 0xFFFFu ? 0xFFFFu
+                                                     : (uint16_t)current_.durationSec;
+    e.centigallons  = pendingCentigallons_;
+    e.fertigate     = current_.fertigate;
+    e.result        = result;
+    e.clockWasValid = pendingClockValid_;
+    e.faultCode     = (uint8_t)fault;
+    runlog_.push(e);
+    runLogDirty_ = true;
+}
+
+void RunController::resetRunMetrics() {
+    pendingStartEpoch_   = 0;
+    pendingClockValid_   = false;
+    pendingCentigallons_ = 0;
+}
+
+void RunController::noteRunStart(uint32_t startEpoch, bool clockValid) {
+    // Pre-2025 epoch-sanity guard (DEC-018): a pre-NTP free-run epoch is stored but flagged
+    // invalid, so the SPA renders it relative-to-uptime rather than a bogus ~1970 wall-clock.
+    pendingStartEpoch_ = startEpoch;
+    pendingClockValid_ = clockValid && startEpoch >= RUNLOG_MIN_VALID_EPOCH;
+}
 
 void RunController::begin(uint32_t nowMs) {
     valve_.begin();             // configure every actuator pin as an output + safe levels
@@ -26,6 +46,7 @@ void RunController::begin(uint32_t nowMs) {
     fault_  = Fault::None;
     qHead_ = qCount_ = 0;
     stopping_ = false;
+    resetRunMetrics();          // the ring itself is rehydrated from NVS by main, not here
 }
 
 uint32_t RunController::effectiveDurationMs() const {
@@ -45,6 +66,7 @@ bool RunController::requestRun(const RunRequest& req, uint32_t nowMs) {
     if (state_ == RunState::Idle) {
         current_ = req;
         stopping_ = false;
+        resetRunMetrics();
         enter(RunState::PrepDiverter, nowMs);
         return true;
     }
@@ -61,6 +83,7 @@ bool RunController::startNext(uint32_t nowMs) {
     qHead_ = (qHead_ + 1) % RunConfig::MAX_QUEUE;
     --qCount_;
     stopping_ = false;
+    resetRunMetrics();
     enter(RunState::PrepDiverter, nowMs);
     return true;
 }
@@ -85,7 +108,7 @@ void RunController::raiseFault(Fault code, uint32_t nowMs) {
     valve_.safeState(nowMs);                        // pump off -> zones de-energized -> diverter plain
     fault_ = code;
     qHead_ = qCount_ = 0;
-    lastRun_ = makeSummary(RunSummary::Result::Faulted, current_, fault_);
+    logRun(RunResult::Faulted, fault_);             // faulted runs land in the ring too (DEC-018)
     state_ = RunState::Fault;
     stateStartMs_ = nowMs;
 }
@@ -119,10 +142,8 @@ void RunController::enter(RunState s, uint32_t nowMs) {
         case RunState::StopPump:    valve_.pumpOff();                           break;
         case RunState::CloseZone:   valve_.closeZone(current_.zoneIndex, nowMs);break;
         case RunState::Settle:
-            // Log the run outcome (§4 step 9). Diverter left as-is.
-            lastRun_ = makeSummary(
-                stopping_ ? RunSummary::Result::Stopped : RunSummary::Result::Completed,
-                current_, Fault::None);
+            // Push the run onto the history ring (§4 step 7 / DEC-018). Diverter left as-is.
+            logRun(stopping_ ? RunResult::Stopped : RunResult::Completed, Fault::None);
             break;
         default: break;
     }

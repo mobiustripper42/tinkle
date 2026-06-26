@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "valve_driver.h"
+#include "run_log.h"     // RunLog ring + RunEntry — the run-history store (DEC-018)
 
 // RunController — the run state machine (firmware spec §4) and the ONLY module
 // allowed to command ValveDriver. Everything else (scheduler, buttons, web API)
@@ -51,18 +52,14 @@ struct IRunSink {
     virtual ~IRunSink() = default;
 };
 
-// Outcome of the most recent run, for logging / status (§4 step 9). Measured gallons
-// live in FlowMonitor (§7, #34) — kept out of here to preserve the RunController <-> flow
-// decoupling; main logs the per-run volume on the RUNNING edge. The Phase 4 status API can
-// join the two if a single summary record is wanted.
-struct RunSummary {
-    enum class Result : uint8_t { None, Completed, Stopped, Faulted };
-    Result   result      = Result::None;
-    uint8_t  zone        = 0;
-    uint32_t durationSec = 0;
-    bool     fertigate   = false;
-    Fault    fault       = Fault::None;
-};
+// The run outcome (§4 step 9) is logged into the RunLog ring (DEC-018), not a standalone
+// summary: each run pushes a RunEntry at SETTLE (and on a fault), and lastRun() is the ring
+// HEAD — one source of truth. The two data RunController can't see for itself are pushed in,
+// preserving the existing decoupling:
+//   - the per-run volume (centigallons) lives in FlowMonitor (§7, #34) — main pushes it via
+//     noteRunVolume() so this stays free of any flow dependency;
+//   - the wall-clock start epoch lives in Clock (§13) — main pushes it via noteRunStart().
+// Same push-in idiom as raiseFault(): detectors/time push toward RunController, never pulled.
 
 struct RunConfig {
     static constexpr uint8_t MAX_QUEUE = 4;
@@ -109,6 +106,16 @@ public:
     // arrives mid-run still comes in via raiseFault().)
     void setWatchdogTripped(bool tripped) { watchdogTripped_ = tripped; }
 
+    // RunLog seams (DEC-018). main feeds the two external data the run entry needs:
+    // noteRunStart() on the RUNNING-entry edge — the wall-clock start epoch and whether NTP
+    // had synced; noteRunVolume() each tick while RUNNING — the live per-run centigallons,
+    // so a fault mid-run still records a fresh volume, not a stale one. Both are stashed and
+    // consumed when the entry is pushed at SETTLE / on a fault. The pre-2025 epoch-sanity
+    // guard lives here: an implausible start epoch is logged with clockWasValid CLEAR, never
+    // as a 1970 wall-clock (DEC-018).
+    void noteRunStart(uint32_t startEpoch, bool clockValid);
+    void noteRunVolume(uint16_t centigallons) { pendingCentigallons_ = centigallons; }
+
     // Cooperative, non-blocking. Ticks the ValveDriver and advances at most one
     // state transition (gated by actuator timers / durations). Call every loop.
     void tick(uint32_t nowMs);
@@ -124,12 +131,24 @@ public:
     bool              activeFertigate() const { return activeZone() >= 0 && current_.fertigate; }
     uint32_t          remainingSec(uint32_t nowMs) const; // 0 unless RUNNING
     uint8_t           queueDepth()   const { return qCount_; }
-    const RunSummary& lastRun()      const { return lastRun_; }
+    // The "last run" is the ring head (DEC-018) — one source of truth, persisted with it.
+    const RunEntry&   lastRun()      const { return runlog_.head(); }
+
+    // Run-history ring (DEC-018). runLog() is the read view (status head today, /api/history
+    // next, #70); runLogRef() is the boot-only rehydrate seam — main fills it from the NVS
+    // blob before the loop runs. runLogDirty() drives the debounced NVS write in main: set on
+    // every push, cleared by markRunLogPersisted() once the blob is written.
+    const RunLog& runLog()           const { return runlog_; }
+    RunLog&       runLogRef()              { return runlog_; }   // boot rehydrate only
+    bool          runLogDirty()      const { return runLogDirty_; }
+    void          markRunLogPersisted()    { runLogDirty_ = false; }
 
 private:
     void enter(RunState s, uint32_t nowMs);            // perform entry actions
     bool startNext(uint32_t nowMs);                    // dequeue -> begin a run
     uint32_t effectiveDurationMs() const;              // min(duration, swMax) in ms
+    void logRun(RunResult result, Fault fault);        // push the current run onto the ring
+    void resetRunMetrics();                            // clear pending epoch/volume at run start
 
     ValveDriver& valve_;
     RunConfig    cfg_;
@@ -146,7 +165,14 @@ private:
     uint8_t    qHead_  = 0;
     uint8_t    qCount_ = 0;
 
-    RunSummary lastRun_ = {};
+    // Run history (DEC-018). The ring is the sole "last run" store; lastRun() reads its head.
+    RunLog   runlog_;
+    bool     runLogDirty_ = false;          // a push happened, awaiting the debounced NVS write
+    // Metrics pushed in by main and consumed when an entry is logged. Reset at each run start
+    // so a fault before RUNNING logs startEpoch=0 / volume=0 (renders relative, per DEC-018).
+    uint32_t pendingStartEpoch_   = 0;
+    bool     pendingClockValid_   = false;
+    uint16_t pendingCentigallons_ = 0;
 };
 
 } // namespace tinkle

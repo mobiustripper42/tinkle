@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "valve_driver.h"   // ValveConfig::MAX_ZONES — the single source of zone capacity
 #include "scheduler.h"      // ScheduleEntry + pack helpers — the §8 schedule blob (Phase 4)
+#include "run_log.h"        // RunLog + RUNLOG_BLOB_BYTES — the §8 run-history blob (DEC-018)
 
 // Persistence — NVS/Preferences read/write of stored state (firmware spec §8, DEC-008).
 //
@@ -106,6 +107,14 @@ public:
     // (<= cap); 0 when no schedule is stored.
     uint8_t loadScheduleEntries(ScheduleEntry* out, uint8_t cap);
     void    saveScheduleEntries(const ScheduleEntry* entries, uint8_t count);
+
+    // --- run-history blob (§8/§15; DEC-018) ---
+    // One packed `runlog` blob = the whole ring (mirrors the `sched` blob — replaced
+    // atomically each write, not per-entry keys). Additive under DEC-008: new key, no
+    // schema_ver bump; absent => empty ring (read-with-default). main owns the debounced
+    // write cadence (run-rate), the same save-on-edit split the schedule uses.
+    void loadRunLog(RunLog& log);
+    void saveRunLog(const RunLog& log);
 
 private:
     // Build the per-zone key "z<N>_dur" into buf (capacity must be >= 8; NVS keys cap at
