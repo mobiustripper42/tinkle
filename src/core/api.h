@@ -81,6 +81,7 @@ public:
     // Wire-name helpers (status strings; also used by tests).
     static const char* stateName(RunState s);
     static const char* faultName(Fault f);
+    static const char* resultName(RunResult r);   // run outcome (lastRun + history, DEC-018)
 
 private:
     int err(JsonDocument& out, int code, const char* msg);

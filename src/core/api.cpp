@@ -30,14 +30,7 @@ const char* Api::faultName(Fault f) {
     }
 }
 
-int Api::err(JsonDocument& out, int code, const char* msg) {
-    out["error"] = msg;
-    return code;
-}
-
-// Run-outcome wire name (DEC-018 history). File-static — the run-result enum lives in
-// run_log.h and is only stringified here and at the /api/status lastRun site.
-static const char* runResultName(RunResult r) {
+const char* Api::resultName(RunResult r) {
     switch (r) {
         case RunResult::None:      return "none";
         case RunResult::Completed: return "completed";
@@ -45,6 +38,11 @@ static const char* runResultName(RunResult r) {
         case RunResult::Faulted:   return "faulted";
     }
     return "?";
+}
+
+int Api::err(JsonDocument& out, int code, const char* msg) {
+    out["error"] = msg;
+    return code;
 }
 
 // ---------------------------------------------------------------------------- GET
@@ -64,12 +62,7 @@ int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
 
     const RunEntry& lr = d_.run.lastRun();              // the run-history ring head (DEC-018)
     JsonObject last = out["lastRun"].to<JsonObject>();
-    switch (lr.result) {
-        case RunResult::None:      last["result"] = "none";      break;
-        case RunResult::Completed: last["result"] = "completed"; break;
-        case RunResult::Stopped:   last["result"] = "stopped";   break;
-        case RunResult::Faulted:   last["result"] = "faulted";   break;
-    }
+    last["result"]      = resultName(lr.result);
     last["zone"]        = lr.zoneIndex;
     last["durationSec"] = lr.durationSec;
     last["fertigate"]   = lr.fertigate;
@@ -123,7 +116,7 @@ int Api::getHistory(JsonDocument& out, uint32_t nowMs) {
         o["durationSec"]   = e.durationSec;
         o["gallons"]       = e.centigallons / 100.0f;       // u16 hundredths -> gallons
         o["fertigate"]     = e.fertigate;
-        o["result"]        = runResultName(e.result);
+        o["result"]        = resultName(e.result);
         o["fault"]         = faultName((Fault)e.faultCode);
     }
 
@@ -139,7 +132,10 @@ int Api::getHistory(JsonDocument& out, uint32_t nowMs) {
     }
 
     out["clockValid"] = d_.clock.valid();                  // wall-clock vs relative render flag
-    out["uptimeMs"]   = nowMs;                             // ago(uptimeMs - atMs) for the faults
+    // uptimeMs dates the millis-domain fault ring via ago(uptimeMs - atMs). Emitted here in
+    // core (not the WebServer glue, where /api/status adds it) so the full history shape is
+    // host-tested; the run ring carries its own epoch and ignores this.
+    out["uptimeMs"]   = nowMs;
     return 200;
 }
 

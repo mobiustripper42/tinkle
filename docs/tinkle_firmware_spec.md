@@ -237,7 +237,7 @@ Endpoints:
 - `POST /api/stop` → cancel all, unwind to safe state.
 - `POST /api/calibrate/start` `{zoneIndex}` · `POST /api/calibrate/finish` `{measuredGallons}`.
 - `POST /api/fault/clear` → clear latched faults (only succeeds if condition resolved).
-- `GET /api/history` → the `RunLog` run ring (DEC-018) + the fault-log ring + a clock-valid flag. **Read-only** — no FAULT gate, no range validation. Lazy-fetched by the History screen, **not** on the `/api/status` poll. Payload ≈ 3 KB at full depth.
+- `GET /api/history` → the `RunLog` run ring (DEC-018) + the fault-log ring + a clock-valid flag. **Read-only** — no FAULT gate, no range validation. Lazy-fetched by the History screen, **not** on the `/api/status` poll. Payload ≈ 6 KB worst case at full depth (32 runs + the fault ring), still well under the transfer budget.
 
 All mutating endpoints validate ranges and reject if currently in FAULT (except `/stop` and `/fault/clear`). `GET /api/history` is read-only and ungated.
 
