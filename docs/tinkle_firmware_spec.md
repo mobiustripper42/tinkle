@@ -176,10 +176,13 @@ Survives reboot and power loss:
 - Run log: `RunLog` ring (`RUNLOG_DEPTH` = 32 entries) as one packed `runlog` blob — 11 B/entry
   `{startEpoch, zone, durationSec, centigallons, flags(fert|result|clockWasValid), faultCode}`,
   write-on-change + debounce, rehydrate read-with-default (DEC-018; additive under DEC-008).
-- Fault log: ring buffer of `{ts, code}`. **⚠ Doc drift — not actually persisted:** the shipped
-  `FaultManager` ring is RAM-only, `LOG_SIZE = 8`, millis-domain, lost on reboot. Tracked as a `bug`
-  ([#72](https://github.com/mobiustripper42/tinkle/issues/72)) — persist it (mirroring `runlog`) or
-  correct this line; DEC-018 leaves it as-is and `/api/history` serializes the RAM ring.
+
+**Not persisted — the fault log is RAM-only by decision (#72).** `FaultManager` keeps a fixed ring
+(`LOG_SIZE = 8`, `{code, atMs}` millis-domain) that resets every boot; it is surfaced **live** via
+`/api/status` (§14) and `/api/history` (DEC-018) during uptime, never stored. Making it survive reboot
+would mean epoch-stamping each entry (millis timestamps are meaningless after a reboot) and
+mirroring the `runlog` blob — deferred as a feature to
+[#90](https://github.com/mobiustripper42/tinkle/issues/90).
 
 (No cached diverter position — the two-leg NO/NC diverter has no hold-state to remember, DEC-013.)
 
