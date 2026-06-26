@@ -77,6 +77,10 @@ nav button.active{color:#fff; font-weight:800; border-top:3px solid #fff}
 nav .ico{display:block; font-size:1.3rem}
 .fault-item{border-left:.4rem solid var(--stop); padding-left:.6rem; margin:.5rem 0}
 .flag-item{border-left:.4rem solid var(--warn); padding-left:.6rem; margin:.5rem 0}
+.hist-row{padding:.45rem 0; border-bottom:1px solid var(--line)}
+.hist-row:last-child{border-bottom:none}
+.hist-when{font-weight:700}
+.hist-row.faulted .hist-when{color:var(--stop)}
 </style>
 </head>
 <body>
@@ -208,6 +212,18 @@ nav .ico{display:block; font-size:1.3rem}
   <div id="fault-log" class="card">Empty.</div>
 </section>
 
+<!-- 7 · Run + fault history (DEC-018) -->
+<section id="scr-history" class="screen">
+  <div class="row">
+    <h1>History</h1>
+    <button class="small shrink" id="hist-refresh">&#8635; Refresh</button>
+  </div>
+  <h2>Recent runs</h2>
+  <div id="hist-runs" class="card">—</div>
+  <h2>Recent faults</h2>
+  <div id="hist-faults" class="card">—</div>
+</section>
+
 </main>
 
 <div id="stopall"><button class="danger" id="stop-btn">&#9632; STOP ALL</button></div>
@@ -219,6 +235,7 @@ nav .ico{display:block; font-size:1.3rem}
   <button data-scr="set"    ><span class="ico">&#9881;</span>Setup</button>
   <button data-scr="cal"    ><span class="ico">&#128167;</span>Cal</button>
   <button data-scr="faults" ><span class="ico">&#9888;</span>Faults</button>
+  <button data-scr="history"><span class="ico">&#128220;</span>History</button>
 </nav>
 
 <script>
@@ -263,6 +280,7 @@ async function api(path, body) {
 let S = null;                       // last /api/status
 let statusAt = 0;                   // Date.now() when S landed
 let SET = null;                     // last /api/settings
+let H = null;                       // last /api/history (lazy; kept for graceful degrade)
 let schedDirty = false;             // unsaved schedule edits — don't clobber on tab switch
 let setDirty   = false;             // unsaved settings edits
 
@@ -344,6 +362,49 @@ function renderCal() {
 
 function renderAll() { renderBanners(); renderHome(); renderFaults(); renderCal(); }
 
+/* ---- history (DEC-018; lazy-fetched on open + Refresh, never polled) ---- */
+// startEpoch is the device's LOCAL epoch (the firmware hands Clock local time), so format
+// with getUTC* to show the wall-clock the device intended, no browser-TZ shift.
+function histWhen(r) {
+  if (!r.clockWasValid) return 'unsynced';              // pre-NTP run: no datable timestamp (#69 record)
+  const d = new Date(r.startEpoch * 1000), p = n => String(n).padStart(2,'0');
+  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
+  return mo + ' ' + d.getUTCDate() + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes());
+}
+function faultCode(name) {                              // 'noFlow' -> 'E1' via the FAULT_TEXT map
+  const m = (FAULT_TEXT[name] || '').match(/^E\d/);
+  return m ? m[0] : name;
+}
+function runResult(r) {
+  return r.result === 'completed' ? '✓ completed'
+       : r.result === 'stopped'   ? 'stopped'
+       : r.result === 'faulted'   ? '⚠ faulted (' + faultCode(r.fault) + ')'
+       : r.result;
+}
+function renderHistory() {
+  const runs = (H && H.runs) || [];
+  $('#hist-runs').innerHTML = runs.length
+    ? runs.map(r =>
+        '<div class="hist-row' + (r.result === 'faulted' ? ' faulted' : '') + '">' +
+          '<div class="hist-when">' + histWhen(r) + '</div>' +
+          '<div class="muted">' + zoneName(r.zone) + ' · ' + mmss(r.durationSec) +
+            ' · ' + (+r.gallons).toFixed(2) + ' gal · ' +
+            (r.fertigate ? 'fert' : 'plain') + ' · ' + runResult(r) + '</div>' +
+        '</div>').join('')
+    : (H ? 'No runs yet.' : 'Couldn’t load history.');
+  const faults = (H && H.faults) || [];
+  $('#hist-faults').innerHTML = faults.length
+    ? faults.map(e => '<div class="fault-item">' + e.code + ' · ' +
+        ago((H.uptimeMs || 0) - e.atMs) + '</div>').join('')
+    : (H ? 'No faults logged.' : '—');
+}
+async function loadHistory() {
+  const r = await api('/api/history');
+  if (r.ok) H = r;                                      // keep last-known on failure (degrade)
+  renderHistory();
+}
+$('#hist-refresh').addEventListener('click', loadHistory);
+
 /* ---- navigation ---- */
 function show(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -352,6 +413,7 @@ function show(name) {
     b.classList.toggle('active', b.dataset.scr === name));
   if (name === 'sched' && !schedDirty) loadSchedule();      // never clobber edits
   if ((name === 'set' || name === 'run') && !setDirty) loadSettings();
+  if (name === 'history') loadHistory();                    // lazy fetch on open (not polled)
 }
 document.querySelectorAll('nav button').forEach(b =>
   b.addEventListener('click', () => show(b.dataset.scr)));
@@ -556,6 +618,12 @@ function mock(path, body) {
   if (!M) M = {
     state:'idle', zone:-1, until:0, fault:'none', log:[],
     entries:[], cal:{ phase:'idle', pulses:0, lastK:0 },
+    history:[   // newest-first, mixed clockWasValid + a faulted run, like the real ring
+      { startEpoch:1750000000, clockWasValid:true,  zone:0, durationSec:600, gallons:12.34, fertigate:false, result:'completed', fault:'none' },
+      { startEpoch:1749996400, clockWasValid:true,  zone:1, durationSec:300, gallons:5.10,  fertigate:true,  result:'completed', fault:'none' },
+      { startEpoch:1749990000, clockWasValid:true,  zone:0, durationSec:600, gallons:0.05,  fertigate:false, result:'faulted',   fault:'noFlow' },
+      { startEpoch:0,          clockWasValid:false, zone:2, durationSec:120, gallons:2.00,  fertigate:false, result:'stopped',   fault:'none' }
+    ],
     set:{ zoneDefaults:[600,600,600], swMaxRuntimeSec:1200, pulsesPerGallon:450,
           flowOverride:false, wifi:{ ssid:'mock-net', configured:true } }
   };
@@ -616,6 +684,10 @@ function mock(path, body) {
   if (path === '/api/fault/clear') { const was = M.fault; M.fault = 'none';
     return { ok: was !== 'none', code: was !== 'none' ? 200 : 409,
              cleared: was !== 'none', was:was }; }
+  if (path === '/api/history') return { ok:true, code:200,
+    runs: M.history, clockValid: true, uptimeMs: now % 86400000,
+    faults: [ { code:'noFlow',   atMs: Math.max(0, (now % 86400000) - 1800000) },
+              { code:'valveRest', atMs: Math.max(0, (now % 86400000) - 7200000) } ] };
   return { ok:false, code:404, error:'not found' };
 }
 
