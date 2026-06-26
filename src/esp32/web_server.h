@@ -50,6 +50,7 @@ public:
         server_.on("/api/status",   HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Status); });
         server_.on("/api/schedule", HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Schedule); });
         server_.on("/api/settings", HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Settings); });
+        server_.on("/api/history",  HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::History); });
 
         onPost("/api/run",              Post::Run);
         onPost("/api/stop",             Post::Stop);
@@ -70,7 +71,7 @@ public:
     void unlock() { if (mutex_) xSemaphoreGive(mutex_); }
 
 private:
-    enum class Get  : uint8_t { Status, Schedule, Settings };
+    enum class Get  : uint8_t { Status, Schedule, Settings, History };
     enum class Post : uint8_t { Run, Stop, Schedule, Settings, CalStart, CalFinish, FaultClear };
 
     void handleGet(AsyncWebServerRequest* r, Get which) {
@@ -94,6 +95,7 @@ private:
                 break;
             case Get::Schedule: code = api_.getSchedule(out); break;
             case Get::Settings: code = api_.getSettings(out); break;
+            case Get::History:  code = api_.getHistory(out, millis()); break;
         }
         xSemaphoreGive(mutex_);
         sendJson(r, code, out);

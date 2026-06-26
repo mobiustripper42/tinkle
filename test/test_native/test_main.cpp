@@ -2605,6 +2605,90 @@ static void test_rc_lastrun_is_ring_head() {
     TEST_ASSERT_EQUAL_PTR(&rc.runLog().head(), &rc.lastRun());    // one source of truth
 }
 
+// --- GET /api/history (DEC-018, #70) ---------------------------------------------
+
+// Empty rings, then a populated mix: run ring newest-first with per-entry clockWasValid,
+// the fault ring as-is, and the render flags (clockValid + uptimeMs).
+static void test_api_history_shape() {
+    ApiRig r;
+    JsonDocument out;
+
+    // Empty: both rings empty, clock not yet synced — uptime still surfaced for the renderer.
+    TEST_ASSERT_EQUAL_INT(200, r.api.getHistory(out, 4242));
+    TEST_ASSERT_EQUAL_INT(0, out["runs"].size());
+    TEST_ASSERT_EQUAL_INT(0, out["faults"].size());
+    TEST_ASSERT_FALSE(out["clockValid"].as<bool>());
+    TEST_ASSERT_EQUAL_UINT32(4242, out["uptimeMs"].as<uint32_t>());
+
+    // Sync the clock (top-level flag), lay down two completed runs + one fault-log note.
+    r.wallSrc.available = true;
+    r.wallSrc.epochVal  = 1750000000u;
+    r.clk.begin(0);
+    uint32_t now = 0;
+    now = runOnce(r.rc, now, 0, 1, false, 1750000000u, true, 250);    // 2.50 gal, synced
+    now = runOnce(r.rc, now, 1, 2, true,  0,           false, 500);   // 5.00 gal, unsynced, fert
+    r.fm.note(Fault::ValveRest, 5000);
+
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(200, r.api.getHistory(out, 9000));
+    JsonArray runs = out["runs"];
+    TEST_ASSERT_EQUAL_INT(2, runs.size());
+    // Newest-first: the zone-1 fert run is the head.
+    TEST_ASSERT_EQUAL_INT(1, runs[0]["zone"].as<int>());
+    TEST_ASSERT_EQUAL_STRING("completed", runs[0]["result"].as<const char*>());
+    TEST_ASSERT_TRUE(runs[0]["fertigate"].as<bool>());
+    TEST_ASSERT_FALSE(runs[0]["clockWasValid"].as<bool>());
+    TEST_ASSERT_EQUAL_INT(2, runs[0]["durationSec"].as<int>());
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 5.0f, runs[0]["gallons"].as<float>());
+    TEST_ASSERT_EQUAL_STRING("none", runs[0]["fault"].as<const char*>());
+    // Older entry: the synced zone-0 run carries its wall-clock epoch.
+    TEST_ASSERT_EQUAL_INT(0, runs[1]["zone"].as<int>());
+    TEST_ASSERT_TRUE(runs[1]["clockWasValid"].as<bool>());
+    TEST_ASSERT_EQUAL_UINT32(1750000000u, runs[1]["startEpoch"].as<uint32_t>());
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 2.5f, runs[1]["gallons"].as<float>());
+
+    JsonArray faults = out["faults"];
+    TEST_ASSERT_EQUAL_INT(1, faults.size());
+    TEST_ASSERT_EQUAL_STRING("valveRest", faults[0]["code"].as<const char*>());
+    TEST_ASSERT_EQUAL_UINT32(5000, faults[0]["atMs"].as<uint32_t>());
+
+    TEST_ASSERT_TRUE(out["clockValid"].as<bool>());
+    TEST_ASSERT_EQUAL_UINT32(9000, out["uptimeMs"].as<uint32_t>());
+}
+
+// A faulted run surfaces in history with result "faulted" + its fault code and the volume
+// measured up to the fault.
+static void test_api_history_faulted_run() {
+    ApiRig r;
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 30; req.fertigate = false;
+    r.rc.requestRun(req, 0);
+    uint32_t now = pump(r.rc, 0, 5, 8000, [&]{ return r.rc.state() == RunState::Running; });
+    r.rc.noteRunStart(1750000000u, true);
+    r.rc.noteRunVolume(125);
+    r.rc.raiseFault(Fault::NoFlow, now);
+
+    JsonDocument out;
+    TEST_ASSERT_EQUAL_INT(200, r.api.getHistory(out, now));
+    TEST_ASSERT_EQUAL_INT(1, out["runs"].size());
+    TEST_ASSERT_EQUAL_STRING("faulted", out["runs"][0]["result"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("noFlow",  out["runs"][0]["fault"].as<const char*>());
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.25f, out["runs"][0]["gallons"].as<float>());
+}
+
+// Max depth stays sane: 32 runs serialize to exactly RUNLOG_DEPTH entries, newest-first.
+static void test_api_history_full_ring() {
+    ApiRig r;
+    uint32_t now = 0;
+    for (int i = 0; i < tinkle::RUNLOG_DEPTH + 3; ++i)
+        now = runOnce(r.rc, now, (uint8_t)(i % 2), 1, false,
+                      1750000000u + i, true, (uint16_t)(i * 10));
+    JsonDocument out;
+    TEST_ASSERT_EQUAL_INT(200, r.api.getHistory(out, now));
+    TEST_ASSERT_EQUAL_INT(tinkle::RUNLOG_DEPTH, out["runs"].size());
+    TEST_ASSERT_EQUAL_UINT32(1750000000u + (tinkle::RUNLOG_DEPTH + 2),
+                             out["runs"][0]["startEpoch"].as<uint32_t>());   // newest is the head
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -2739,5 +2823,9 @@ int main() {
     RUN_TEST(test_rc_runlog_clockvalid_and_epoch_guard);
     RUN_TEST(test_rc_runlog_fault_pushes_entry);
     RUN_TEST(test_rc_lastrun_is_ring_head);
+
+    RUN_TEST(test_api_history_shape);
+    RUN_TEST(test_api_history_faulted_run);
+    RUN_TEST(test_api_history_full_ring);
     return UNITY_END();
 }

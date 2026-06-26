@@ -433,7 +433,9 @@ the rest.
 - **`GET /api/history`:** a new **read-only** endpoint (no FAULT gate — §10's gating rule is
   mutating-endpoints-only; no range validation), lazy-fetched when the History screen opens — **not**
   folded into the 1–2 s `/api/status` poll. `Api` (core) serializes the run ring + the fault ring + a
-  clock-valid flag; host-tested against real JSON. Payload at depth ≈ 3 KB, well under the body cap.
+  clock-valid flag; host-tested against real JSON. Payload ≈ 6 KB worst case at full depth (32 runs
+  + the fault ring), well under the transfer budget (`sendJson` has no outbound cap; `BODY_CAP` gates
+  only inbound POST bodies).
 - **7th SPA screen — "History":** a dedicated tab (runs list: wall-clock-or-relative, zone, MM:SS,
   gallons, fert, result/fault; plus fault entries), lazy fetch + manual refresh, DISCONNECTED degrade,
   mock-API rows. Amends the "six screens" wording in firmware §10.1 / SPEC Phase 4.
