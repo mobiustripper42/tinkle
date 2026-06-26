@@ -179,7 +179,7 @@ Survives reboot and power loss:
 
 **Not persisted — the fault log is RAM-only by decision (#72).** `FaultManager` keeps a fixed ring
 (`LOG_SIZE = 8`, `{code, atMs}` millis-domain) that resets every boot; it is surfaced **live** via
-`/api/status` and `/api/history` (DEC-018) during uptime, never stored. Making it survive reboot
+`/api/status` (§14) and `/api/history` (DEC-018) during uptime, never stored. Making it survive reboot
 would mean epoch-stamping each entry (millis timestamps are meaningless after a reboot) and
 mirroring the `runlog` blob — deferred as a feature to
 [#90](https://github.com/mobiustripper42/tinkle/issues/90).

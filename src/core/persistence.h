@@ -23,7 +23,8 @@
 //   - schedule entries        -> Scheduler (#27, §13 model)
 //   - fertigation policy      -> Fert policy (#28)
 //   - Wi-Fi credentials       -> Web/config (Phase 4)
-//   - fault-log ring buffer   -> FaultManager (Phase 3/5)
+// The fault-log ring is RAM-only by decision (#72) — NOT persisted; FaultManager keeps it in
+// RAM and the §10 API surfaces it live. Epoch-stamped NVS persistence is deferred to #90.
 //
 // FORWARD-COMPAT (DEC-008): zones will be added after V1. Per-zone state uses
 // zone-indexed keys ("z<N>_dur") read-with-default and iterated over the runtime
