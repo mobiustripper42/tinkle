@@ -10,9 +10,50 @@ from the phone UI, not buttons). The headless `wokwi-cli` checks are separate �
 - The **Wokwi for VS Code** extension (free license) — the only runtime that honors
   `[[net.forward]]` and can compile/boot the local binary.
 - `pio run -e esp32_sim` built (`wokwi.toml` points at `.pio/build/esp32_sim/firmware.bin`).
-- **Headless VPS note (mill-dev):** there's no local browser. Let VS Code forward
-  `localhost:8180`, then reach the SPA from your laptop at `http://mill-dev:8180/`
-  (VS Code's "Ports" panel will also auto-forward it; tunnel if needed).
+- **Headless VPS note (mill-dev):** there's no local browser, and the free
+  `localhost:8180` forward drops the SPA after ~20 s (socket churn — see the next
+  section). For a stable connection use the **Private Gateway** (recommended on
+  mill-dev); the old 8180 forward still works for a quick look if you reload to renew.
+
+## Stable SPA connection — the Private Wokwi Gateway (mill-dev)
+
+The free path (VS Code forwarding `localhost:8180`) opens a **new network socket on every
+SPA poll**; the simulated ESP32's small socket pool fills up and the SPA goes dead after
+~16–25 s while the sim keeps running (LEDs keep blinking — it's not a crash). The fix is
+the **Private Wokwi Gateway**: a small Wokwi program that runs on mill-dev and gives the
+simulator a stable, keep-alive connection to the device's web server. It needs a **paid
+Wokwi plan**, and the VS Code extension's license must be issued from that same paid
+account (VS Code: `F1` → **"Wokwi: Request a New License"** while logged into the paid
+account on wokwi.com — paying on one account but holding a license from another is the
+classic trap).
+
+**One-time setup (already done, for reference):** the gateway binary lives at
+`~/wokwigw/wokwigw-linux` (Linux x86 build of `wokwi/wokwigw`), and `wokwi.toml` already
+carries the `[net] gateway = "ws://localhost:9011"` line that tells the extension to use it.
+
+**Turn it on — every session, BEFORE starting the sim:**
+
+1. Open a terminal on mill-dev and run this — **leave the terminal open** (closing it
+   stops the gateway; Ctrl+C also stops it):
+   ```
+   ~/wokwigw/wokwigw-linux --forward 9080:10.13.37.2:80
+   ```
+   You should see `Listening on TCP Port 9011` and `:9080 -> 10.13.37.2:80`.
+2. In VS Code: `Ctrl+Shift+P` → **Restart Simulation** (or **Wokwi: Start Simulator** if
+   it isn't running). The sim re-reads `wokwi.toml` and attaches — the gateway terminal
+   prints `Client connected`.
+3. Open the SPA at **`http://localhost:9080/`** — NOT 8180 (that's the old, dropping path).
+
+**Did it work?** The SPA's status shows the device IP as **`10.13.37.2`** (the free public
+gateway shows `10.10.0.2`). The SPA now stays up at the normal 1 Hz refresh, indefinitely.
+
+**On your phone (Pixel, Chrome, Tailscale connected):** publish port 9080 onto Tailscale,
+then open the URL:
+```
+tailscale serve --bg --https=8443 127.0.0.1:9080
+```
+→ `https://mill-dev.tail7e2bfd.ts.net:8443/`. Stop sharing later with
+`tailscale serve --https=8443 off`. (Safari is unsupported by the gateway — use Chrome.)
 
 ## Bring-up
 
@@ -22,8 +63,10 @@ from the phone UI, not buttons). The headless `wokwi-cli` checks are separate �
    starts blinking ~1 Hz → firmware is ticking.
 3. The firmware joins **Wokwi-GUEST** on its own (empty sim NVS → `TINKLE_SIM` default
    creds), then NTP syncs.
-4. Open **`http://localhost:8180/`** (or `http://mill-dev:8180/` from a VPS). The SPA
-   **Status/home** screen loads: state IDLE, clock shows `HH:MM` once NTP lands.
+4. Open the SPA: **`http://localhost:9080/`** if you started the Private Gateway
+   (recommended — stable; see the section above), or `http://localhost:8180/` for the
+   free forward (drops after ~20 s, reload to renew). The SPA **Status/home** screen
+   loads: state IDLE, clock shows `HH:MM` once NTP lands.
 
    *Expected:* in the diagram, every status LED is off except ALIVE (blinking): PUMP
    off, VALVE Z1/Z2/Z3 off, DIV CLEAN/DIV FERT off. FLOW switch down (quiet).
