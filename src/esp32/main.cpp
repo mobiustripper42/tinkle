@@ -262,6 +262,10 @@ void loop() {
     } else if (runState != RunState::Running && prevRunState == RunState::Running) {
         Serial.printf("[tinkle] run flow: %.2f gal @ %.2f GPM\n",
                       flowMonitor.gallons(), flowMonitor.rateGPM());
+        // Capture the FINAL tally on the falling edge so a completed run's persisted volume
+        // matches the printed gallons. SETTLE (a few ticks later, pump already off) consumes
+        // this; the in-RUNNING push below alone would freeze it one tick early (DEC-018).
+        runController.noteRunVolume(centigallonsOf(flowMonitor.gallons()));
     }
     // Keep the pending per-run volume fresh while pumping, so the entry pushed at SETTLE — or
     // on a fault mid-run — carries the measured centigallons, not a stale value (DEC-018).
@@ -270,8 +274,9 @@ void loop() {
     prevRunState = runState;
 
     // Persist the run-history ring on change, debounced (DEC-018). RunController marks the log
-    // dirty on each push (SETTLE / fault); coalesce a burst into one blob write after the ring
-    // has been quiet for the debounce window, then clear the flag.
+    // dirty on each push (SETTLE / fault); write the blob once the ring has been quiet for the
+    // debounce window, then clear the flag. Runs are minute-scale, so in practice this just
+    // keeps the write off the hot loop and out of every tick — flash wear is a non-issue.
     static bool     runLogPending   = false;
     static uint32_t runLogPendingMs = 0;
     if (runController.runLogDirty()) {
