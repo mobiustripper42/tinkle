@@ -50,18 +50,18 @@ int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
     flow["k"]              = d_.flow.k();
     flow["overrideActive"] = d_.store.flowOverride();      // DEC-015 status flag
 
-    const RunSummary& lr = d_.run.lastRun();
+    const RunEntry& lr = d_.run.lastRun();              // the run-history ring head (DEC-018)
     JsonObject last = out["lastRun"].to<JsonObject>();
     switch (lr.result) {
-        case RunSummary::Result::None:      last["result"] = "none";      break;
-        case RunSummary::Result::Completed: last["result"] = "completed"; break;
-        case RunSummary::Result::Stopped:   last["result"] = "stopped";   break;
-        case RunSummary::Result::Faulted:   last["result"] = "faulted";   break;
+        case RunResult::None:      last["result"] = "none";      break;
+        case RunResult::Completed: last["result"] = "completed"; break;
+        case RunResult::Stopped:   last["result"] = "stopped";   break;
+        case RunResult::Faulted:   last["result"] = "faulted";   break;
     }
-    last["zone"]        = lr.zone;
+    last["zone"]        = lr.zoneIndex;
     last["durationSec"] = lr.durationSec;
     last["fertigate"]   = lr.fertigate;
-    last["fault"]       = faultName(lr.fault);
+    last["fault"]       = faultName((Fault)lr.faultCode);
 
     JsonObject fault = out["fault"].to<JsonObject>();
     fault["active"]       = faultName(d_.run.activeFault());

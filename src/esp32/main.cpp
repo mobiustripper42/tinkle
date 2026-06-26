@@ -130,6 +130,18 @@ static constexpr uint32_t REPORT_INTERVAL_MS = 5000;
 static LoopMonitor        loopMon(TICK_BUDGET_US);
 static uint32_t           lastReportMs = 0;
 
+// RunLog NVS write debounce (DEC-018): coalesce a queue-drain's rapid pushes into one
+// ~352 B blob write. Runs are operator-rate, so this barely touches flash write-wear.
+static constexpr uint32_t RUNLOG_PERSIST_DEBOUNCE_MS = 2000;
+
+// Per-run volume as hundredths of a gallon for the RunLog record (DEC-018) — integer,
+// clamped to the u16 field. Per-run gallons is always >= 0.
+static uint16_t centigallonsOf(float gallons) {
+    if (gallons <= 0.0f) return 0;
+    const float cg = gallons * 100.0f + 0.5f;          // round to nearest hundredth
+    return cg >= 65535.0f ? (uint16_t)65535u : (uint16_t)cg;
+}
+
 void setup() {
     Serial.begin(115200);
 
@@ -156,6 +168,12 @@ void setup() {
         for (uint8_t i = 0; i < n; ++i) scheduler.add(stored[i]);
         if (n) Serial.printf("[tinkle] schedule: %u entries loaded\n", n);
     }
+
+    // Rehydrate the run-history ring from its NVS blob (DEC-018) before the loop can push a
+    // new entry. Absent blob => empty ring; the head feeds /api/status lastRun immediately.
+    persistence.loadRunLog(runController.runLogRef());
+    if (runController.runLog().count())
+        Serial.printf("[tinkle] runlog: %u entries loaded\n", runController.runLog().count());
 
     // Configure TZ + SNTP and take the first sync attempt (§13). No network yet, so this
     // stays invalid until Phase 4 brings up WiFi; the call is harmless until then.
@@ -236,12 +254,36 @@ void loop() {
     // no-flow / unexpected-flow faults on top of the same rate + accumulation.)
     static RunState prevRunState = RunState::Idle;
     const RunState runState = runController.state();
-    if (runState == RunState::Running && prevRunState != RunState::Running)
+    if (runState == RunState::Running && prevRunState != RunState::Running) {
         flowMonitor.resetAccumulation(flowSensor.pulses(), now);
-    else if (runState != RunState::Running && prevRunState == RunState::Running)
+        // Stamp the run's start time onto the pending RunLog entry (DEC-018). epoch()/valid()
+        // read 0/false until NTP locks — RunController then flags the entry relative-to-uptime.
+        runController.noteRunStart(wallClock.epoch(now), wallClock.valid());
+    } else if (runState != RunState::Running && prevRunState == RunState::Running) {
         Serial.printf("[tinkle] run flow: %.2f gal @ %.2f GPM\n",
                       flowMonitor.gallons(), flowMonitor.rateGPM());
+    }
+    // Keep the pending per-run volume fresh while pumping, so the entry pushed at SETTLE — or
+    // on a fault mid-run — carries the measured centigallons, not a stale value (DEC-018).
+    if (runState == RunState::Running)
+        runController.noteRunVolume(centigallonsOf(flowMonitor.gallons()));
     prevRunState = runState;
+
+    // Persist the run-history ring on change, debounced (DEC-018). RunController marks the log
+    // dirty on each push (SETTLE / fault); coalesce a burst into one blob write after the ring
+    // has been quiet for the debounce window, then clear the flag.
+    static bool     runLogPending   = false;
+    static uint32_t runLogPendingMs = 0;
+    if (runController.runLogDirty()) {
+        if (!runLogPending) { runLogPending = true; runLogPendingMs = now; }
+        if ((uint32_t)(now - runLogPendingMs) >= RUNLOG_PERSIST_DEBOUNCE_MS) {
+            persistence.saveRunLog(runController.runLog());
+            runController.markRunLogPersisted();
+            runLogPending = false;
+        }
+    } else {
+        runLogPending = false;
+    }
 
     // Flow faults (§7/§14 / #35): no-flow during RUNNING (post-grace) / unexpected flow
     // during IDLE. The detector reads the post-tick rate + cumulative count against the
@@ -292,7 +334,7 @@ void loop() {
     // Auto-return self-test (DEC-014 / #52): fresh state read — a fault latching
     // this pass must abort the rest window, not get measured by it.
     const int restFlagged = valveRest.tick(runController.state(),
-                                           runController.lastRun().zone,
+                                           runController.lastRun().zoneIndex,
                                            flowSensor.pulses(), now);
     if (restFlagged >= 0) {
         faultManager.note(Fault::ValveRest, now);

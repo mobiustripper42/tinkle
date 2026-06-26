@@ -253,7 +253,9 @@ using tinkle::RunConfig;
 using tinkle::RunController;
 using tinkle::RunRequest;
 using tinkle::RunState;
-using tinkle::RunSummary;
+using tinkle::RunResult;
+using tinkle::RunEntry;
+using tinkle::RunLog;
 
 namespace {
 
@@ -324,8 +326,8 @@ static void test_rc_full_sequence_completes() {
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
     TEST_ASSERT_FALSE(g.level[ZF0]);                 // zone de-energized closed
-    TEST_ASSERT_EQUAL(RunSummary::Result::Completed, rc.lastRun().result);
-    TEST_ASSERT_EQUAL_UINT8(0, rc.lastRun().zone);
+    TEST_ASSERT_EQUAL(RunResult::Completed, rc.lastRun().result);
+    TEST_ASSERT_EQUAL_UINT8(0, rc.lastRun().zoneIndex);
 }
 
 // The diverter only travels when the leg state must change (§6). A first fert run
@@ -380,7 +382,7 @@ static void test_rc_stop_unwinds() {
     now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
-    TEST_ASSERT_EQUAL(RunSummary::Result::Stopped, rc.lastRun().result);
+    TEST_ASSERT_EQUAL(RunResult::Stopped, rc.lastRun().result);
 }
 
 // A fault mid-run slams the safe state and latches (§14). Further runs are
@@ -398,7 +400,7 @@ static void test_rc_fault_latches_and_clears() {
     TEST_ASSERT_TRUE(rc.isFaulted());
     TEST_ASSERT_EQUAL(Fault::NoFlow, rc.activeFault());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
-    TEST_ASSERT_EQUAL(RunSummary::Result::Faulted, rc.lastRun().result);
+    TEST_ASSERT_EQUAL(RunResult::Faulted, rc.lastRun().result);
 
     // Refused while latched.
     TEST_ASSERT_FALSE(rc.requestRun(req, now));
@@ -1821,7 +1823,7 @@ static void test_rest_clean_close_no_flag() {
     for (uint32_t now = 0; now < 15000; now += 50) {
         rc.tick(now);
         if (rc.state() == RunState::Running) pulses += 10;     // healthy run flow
-        TEST_ASSERT_EQUAL_INT(-1, vr.tick(rc.state(), rc.lastRun().zone, pulses, now));
+        TEST_ASSERT_EQUAL_INT(-1, vr.tick(rc.state(), rc.lastRun().zoneIndex, pulses, now));
     }
     TEST_ASSERT_TRUE(rc.isIdle());
     TEST_ASSERT_FALSE(vr.zoneFlagged(1));
@@ -1846,7 +1848,7 @@ static void test_rest_stuck_valve_flags_zone() {
         const RunState s = rc.state();
         if (s == RunState::Running) pulses += 10;
         if (s == RunState::Settle || s == RunState::Idle) pulses += 1;   // dribble
-        const int v = vr.tick(s, rc.lastRun().zone, pulses, now);
+        const int v = vr.tick(s, rc.lastRun().zoneIndex, pulses, now);
         if (v >= 0) { flaggedZone = v; ++verdicts; }
     }
     TEST_ASSERT_EQUAL_INT(1, flaggedZone);
@@ -1873,7 +1875,7 @@ static void test_rest_flag_self_heals_on_clean_close() {
         rc.tick(now);
         const RunState s = rc.state();
         if (s == RunState::Settle || s == RunState::Idle) pulses += 1;
-        vr.tick(s, rc.lastRun().zone, pulses, now);
+        vr.tick(s, rc.lastRun().zoneIndex, pulses, now);
     }
     TEST_ASSERT_TRUE(vr.zoneFlagged(1));
 
@@ -1881,7 +1883,7 @@ static void test_rest_flag_self_heals_on_clean_close() {
     TEST_ASSERT_TRUE(rc.requestRun(req, now));
     for (uint32_t end = now + 15000; now < end; now += 50) {
         rc.tick(now);
-        vr.tick(rc.state(), rc.lastRun().zone, pulses, now);   // no new pulses
+        vr.tick(rc.state(), rc.lastRun().zoneIndex, pulses, now);   // no new pulses
     }
     TEST_ASSERT_TRUE(rc.isIdle());
     TEST_ASSERT_FALSE(vr.zoneFlagged(1));
@@ -1912,7 +1914,7 @@ static void test_rest_chained_run_aborts_check() {
         if (!inSecondRun && (s == RunState::Settle || s == RunState::PrepDiverter ||
                              s == RunState::OpenZone || s == RunState::StartPump))
             pulses += 1;
-        TEST_ASSERT_EQUAL_INT(-1, vr.tick(s, rc.lastRun().zone, pulses, now));
+        TEST_ASSERT_EQUAL_INT(-1, vr.tick(s, rc.lastRun().zoneIndex, pulses, now));
     }
     TEST_ASSERT_TRUE(rc.isIdle());
     TEST_ASSERT_EQUAL_UINT8(0, vr.flaggedMask());      // zone 1's clean final window
@@ -2375,6 +2377,234 @@ static void test_fm_note_is_nonlatching() {
     TEST_ASSERT_TRUE(rc.requestRun(req, 200));          // not blocked by the note
 }
 
+// --- RunLog run-history ring (DEC-018, #69) --------------------------------------
+
+// Drive one complete run, injecting the start epoch + per-run volume the way main does
+// (noteRunStart on the RUNNING edge, noteRunVolume while pumping). Returns the clock reached.
+static uint32_t runOnce(RunController& rc, uint32_t now, uint8_t zone, uint32_t durSec,
+                        bool fert, uint32_t epoch, bool clockValid, uint16_t centigal) {
+    RunRequest req; req.zoneIndex = zone; req.durationSec = durSec; req.fertigate = fert;
+    rc.requestRun(req, now);
+    now = pump(rc, now, 5, 12000, [&]{ return rc.state() == RunState::Running; });
+    rc.noteRunStart(epoch, clockValid);
+    rc.noteRunVolume(centigal);
+    now = pump(rc, now, 5, 12000, [&]{ return rc.state() == RunState::Idle; });
+    return now;
+}
+
+// Packed 11-byte record survives a round-trip, every flag bit independent (fert | result |
+// clockWasValid) and the u16/u32 fields little-endian intact.
+static void test_runlog_pack_unpack_roundtrip() {
+    using tinkle::packRunEntry; using tinkle::unpackRunEntry;
+    TEST_ASSERT_EQUAL_UINT16(11, tinkle::RUNLOG_ENTRY_BYTES);
+
+    RunEntry e;
+    e.startEpoch = 0xDEADBEEFu; e.zoneIndex = 5; e.durationSec = 0x1234;
+    e.centigallons = 0xABCD; e.fertigate = true; e.result = RunResult::Stopped;
+    e.clockWasValid = true;  e.faultCode = (uint8_t)Fault::Watchdog;
+
+    uint8_t buf[tinkle::RUNLOG_ENTRY_BYTES];
+    packRunEntry(e, buf);
+    RunEntry r = unpackRunEntry(buf);
+    TEST_ASSERT_EQUAL_UINT32(0xDEADBEEFu, r.startEpoch);
+    TEST_ASSERT_EQUAL_UINT8(5, r.zoneIndex);
+    TEST_ASSERT_EQUAL_UINT16(0x1234, r.durationSec);
+    TEST_ASSERT_EQUAL_UINT16(0xABCD, r.centigallons);
+    TEST_ASSERT_TRUE(r.fertigate);
+    TEST_ASSERT_EQUAL(RunResult::Stopped, r.result);
+    TEST_ASSERT_TRUE(r.clockWasValid);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::Watchdog, r.faultCode);
+
+    // Flip every flag the other way — result Faulted (3) exercises both result bits.
+    e.fertigate = false; e.clockWasValid = false; e.result = RunResult::Faulted;
+    packRunEntry(e, buf);
+    r = unpackRunEntry(buf);
+    TEST_ASSERT_FALSE(r.fertigate);
+    TEST_ASSERT_FALSE(r.clockWasValid);
+    TEST_ASSERT_EQUAL(RunResult::Faulted, r.result);
+}
+
+// The ring saturates at RUNLOG_DEPTH, overwriting the oldest; head() is the newest, at(0)
+// == head, at(count-1) the oldest retained, and an empty ring's head defaults to None.
+static void test_runlog_ring_wrap() {
+    RunLog log;
+    TEST_ASSERT_TRUE(log.empty());
+    TEST_ASSERT_EQUAL(RunResult::None, log.head().result);
+
+    const int total = tinkle::RUNLOG_DEPTH + 5;
+    for (int i = 0; i < total; ++i) {
+        RunEntry e; e.zoneIndex = (uint8_t)i; e.durationSec = (uint16_t)(i * 10);
+        log.push(e);
+    }
+    TEST_ASSERT_EQUAL_UINT8(tinkle::RUNLOG_DEPTH, log.count());      // saturated, not grown
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)(total - 1), log.head().zoneIndex);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)(total - 1), log.at(0).zoneIndex);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)(total - tinkle::RUNLOG_DEPTH),
+                            log.at(tinkle::RUNLOG_DEPTH - 1).zoneIndex);
+    TEST_ASSERT_EQUAL(RunResult::None, log.at(tinkle::RUNLOG_DEPTH).result);   // OOB -> default
+}
+
+// serialize/deserialize preserve order + head; a wrapped ring round-trips to exactly DEPTH
+// entries; a torn (non-multiple) blob truncates to whole entries; an empty blob -> empty ring.
+static void test_runlog_serialize_roundtrip() {
+    RunLog a;
+    for (int i = 0; i < 3; ++i) {
+        RunEntry e; e.zoneIndex = (uint8_t)i; e.startEpoch = 1750000000u + i;
+        e.centigallons = (uint16_t)(i * 100); e.result = RunResult::Completed;
+        e.clockWasValid = true;
+        a.push(e);
+    }
+    uint8_t blob[tinkle::RUNLOG_BLOB_BYTES];
+    uint16_t len = a.serialize(blob, sizeof(blob));
+    TEST_ASSERT_EQUAL_UINT16(3 * tinkle::RUNLOG_ENTRY_BYTES, len);
+
+    RunLog b; b.deserialize(blob, len);
+    TEST_ASSERT_EQUAL_UINT8(3, b.count());
+    TEST_ASSERT_EQUAL_UINT8(2, b.head().zoneIndex);                 // newest
+    TEST_ASSERT_EQUAL_UINT8(0, b.at(2).zoneIndex);                  // oldest
+    TEST_ASSERT_EQUAL_UINT32(1750000002u, b.head().startEpoch);
+    TEST_ASSERT_TRUE(b.head().clockWasValid);
+
+    RunLog c;
+    for (int i = 0; i < tinkle::RUNLOG_DEPTH + 4; ++i) {
+        RunEntry e; e.zoneIndex = (uint8_t)i; c.push(e);
+    }
+    len = c.serialize(blob, sizeof(blob));
+    TEST_ASSERT_EQUAL_UINT16(tinkle::RUNLOG_BLOB_BYTES, len);       // capped at a full ring
+    RunLog d; d.deserialize(blob, len);
+    TEST_ASSERT_EQUAL_UINT8(tinkle::RUNLOG_DEPTH, d.count());
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)(tinkle::RUNLOG_DEPTH + 3), d.head().zoneIndex);
+
+    RunLog torn; torn.deserialize(blob, (uint16_t)(2 * tinkle::RUNLOG_ENTRY_BYTES + 4));
+    TEST_ASSERT_EQUAL_UINT8(2, torn.count());                       // whole entries only
+
+    RunLog empty; empty.deserialize(blob, 0);
+    TEST_ASSERT_TRUE(empty.empty());
+}
+
+// NVS round-trip through Persistence: save the ring, reboot (fresh Persistence over the same
+// store), rehydrate. One blob write to the additive `runlog` key, no schema_ver bump; an
+// absent key reads back as an empty ring (read-with-default, DEC-008).
+static void test_persist_runlog_roundtrip() {
+    FakeKvStore s;
+    Persistence p(s, 3);
+    p.begin();
+
+    RunLog absent;
+    p.loadRunLog(absent);
+    TEST_ASSERT_TRUE(absent.empty());                              // read-with-default
+
+    RunLog log;
+    for (int i = 0; i < 4; ++i) {
+        RunEntry e; e.zoneIndex = (uint8_t)i; e.durationSec = (uint16_t)(60 + i);
+        e.centigallons = (uint16_t)(i * 250); e.fertigate = (i % 2 == 0);
+        e.result = (i == 3) ? RunResult::Faulted : RunResult::Completed;
+        e.faultCode = (i == 3) ? (uint8_t)Fault::NoFlow : 0;
+        e.startEpoch = 1750000000u + i; e.clockWasValid = true;
+        log.push(e);
+    }
+    p.saveRunLog(log);
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("runlog"));                // one packed blob write
+
+    Persistence p2(s, 3);
+    p2.begin();
+    RunLog loaded;
+    p2.loadRunLog(loaded);
+    TEST_ASSERT_EQUAL_UINT8(4, loaded.count());
+    const RunEntry& h = loaded.head();                            // newest = i==3
+    TEST_ASSERT_EQUAL_UINT8(3, h.zoneIndex);
+    TEST_ASSERT_EQUAL(RunResult::Faulted, h.result);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::NoFlow, h.faultCode);
+    TEST_ASSERT_EQUAL_UINT16(750, h.centigallons);
+    TEST_ASSERT_EQUAL_UINT32(1750000003u, h.startEpoch);
+    TEST_ASSERT_TRUE(h.clockWasValid);
+    const RunEntry o = loaded.at(3);                              // oldest = i==0
+    TEST_ASSERT_EQUAL_UINT8(0, o.zoneIndex);
+    TEST_ASSERT_TRUE(o.fertigate);
+    TEST_ASSERT_EQUAL_UINT32(Persistence::SCHEMA_VER, s.getU32("schema_ver", 0));
+}
+
+// A full run pushes one entry carrying the pushed-in start epoch + volume + RunController's
+// own zone/duration/fert/result, and sets the dirty flag for the debounced NVS write.
+static void test_rc_runlog_records_run() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    TEST_ASSERT_TRUE(rc.runLog().empty());
+    TEST_ASSERT_FALSE(rc.runLogDirty());
+
+    const uint32_t now = runOnce(rc, 0, 1, 3, true, 1750000000u, true, 1234);
+    (void)now;
+
+    TEST_ASSERT_EQUAL_UINT8(1, rc.runLog().count());
+    const RunEntry& e = rc.lastRun();
+    TEST_ASSERT_EQUAL(RunResult::Completed, e.result);
+    TEST_ASSERT_EQUAL_UINT8(1, e.zoneIndex);
+    TEST_ASSERT_EQUAL_UINT16(3, e.durationSec);
+    TEST_ASSERT_EQUAL_UINT16(1234, e.centigallons);
+    TEST_ASSERT_TRUE(e.fertigate);
+    TEST_ASSERT_TRUE(e.clockWasValid);
+    TEST_ASSERT_EQUAL_UINT32(1750000000u, e.startEpoch);
+    TEST_ASSERT_EQUAL_UINT8(0, e.faultCode);                      // Fault::None
+    TEST_ASSERT_TRUE(rc.runLogDirty());
+}
+
+// clockWasValid is set only when the source was synced AND the epoch is plausible (>=2025):
+// a pre-2025 free-run epoch and a synced-but-flagged-invalid start both store the epoch with
+// the bit CLEAR, never as a bogus wall-clock (DEC-018 epoch-sanity guard).
+static void test_rc_runlog_clockvalid_and_epoch_guard() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    uint32_t now = 0;
+    now = runOnce(rc, now, 0, 1, false, 1700000000u, true, 0);    // 2023: pre-2025 -> clear
+    now = runOnce(rc, now, 0, 1, false, 1750000000u, false, 0);   // 2025 but unsynced -> clear
+    now = runOnce(rc, now, 0, 1, false, 1750000000u, true, 0);    // 2025 + synced -> set
+
+    TEST_ASSERT_EQUAL_UINT8(3, rc.runLog().count());
+    TEST_ASSERT_TRUE(rc.runLog().at(0).clockWasValid);            // newest (synced, plausible)
+    TEST_ASSERT_EQUAL_UINT32(1750000000u, rc.runLog().at(0).startEpoch);
+    TEST_ASSERT_FALSE(rc.runLog().at(1).clockWasValid);           // unsynced
+    TEST_ASSERT_FALSE(rc.runLog().at(2).clockWasValid);           // pre-2025
+    TEST_ASSERT_EQUAL_UINT32(1700000000u, rc.runLog().at(2).startEpoch);   // stored, just flagged
+}
+
+// A fault mid-run also pushes a ring entry (result Faulted + code), carrying the volume noted
+// up to the fault — not a stale/zero value — so lastRun() stays the one source of truth.
+static void test_rc_runlog_fault_pushes_entry() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 1; req.durationSec = 30; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    rc.noteRunStart(1750000000u, true);
+    rc.noteRunVolume(500);                                        // 5.00 gal before the fault
+    rc.raiseFault(Fault::NoFlow, now);
+
+    TEST_ASSERT_EQUAL_UINT8(1, rc.runLog().count());
+    const RunEntry& e = rc.lastRun();
+    TEST_ASSERT_EQUAL(RunResult::Faulted, e.result);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::NoFlow, e.faultCode);
+    TEST_ASSERT_EQUAL_UINT16(500, e.centigallons);
+    TEST_ASSERT_EQUAL_UINT8(1, e.zoneIndex);
+    TEST_ASSERT_TRUE(rc.runLogDirty());
+}
+
+// lastRun() IS the ring head — the same object, and the most recent of several runs.
+static void test_rc_lastrun_is_ring_head() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    uint32_t now = 0;
+    now = runOnce(rc, now, 0, 1, false, 1750000000u, true, 100);
+    now = runOnce(rc, now, 1, 1, false, 1750000100u, true, 200);
+    TEST_ASSERT_EQUAL_UINT8(2, rc.runLog().count());
+    TEST_ASSERT_EQUAL_UINT8(1, rc.lastRun().zoneIndex);
+    TEST_ASSERT_EQUAL_UINT16(200, rc.lastRun().centigallons);
+    TEST_ASSERT_EQUAL_PTR(&rc.runLog().head(), &rc.lastRun());    // one source of truth
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -2500,5 +2730,14 @@ int main() {
     RUN_TEST(test_api_stop_voids_calibration);
     RUN_TEST(test_sched_pack_unpack_roundtrip);
     RUN_TEST(test_persist_override_and_creds_roundtrip);
+
+    RUN_TEST(test_runlog_pack_unpack_roundtrip);
+    RUN_TEST(test_runlog_ring_wrap);
+    RUN_TEST(test_runlog_serialize_roundtrip);
+    RUN_TEST(test_persist_runlog_roundtrip);
+    RUN_TEST(test_rc_runlog_records_run);
+    RUN_TEST(test_rc_runlog_clockvalid_and_epoch_guard);
+    RUN_TEST(test_rc_runlog_fault_pushes_entry);
+    RUN_TEST(test_rc_lastrun_is_ring_head);
     return UNITY_END();
 }

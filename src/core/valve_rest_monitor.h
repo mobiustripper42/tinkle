@@ -49,7 +49,7 @@ public:
     explicit ValveRestMonitor(const Config& cfg) : cfg_(cfg) {}
 
     // Call every loop tick with the post-tick run state, the zone of the most
-    // recently logged run (RunController::lastRun().zone — written on SETTLE
+    // recently logged run (RunController::lastRun().zoneIndex — pushed on SETTLE
     // entry, so it is current by the time this sees the edge), and the monotonic
     // cumulative pulse count. Returns the zone NEWLY flagged this tick, or -1 —
     // the caller routes a flag to FaultManager::note() and the serial log.
