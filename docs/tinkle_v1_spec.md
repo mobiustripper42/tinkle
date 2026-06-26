@@ -6,6 +6,7 @@
 **Scope of V1:** Red Tunnel only, built on a chassis sized for three tunnels
 
 **Changelog (v1.5):**
+- **Hardware reconcile (DEC-020).** Six as-built corrections from the design chat: **(1)** the **24→3.3V buck is removed** — a single 24→5V buck feeds the flow sensor *and* the ESP32 (fed 5V on 5V/VIN, it makes its own 3.3V; the 3V3 pin sources logic). **(2)** Pump is now the **SEAFLO 55** (SFDP-055-060-55, 7.0 GPM, heavy-duty pressure switch + anti-vibration mounts), superseding the 51. **(3)** Flow sensor is the **Leridian 3/4" NPT** hall unit (2–45 L/min; won't register below 2 L/min). **(4)** Per-FET TVS is the **through-hole 1.5KE30A**, not the SMD SMAJ30A. **(5)** The Mean Well PSU **mounts outside** the enclosure on its own bracket. **(6)** Enclosure is an **opaque grey Boxco P-series** with DIN lever blocks; build is hybrid (bare FETs + socketed ATtiny on protoboard, ×2 relay modules). The AC master switch (DEC-019) is **optional**.
 - **Phone-only operator interface (DEC-019).** The on-box panel is cut: **TM1637 4-digit display, 3 momentary buttons, 3 button LED rings — all removed.** The SPA over the device's own Wi-Fi/SoftAP is the sole interface (start/stop/fault-clear/config/calibration). Kept: a single **alive LED** (DevKitC onboard, GPIO2, ~1 Hz blink = firmware ticking). **Why:** the panel is fabrication + parts + enclosure cutouts that don't fit the deploy date, and the SPA already does every panel job. **Physical kill:** a new **AC master switch on the Mean Well input** = whole-system off → fail-dry (no firmware), doubling as the service disconnect / phoneless emergency stop. **Power:** the 24 V LED-ring load and its driver leave the budget (the 12 V buck was already dropped). Reverses the v1.1 "on-box display" addition; the firmware modules are git-recoverable if a panel is ever resurrected.
 
 **Changelog (v1.4):**
@@ -57,7 +58,7 @@ Design principles, inherited from the Soundings discipline and adapted for a sys
 
 ```
 Rainwater tanks (west)
-   → SEAFLO 51 pump (24V, self-priming, pressure switch, internal bypass, no reverse flow)
+   → SEAFLO 55 pump (24V, self-priming, pressure switch, internal bypass, no reverse flow)
    → [ union / camlock — pump serviceable ]
    → accumulator (expansion tank — tames the 5.5 GPM-vs-1.78 GPM short-cycle)
    → filter (100–140 mesh)  → [ union / camlock — filter serviceable ]
@@ -115,13 +116,13 @@ ESP32 controller (east end of Red)
 
 All external parts: **IP65+ and UV-stable.** This system lives outdoors in full sun.
 
-**Pump** — SEAFLO 51 Series, 24V (SFDP2-055-060-51). **Selected.**
-- Flow: 5.5 GPM open; zone demand 1.78 GPM. Headroom is deliberate — holds pressure through the Dosatron + filter + regulator without straining at its limit.
-- Pressure: adjustable switch — **set to ~20 psi**, not the 60 max. Tape caps at 15 psi behind the regulator; 20 psi covers filter/Dosatron losses with margin, runs the pump easier, draws less current, and at low pressure the pump delivers near open flow (more effective headroom).
+**Pump** — SEAFLO 55 Series, 24V (SFDP-055-060-55). **Selected (v1.5 — DEC-020).** Heavy-duty pressure switch + anti-vibration mounts.
+- Flow: 7.0 GPM open; zone demand 1.78 GPM. Headroom is deliberate — holds pressure through the Dosatron + filter + regulator without straining at its limit. (The accumulator tames the open-flow-vs-zone-demand short-cycle — even more important with the 55's higher open flow.)
+- Pressure: adjustable switch — **set to ~20 psi**, not the max. Tape caps at 15 psi behind the regulator; 20 psi covers filter/Dosatron losses with margin, runs the pump easier, draws less current, and at low pressure the pump delivers near open flow (more effective headroom).
 - Continuous-duty, run-dry safe, self-priming, internal bypass, DC native (runs straight off the 24V supply).
-- **Mount on its rubber vibration-isolation feet; never hard-plumb the ports.** Use a short flex section on inlet AND outlet (below) — the plastic ports are glass-filled nylon and crack when rigid pipe torques or vibrates them. A prior 51 cracked its output this way.
+- **Mount on its anti-vibration mounts; never hard-plumb the ports.** Use a short flex section on inlet AND outlet (below) — the plastic ports are glass-filled nylon and crack when rigid pipe torques or vibrates them. A prior SEAFLO cracked its output this way.
 - A prior 51 (cracked output) is on the shelf — bench mule for board/valve/flow testing, not deployment.
-- Rejected: model 42 (3.0 GPM, no margin); model 55 (7.0 GPM, more headroom than needed).
+- Rejected: model 42 (3.0 GPM, no margin). Superseded: model 51 (5.5 GPM) — the prior pick, replaced by the 55's heavier-duty pressure switch + anti-vibration mounts (DEC-020).
 
 **Flex connectors** — short flexible section on pump inlet and outlet. **Required.**
 - Braided stainless line or reinforced tubing, ~12–18". Decouples the rigid plumbing/vibration from the pump's plastic ports.
@@ -155,9 +156,9 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - **Not a safety barrier (DEC-012):** the NC resting state is a convenience — a valve passes nothing with the pump unpowered. The auto-return is capacitor-driven (needs ~1 min to charge after opening, ages over years), so the self-test (DEC-014) verifies valves rest closed for *correctness*, not fail-dry.
 - Red: 2 valves. Green (future): 5 valves. Source: ussolid.com (3/4" brass NC 2-wire auto-return; the NO variant covers the clean diverter leg). Bench-confirm travel time before trusting `ZONE_TRAVEL_MS`.
 
-**Flow sensor** — hall-effect, brass, 3/4", ×1 (Red). Placed after the diverter merge, before the zone split (one sensor reads whichever zone runs).
+**Flow sensor** — **Leridian 3/4" NPT hall-effect**, brass, ×1 (Red). Range 2–45 L/min, 253 psi; mounted **after the filter** (after the diverter merge, before the zone split — one sensor reads whichever zone runs). **Selected (v1.5 — DEC-020).** Note: it **won't register flow below 2 L/min**; our zone runs ~1.78 GPM ≈ 6.7 L/min, comfortably above the floor.
 - Cross-check: detects flow when nothing is commanded (stuck valve / burst) and no-flow when a zone is on (clog / dead pump). A web-UI override (DEC-015) can mute its *faults* so a bad sensor can't block watering — software only, never touches the source gate.
-- **Calibrate empirically** — run a known volume into a bucket, count pulses, derive pulses/gallon. Don't trust the datasheet K-factor at our ~1.78 GPM (low third of the sensor's range).
+- **Calibrate empirically** — run a known volume into a bucket, count pulses, derive pulses/gallon. The seed/default K-factor is the Leridian's; don't trust the datasheet K at our ~1.78 GPM (low third of the sensor's range) — recalibrate in the field regardless.
 - The irrigation equivalent of the Watermark: confirms reality matched intent.
 
 ---
@@ -170,7 +171,7 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
 - Mounted at the east end of Red in a weatherproof enclosure.
 
 **Valve driver:** built for the three-tunnel future, populated for Red.
-- **Valve channels — one low-side N-FET per valve** (IRLZ44N), gate resistor + gate-to-GND pulldown so each valve sits **off** (closed/rest) through ESP32 boot. **No H-bridge, no DRV8871, no never-both-high invariant** — the valves are on/off. A **TVS (SMAJ30A) drain-to-source per FET** clamps the turn-off transient (the valves have an internal bridge rectifier, so a freewheel diode across the valve won't clamp). Build ~8–16 channels; **populate 5** for Red — Z1/Z2/Z3 (zones) + the NO clean leg + the NC Dosatron leg. (Inrush is well within the FET; the cap-inrush spec is moot.)
+- **Valve channels — one low-side N-FET per valve** (IRLZ44N), gate resistor + gate-to-GND pulldown so each valve sits **off** (closed/rest) through ESP32 boot. **No H-bridge, no DRV8871, no never-both-high invariant** — the valves are on/off. A **TVS (1.5KE30A, through-hole) drain-to-source per FET** clamps the turn-off transient (the valves have an internal bridge rectifier, so a freewheel diode across the valve won't clamp). Build ~8–16 channels; **populate 5** for Red — Z1/Z2/Z3 (zones) + the NO clean leg + the NC Dosatron leg. (Inrush is well within the FET; the cap-inrush spec is moot.)
 - **Pump-enable channel:** relay (clean isolation for the ~5A pump) or MOSFET on pump power, on the **armed 24 V** (the fail-dry source gate). Build **3** (one per tunnel); populate **1**.
 
 **Independent watchdog** — non-negotiable, separate from the ESP32.
@@ -184,15 +185,14 @@ All external parts: **IP65+ and UV-stable.** This system lives outdoors in full 
   - *Hard line: phone-only. Do not re-add a panel as "convenience" — that's a deliberate V1.5 cut (DEC-019).*
 
 **Power:** **fixed AC→24V DC supply, installed in the tunnel** (mains-fed). Replaces the earlier solar-bank dependency for V1 — Tinkle no longer waits on the Red solar build. Solar can later supplement or replace the supply on the same 24V rail; no redesign.
-- Candidate: Mean Well **LRS-150-24** (24V, 6.5A / 150W) — covers the pump's ~5A peak with margin. LRS-100-24 (4.5A) is marginal against the pump; size up.
-- **IP rating:** LRS series is open-frame **IP20** — must live *inside* the sealed enclosure (or its own sealed box). It does not mount in open tunnel air. (IP67 potted alternative: Mean Well LPV-150-24, if separate mounting is wanted.)
+- Candidate: Mean Well **LRS-150-24** (24V, 6.5A / 150W) — covers the pump's peak with margin. LRS-100-24 (4.5A) is marginal against the pump; size up.
+- **IP rating:** LRS series is open-frame **IP20** — but it now **mounts *outside* the enclosure** on its own bracket (shaded/vented), not crammed inside the sealed box (DEC-020). (IP67 potted alternative: Mean Well LPV-150-24, if a sealed standalone is preferred.)
 - Confirm mains reaches the east-end header (the HAF fan GFCIs suggest AC is present in the tunnel).
 - Rails off the 24V supply:
   - **24V (armed, via the safety relay)** → pump. The watchdog gates this — the fail-dry source gate (DEC-012).
   - **24V (raw)** → the valve FETs (zones + both diverter legs; valves are 9–36V). (The 24V button LED rings that used to share this rail are gone — DEC-019. No 12V buck either.)
-  - **24→5V buck** → flow sensor (level-shift its pulse down to 3.3V for the GPIO).
-  - **24→3.3V buck** → ESP32 + logic.
-- Inline fuse (~10A) on 24V output, TVS across 24V, reverse-polarity protection, a per-FET TVS (SMAJ30A) on each valve channel, flyback on the pump-relay coil (brownout insurance — mains here is brownout-prone).
+  - **24→5V buck** → flow sensor **and the ESP32** (fed 5V on 5V/VIN; the ESP32's onboard regulator makes 3.3V, and the 3V3 pin sources the logic rail). **There is no separate 24→3.3V buck** (DEC-020). Level-shift the sensor pulse down to 3.3V for the GPIO.
+- Inline fuse (~10A) on 24V output, TVS across 24V, reverse-polarity protection, a per-FET TVS (**1.5KE30A, through-hole**) on each valve channel, flyback on the pump-relay coil (brownout insurance — mains here is brownout-prone).
 - **Fail-dry holds on mains loss:** supply dies → pump loses power → no source → no water. A brownout = missed cycle, harmless by design.
 - **Build/test:** the same fixed supply powers bench bring-up before tunnel install.
 
@@ -240,7 +240,7 @@ The enemy is *runaway-on*. The **pump-power gate (DEC-012)** — armed only duri
 
 - Valve driver: ~8–16 low-side FET valve channels (5 populated: Z1/Z2/Z3 + NO clean leg + NC Dosatron leg), 3 pump-enable (1 used), 3 flow inputs (1 used). No H-bridges, no master channel.
 - No on-box panel (DEC-019, phone-only): the 3 button + LED-ring footprints and the TM1637 are dropped; the freed GPIO bank toward future zones. A single alive LED (GPIO2) remains.
-- Enclosure sized for full three-tunnel wiring and terminal blocks **plus the 24V supply** (the open-frame LRS lives inside the sealed box).
+- Enclosure sized for full three-tunnel wiring and terminal blocks. The open-frame LRS mounts **outside** the enclosure on its own bracket (DEC-020), so the box itself only houses the controller/driver/terminals.
 - Adding a tunnel = mount a pump + valves + sensor, pull wire home to the controller, populate channels, update config. No board or firmware redesign.
 
 ---
@@ -258,17 +258,17 @@ The enemy is *runaway-on*. The **pump-power gate (DEC-012)** — armed only duri
 
 These are the specs to nail during sourcing. Several feed the driver design, so resolve valves and pump first.
 
-1. ~~**Pump**~~ — **DONE:** SEAFLO 51 Series 24V (SFDP2-055-060-51), continuous/run-dry, 5.5 GPM, switch set ~20 psi, internal bypass. (Supersedes the v1.1 model-42 pick — see §4.)
-2. ~~**Accumulator**~~ — **DONE (required, §4):** reuse the shelf expansion tank; the 51's 5.5 GPM against a 1.78 GPM zone short-cycles without it.
+1. ~~**Pump**~~ — **DONE (v1.5, DEC-020):** SEAFLO 55 Series 24V (SFDP-055-060-55), continuous/run-dry, 7.0 GPM, switch set ~20 psi, internal bypass, heavy-duty pressure switch + anti-vibration mounts. (Supersedes the v1.3 model-51 pick, which superseded the v1.1 model-42 — see §4.)
+2. ~~**Accumulator**~~ — **DONE (required, §4):** reuse the shelf expansion tank; the 55's 7.0 GPM open against a 1.78 GPM zone short-cycles hard without it.
 3. ~~**Zone valves**~~ — **DONE (v1.4):** U.S. Solid 3/4" brass **2-wire auto-return, NC** motorized ball valve, 9–36V, NPT, standard port (2-indicator-light SKU). On/off via a low-side FET. Bench-confirm travel time before trusting `ZONE_TRAVEL_MS`.
 4. ~~**Master valve**~~ — **DROPPED (DEC-012):** no master; the pump on the armed 24V is the source gate.
-5. **Flow sensor:** pick exact brass 3/4" unit; calibrate pulses-per-gallon empirically.
+5. ~~**Flow sensor**~~ — **DONE (v1.5, DEC-020):** Leridian 3/4" NPT brass hall sensor (2–45 L/min, 253 psi), mounted after the filter; won't register below 2 L/min (our zone ~6.7 L/min). Seed K = Leridian's; calibrate pulses-per-gallon empirically regardless.
 6. ~~**Diverter**~~ — **DONE (DEC-013):** two 2-way US Solid auto-return valves — **NO** clean leg + **NC** Dosatron leg — + the existing GASHER check valve on the Dosatron outlet. Unions/camlocks each side of the Dosatron (+ pump, filter).
-7. ~~**Valve driver**~~ — **DONE:** discrete IRLZ44N low-side FET per valve + SMAJ30A TVS drain-to-source. No H-bridge.
+7. ~~**Valve driver**~~ — **DONE:** discrete IRLZ44N low-side FET per valve + **1.5KE30A (through-hole) TVS** drain-to-source. No H-bridge. Bare FETs + socketed ATtiny on an ElectroCookie protoboard; ×2 relay modules (pump + safety).
 8. ~~**Watchdog**~~ — **DONE:** ATtiny85, safety relay in series with **pump** power (the source gate).
 9. **ESP32 board variant** (DevKitC 38-pin candidate) and GPIO budget against channel count (DEC-019 freed 8 GPIO by cutting the panel — budget is comfortable).
-10. **Enclosure:** IP65+, sized for three-tunnel terminal blocks **+ the 24V supply inside**, clear/vented lid, DIN rail + glands.
-11. **Buck converters:** 24→5V, 24→3.3V modules (12V buck dropped; the LED-ring load that needed 24V is gone — DEC-019).
+10. ~~**Enclosure**~~ — **DONE (v1.5, DEC-020):** opaque grey **Boxco P-series** (~170×220×100), UV-stable, mounts vertical, glands down, DIN rail inside. The 24V PSU mounts **outside** on its own bracket (not in the box). DIN **lever blocks** with jumper bars for the 24V+/GND rails.
+11. **Buck converters:** a **single 24→5V module** (feeds the flow sensor + the ESP32; the ESP32 makes its own 3.3V). No 24→3.3V buck, no 12V buck (DEC-020 / DEC-019).
 12. ~~**IP67 buttons** with LED rings, ×3. **TM1637 4-digit display**, ×1.~~ — **dropped (DEC-019, phone-only).** Only the DevKitC onboard alive LED (GPIO2) remains; no added BOM.
 13. **Burial wire / waterproof connectors:** 18 AWG, conductor count per §5, gel-filled splices, with spares.
 14. ~~**Power dependency**~~ — **RESOLVED:** fixed AC→24V supply in the tunnel (Mean Well LRS-150-24 candidate), not the solar bank. Confirm mains reaches the east-end header.

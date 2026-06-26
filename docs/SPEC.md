@@ -31,17 +31,20 @@ scope guardrail.
 - **Watchdog:** ATtiny85 (separate binary) — independent hardware fail-dry backstop.
 - **UI:** vanilla HTML/CSS/JS SPA, gzipped into flash, served by ESPAsyncWebServer.
 - **Persistence:** NVS / Preferences.
-- **Power:** fixed AC→24V supply (Mean Well LRS-150-24) — valves + pump on 24V, with
-  5/3.3V bucks for sensor + logic. Pump on the watchdog-armed 24V (the fail-dry source gate).
+- **Power:** fixed AC→24V supply (Mean Well LRS-150-24, mounts **outside** the enclosure) —
+  valves + pump on 24V; a single **24→5V buck** feeds the flow sensor and the ESP32 (fed 5V
+  on 5V/VIN, it makes its own 3.3V — no separate 3.3V buck). Pump on the watchdog-armed 24V
+  (the fail-dry source gate). See DEC-020.
 - **Dev/test tiers:** native unit tests (host) → Wokwi sim → breadboard bench
   (LED/pulse stand-ins) → wet hardware (final gate). See DEC-004.
 
 ## Roles / interfaces
 - **Operator (phone):** sets schedules, default durations, fert policy, max-runtime,
   runs calibration, starts/stops manual runs — via the local web UI.
-- **Operator (at the box):** no on-box controls (DEC-019, v1.5 phone-only). The AC master
-  switch on the Mean Well input is the physical kill / service disconnect (whole-system → fail-dry,
-  no firmware); a single onboard LED blinks ~1 Hz to show the firmware is alive. All start / stop /
+- **Operator (at the box):** no on-box controls (DEC-019, v1.5 phone-only). An **optional**
+  AC master switch on the Mean Well input is the physical kill / service disconnect
+  (whole-system → fail-dry, no firmware); without it, the AC breaker / unplug is the kill. A
+  single onboard LED blinks ~1 Hz to show the firmware is alive. All start / stop /
   fault-clear is via the phone. (V1 originally had 3 zone buttons + a TM1637 panel — DEC-006, cut
   by DEC-019.)
 - **Headless:** the schedule runs from flash with no phone, no network present.

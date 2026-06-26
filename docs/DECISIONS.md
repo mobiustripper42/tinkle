@@ -273,8 +273,9 @@ open, everything else closed" — the correct safe default.
 **Why it's safe:** the **pump-power gate (DEC-012), not any valve,** is the fail-dry barrier, so
 the valves' resting states are a convenience, not the safety mechanism.
 **Driver / clamp (sourcing):** IRLZ44N per valve (margin makes the cap-inrush spec moot), gate
-resistor + gate-to-GND pulldown (boot-off), and a **TVS (SMAJ30A) drain-to-source per FET** —
-the valves have an internal bridge rectifier, so a freewheel diode won't clamp; clamp the FET.
+resistor + gate-to-GND pulldown (boot-off), and a **TVS (1.5KE30A, through-hole) drain-to-source
+per FET** (SMAJ30A in the original v1.4 sourcing — updated to the through-hole 1.5KE30A under
+DEC-020) — the valves have an internal bridge rectifier, so a freewheel diode won't clamp; clamp the FET.
 Valves on **raw 24 V**. (The button LED rings that previously shared the 24 V rail are gone under
 DEC-019 — their load leaves the power budget.)
 **Firmware impact (done — task 1.8):** `ValveDriver` and `pins.h` are now the on/off model —
@@ -495,3 +496,41 @@ removed from the build but remain **recoverable from git history** if a panel is
 `ledPin`/`btnPin`), `main.cpp` drops the button policy / display / ring render for the alive blink,
 `TM1637_RT` out of `lib_deps`; native suite 109/109; `esp32` / `esp32_sim` / `attiny85` green. The
 SPA-driven e2e sim (the former button-driven Wokwi scenarios) is redone separately (issue #62).
+
+---
+
+## DEC-020: v1.5 hardware reconcile — power tree, pump, flow sensor, clamp, enclosure
+**Decision:** Six as-built hardware corrections, settled in the design chat and reconciled into the
+specs/BOM/wiring. None touch the safety chain (DEC-003 / DEC-012) or the schedule — this is a
+sourcing/packaging reconcile, not a redesign.
+
+1. **Power tree — the 24→3.3V buck is removed.** A **single 24→5V buck** is the only converter: it
+   feeds the flow sensor *and* the ESP32, which takes 5V on its 5V/VIN pin and makes its own 3.3V
+   on the onboard regulator. The 3V3 pin then sources the logic rail (the WD-trip pull-up, the
+   level-shift reference). One fewer module, one fewer thing to misadjust. (The 12V buck was already
+   gone under DEC-019; the LED-ring load that needed it left with the panel.)
+2. **Pump → SEAFLO 55** (SFDP-055-060-55, 24V, 7.0 GPM open), with a heavy-duty pressure switch and
+   anti-vibration mounts, set to ~20 psi. Supersedes the 51 (which superseded the 42). The
+   accumulator matters even more against the 55's higher open flow vs. the 1.78 GPM zone.
+3. **Flow sensor → Leridian 3/4" NPT** hall unit (2–45 L/min, 253 psi), mounted after the filter.
+   It **won't register below 2 L/min**; our zone runs ~1.78 GPM ≈ 6.7 L/min, comfortably above the
+   floor. The firmware's seed/default K-factor changes to the Leridian's — **[FW], tracked
+   separately** — but field calibration (DEC-015 path) is unchanged and authoritative regardless.
+4. **Per-FET clamp → 1.5KE30A (through-hole)**, not the SMD SMAJ30A. Same job (drain-to-source TVS;
+   the internal-rectifier valves can't be clamped by a freewheel diode across the load), through-hole
+   to suit the protoboard build.
+5. **PSU mounts outside the enclosure** on its own bracket (shaded/vented), not crammed inside the
+   sealed box. The open-frame LRS is IP20, so the bracket gives it air; the enclosure then only
+   houses the controller/driver/terminals.
+6. **Enclosure → opaque grey Boxco P-series** (~170×220×100), UV-stable, vertical mount, glands down,
+   DIN rail inside with **lever terminal blocks** + jumper bars for the 24V+/GND rails. Build is
+   **hybrid**: ESP32 on a screw-terminal breakout, bare IRLZ44N FETs + a socketed ATtiny85 on an
+   ElectroCookie protoboard, ×2 relay modules (pump + safety). The AC master switch (DEC-019) is
+   **optional** — without it, the AC breaker / unplug is the kill.
+
+**Why it's safe:** every item is power-packaging or part-substitution. The fail-dry barrier is still
+the pump-power gate (DEC-012), armed by the ATtiny (DEC-003); valves still rest closed on raw 24V
+(DEC-011); the §17 acceptance checklist is unchanged. The one firmware-touching item (the Leridian
+default K) is a constant, gated behind empirical calibration, and ships in its own PR.
+**Status:** Decided. Docs/BOM/wiring reconciled in this pass; the default-K firmware change is
+tracked as a separate task/PR.

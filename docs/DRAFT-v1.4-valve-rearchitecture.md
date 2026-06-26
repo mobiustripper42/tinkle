@@ -1,6 +1,8 @@
 # Tinkle — v1.4 Valve Re-Architecture (DRAFT for review)
 
-> **⚠ Partially superseded by DEC-019 (v1.5, phone-only).** This draft predates the panel cut. Any references to the **TM1637 display, the 3 zone buttons, the 3 LED rings**, their GPIO/pin budget, or the 24 V ring rail are **historical** — V1 is phone-only (SPA + a single GPIO2 alive LED + an AC master switch). The valve/diverter/pump content here is unaffected.
+> **⚠ Partially superseded by DEC-019 (v1.5, phone-only).** This draft predates the panel cut. Any references to the **TM1637 display, the 3 zone buttons, the 3 LED rings**, their GPIO/pin budget, or the 24 V ring rail are **historical** — V1 is phone-only (SPA + a single GPIO2 alive LED + an optional AC master switch). The valve/diverter/pump content here is unaffected.
+>
+> **⚠ Also reconciled by DEC-020 (v1.5 hardware).** This is a point-in-time v1.4 proposal — its body is left as-authored. The current as-built facts (see DEC-020 / `tinkle_v1_spec.md`) differ on: **pump 51→55**, **flow sensor → Leridian**, **per-FET TVS SMAJ30A→1.5KE30A (through-hole)**, **24→3.3V buck removed** (single 24→5V buck; ESP32 makes its own 3.3V), and **PSU mounts outside** the enclosure. Where this draft says otherwise, DEC-020 wins.
 
 **Status:** proposal — not yet propagated to the canonical docs (SPEC, DECISIONS,
 hardware/firmware specs, wiring). Drafted for `@architect` review and to seed a BOM.
