@@ -35,6 +35,18 @@ int Api::err(JsonDocument& out, int code, const char* msg) {
     return code;
 }
 
+// Run-outcome wire name (DEC-018 history). File-static — the run-result enum lives in
+// run_log.h and is only stringified here and at the /api/status lastRun site.
+static const char* runResultName(RunResult r) {
+    switch (r) {
+        case RunResult::None:      return "none";
+        case RunResult::Completed: return "completed";
+        case RunResult::Stopped:   return "stopped";
+        case RunResult::Faulted:   return "faulted";
+    }
+    return "?";
+}
+
 // ---------------------------------------------------------------------------- GET
 
 int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
@@ -93,6 +105,41 @@ int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
     cal["lastK"]  = d_.cal.lastK();
 
     out["scheduleDropped"] = d_.sched.dropped();
+    return 200;
+}
+
+int Api::getHistory(JsonDocument& out, uint32_t nowMs) {
+    // Read-only telemetry (DEC-018): the run-history ring + the fault ring, both newest-first,
+    // plus render flags. No FAULT gate, no validation — §10 gating is mutating-paths-only. Lazy-
+    // fetched when the History screen opens, kept off the 1–2 s /api/status poll hot path.
+    const RunLog& rl = d_.run.runLog();
+    JsonArray runs = out["runs"].to<JsonArray>();
+    for (uint8_t i = 0; i < rl.count(); ++i) {              // at(0) = newest run
+        const RunEntry e = rl.at(i);
+        JsonObject o = runs.add<JsonObject>();
+        o["startEpoch"]    = e.startEpoch;                  // wall-clock only when clockWasValid
+        o["clockWasValid"] = e.clockWasValid;
+        o["zone"]          = e.zoneIndex;
+        o["durationSec"]   = e.durationSec;
+        o["gallons"]       = e.centigallons / 100.0f;       // u16 hundredths -> gallons
+        o["fertigate"]     = e.fertigate;
+        o["result"]        = runResultName(e.result);
+        o["fault"]         = faultName((Fault)e.faultCode);
+    }
+
+    // Fault ring serialized AS-IS (RAM, millis-domain — not persisted; the fault-log bug is
+    // #72). Same {code, atMs} shape as /api/status so the SPA reuses its renderer; uptimeMs
+    // below dates these via ago(uptimeMs - atMs) — the run ring carries its own epoch instead.
+    JsonArray faults = out["faults"].to<JsonArray>();
+    for (uint8_t i = 0; i < d_.faults.logCount(); ++i) {
+        const FaultManager::Entry fe = d_.faults.logEntry(i);
+        JsonObject o = faults.add<JsonObject>();
+        o["code"] = faultName(fe.code);
+        o["atMs"] = fe.atMs;
+    }
+
+    out["clockValid"] = d_.clock.valid();                  // wall-clock vs relative render flag
+    out["uptimeMs"]   = nowMs;                             // ago(uptimeMs - atMs) for the faults
     return 200;
 }
 

@@ -67,6 +67,7 @@ public:
     int getStatus  (JsonDocument& out, uint32_t nowMs);
     int getSchedule(JsonDocument& out);
     int getSettings(JsonDocument& out);
+    int getHistory (JsonDocument& out, uint32_t nowMs);   // DEC-018 run + fault history (#70)
 
     // --- POST (body pre-parsed by the glue; `in` may be a null variant for no body) ---
     int postRun      (JsonVariantConst in, JsonDocument& out, uint32_t nowMs);
