@@ -36,11 +36,16 @@ that way; do not "simplify" the valves onto the armed rail.
 ### Bench setup (do the whole bring-up on the bench first)
 
 The same Mean Well LRS-150-24 powers bench bring-up and the eventual tunnel install
-(spec §5). Bench order beats wiring it live in the tunnel.
+(spec §5). Bench order beats wiring it live in the tunnel. **The LRS mounts *outside* the
+enclosure** (own bracket, shaded/vented) — it's IP20, but it's no longer crammed inside.
 
 - **Bench mule, not the deployment pump:** the cracked-output SEAFLO 51 on the shelf is the
-  bench pump (§4). Never wet-test with it; it's for "does the relay click and does the pump
-  draw current" only.
+  bench pump. Never wet-test with it; it's for "does the relay click and does the pump draw
+  current" only. The **deployment pump is a SEAFLO 55** (SFDP-055-060-55, switch ~20 psi).
+- **Hybrid build form (not all-module):** ESP32 on a screw-terminal breakout; **bare
+  IRLZ44N FETs + a socketed ATtiny85 on an ElectroCookie protoboard**; **two relay modules**
+  (pump + safety, same part); **DIN lever blocks** with jumper bars for the 24V+/GND rails.
+  Splices: gel-filled for bring-up, heat-shrink butt for permanent.
 - **LED stand-ins for valves/pump** through Stage 7 — the Wokwi `diagram.json` already maps
   every output to an LED (alive=2, pump=22, Z1=13, Z2=14, Z3=16, div-clean=17, div-fert=18,
   flow=27). Drive LEDs (or just meter the gate) before you ever connect a 24V valve.
@@ -53,18 +58,22 @@ The same Mean Well LRS-150-24 powers bench bring-up and the eventual tunnel inst
 
 **Wire nothing yet.** Confirm you have, per the BOM (`DRAFT-v1.4-BOM.md`) and spec §5:
 
-- [ ] LRS-150-24 PSU, inline fuse (~10A) + holder, TVS across 24V, reverse-polarity diode/P-FET
-- [ ] **AC master switch** for the Mean Well *input* (DEC-019 — this is the service
-      disconnect *and* the phoneless emergency stop; it is part of V1, not optional)
-- [ ] 24→3.3V buck (ESP32/logic), 24→5V buck (flow sensor)
+- [ ] LRS-150-24 PSU (mounts **outside** the enclosure), inline fuse (~10A) + holder, TVS
+      across 24V, reverse-polarity diode/P-FET
+- [ ] **AC master switch** for the Mean Well *input* — optional but recommended: the service
+      disconnect *and* the phoneless emergency stop. If you skip it, the AC feed / breaker is
+      the kill instead.
+- [ ] **One 24→5V buck.** No 24→3.3V buck — the ESP32 is fed 5V on its 5V/VIN pin and makes
+      its own 3.3V onboard; the 3.3V rail for logic taps off the ESP32's 3V3 pin.
 - [ ] ESP32 DevKitC 38-pin, ATtiny85 + programmer
-- [ ] 5× IRLZ44N (Z1/Z2/Z3 + div-clean + div-fert), 5× SMAJ30A TVS, gate resistors (~100Ω)
-      + gate-to-GND pulldowns (~100k) per channel
-- [ ] Pump relay (~5–6A) + **NO safety/arm relay (≥10A)**, 1N4007/Schottky flyback for each
-      relay **coil**
-- [ ] Flow-sensor 5V→3.3V level shift (divider or module), 10k pull-up + 100nF for the
-      WD-trip line (GPIO36)
-- [ ] Terminal blocks + DIN rail, common-ground bus
+- [ ] 5× IRLZ44N (Z1/Z2/Z3 + div-clean + div-fert), 5× **1.5KE30A TVS (through-hole)**, gate
+      resistors (~100Ω) + gate-to-GND pulldowns (~100k) per channel
+- [ ] **Two relay modules** — pump (~5–6A) + **NO safety/arm relay (≥10A)**, same part;
+      1N4007/Schottky flyback for each relay **coil**
+- [ ] Flow-sensor (Leridian 3/4" NPT) 5V→3.3V level shift (divider or module), 10k pull-up +
+      100nF for the WD-trip line (GPIO36)
+- [ ] DIN lever blocks + jumper bars (24V+/GND rails), ElectroCookie protoboard, ESP32
+      screw-terminal breakout, common-ground bus
 
 **Safe / rest level is LOW everywhere** (conventions): NC zone valves closed, NC fert leg
 closed, NO clean leg open (plain water), pump off. Every FET must sit **off through ESP32
@@ -77,36 +86,42 @@ preserves it or is testing a deliberate departure from it.
 
 Build the source rail and its protection *before* anything draws from it.
 
-1. AC master switch → Mean Well AC input. **24V output → inline fuse → distribution bus.**
+1. AC feed (through the master switch, if fitted) → Mean Well AC input. **24V output →
+   inline fuse → distribution bus.**
 2. On the protected 24V bus: **TVS across 24V**, **reverse-polarity protection** inline.
 3. Nothing else connected yet.
 
 **✅ Gate — meter before proceeding:**
-- Master switch OFF → bus reads 0V. ON → bus reads ~24V, stable.
+- AC kill (master switch or breaker) OFF → bus reads 0V. ON → bus reads ~24V, stable.
 - Fuse intact, polarity correct at every downstream tap (mark + and − on the bus).
-- Flip the master a few times — clean off/on, no arc-y chatter. This switch is your
-  emergency stop; confirm it actually kills the rail.
+- If you fitted the master switch, flip it a few times — clean off/on, no arc-y chatter.
+  It's your emergency stop; confirm it actually kills the rail.
 
-> Do **not** wire the bucks, ESP32, or any load until 24V is clean and the master switch
+> Do **not** wire the buck, ESP32, or any load until 24V is clean and the AC kill
 > verifiably cuts it.
 
 ---
 
-## Stage 2 — Logic rails (the bucks), isolated
+## Stage 2 — The 5V rail (the buck), isolated
 
-Bring up the bucks **with their outputs disconnected from any IC.** Set them, then meter.
+There is **one buck** now (the 24→3.3V buck is gone). The ESP32 runs off 5V on its 5V/VIN
+pin and makes its own 3.3V with its onboard regulator; that 3V3 pin then sources the 3.3V
+logic rail. So the 5V buck is the only converter to set — and getting it right is critical,
+because **5V is also what feeds the ESP32.**
 
-1. 24V bus → **24→3.3V buck** input. Leave the output floating (no ESP32 yet).
-2. 24V bus → **24→5V buck** input. Leave the output floating (no flow sensor yet).
+Bring it up **with its output disconnected from any IC.** Set it, then meter.
 
-**✅ Gate — meter the *outputs* before connecting anything:**
-- 3.3V buck output = 3.3V ±5%. **If it's adjustable and reads 5V/12V, you'll cook the
-  ESP32 — set and confirm it now, with nothing attached.**
-- 5V buck output = 5.0V ±5%.
-- Both stable across a master OFF→ON cycle.
+1. 24V bus → **24→5V buck** input. Leave the output floating (no ESP32, no flow sensor yet).
 
-> A miswired/misadjusted buck is the single most expensive mistake in this build. Meter the
-> output voltage with a free output **every time** before an IC sees it.
+**✅ Gate — meter the *output* before connecting anything:**
+- 5V buck output = 5.0V ±5%. **If it's adjustable and reads 12V/24V, you'll cook the ESP32's
+  onboard regulator — set and confirm it now, with nothing attached.**
+- Stable across an AC OFF→ON cycle.
+- (You'll confirm the ESP32's own 3V3 pin reads ~3.3V in Stage 4, once it's powered.)
+
+> A miswired/misadjusted buck is the single most expensive mistake in this build — and with
+> the 3.3V buck gone, this one buck now also gates the ESP32. Meter its output with a free
+> output **every time** before an IC sees it.
 
 ---
 
@@ -115,7 +130,7 @@ Bring up the bucks **with their outputs disconnected from any IC.** Set them, th
 Before connecting logic, establish the single ground reference. This stage is "do it
 right," not "power something."
 
-1. Tie together at **one star point**: both buck grounds, the 24V return, and (next stage)
+1. Tie together at **one star point**: the buck ground, the 24V return, and (next stage)
    the ESP32 GND and ATtiny GND.
 2. Use a real ground bus / terminal, not a daisy chain through random connectors.
 
@@ -132,18 +147,22 @@ right," not "power something."
 
 Now power the brain — and **only** the brain. No FETs, no relays, no valves.
 
-1. 3.3V buck output → ESP32 3V3 + GND (to the star point). *(Or power over USB for the very
-   first flash — just don't back-feed 3V3 from two sources at once.)*
+1. **5V buck output → ESP32 5V/VIN pin** + GND (to the star point). The onboard regulator
+   makes 3.3V. *(Or power over USB for the very first flash — just don't feed 5V/VIN and USB
+   at once.)*
 2. Flash the firmware: `pio run -e esp32 -t upload` (toolchain notes in `CLAUDE-context.md`).
 3. Nothing on GPIO 13/14/16/17/18/22/4/27 yet.
 
 **✅ Gate:**
+- **ESP32's 3V3 pin reads ~3.3V** — this is now your logic rail (the 10k WD-trip pull-up and
+  the level-shift reference tap here, not a separate buck). Meter it before Stage 5.
 - **Alive LED (GPIO2, onboard) blinks ~1 Hz** = firmware ticking. This is your "the brain
   is alive" signal and it gates nothing — it just has to blink.
 - ESP32 joins Wi-Fi (or raises the `Tinkle-Setup` SoftAP); `http://tinkle.local` serves the
   SPA. Status screen loads.
 - Serial monitor clean: `pio device monitor -b 115200`. No boot loop, no brownout resets
-  (if it resets, suspect the 3.3V buck sag — recheck Stage 2 under load).
+  (if it resets, suspect the 5V buck sagging under the onboard regulator — recheck Stage 2
+  under load).
 
 > At this point you have a working controller that commands nothing. Every later stage hangs
 > one load off a verified-good brain.
@@ -190,7 +209,7 @@ Start with Zone 1 (GPIO13).
 
 1. GPIO13 → **~100Ω series gate resistor** → IRLZ44N gate.
 2. **~100k gate-to-GND pulldown** at the gate (holds the FET off through boot).
-3. IRLZ44N source → ground (star point); drain → load return. **SMAJ30A TVS
+3. IRLZ44N source → ground (star point); drain → load return. **1.5KE30A TVS (through-hole)
    drain-to-source** across the FET (the valves have an internal bridge rectifier, so a
    freewheel diode across the *valve* won't clamp — clamp the FET).
 4. Load high side on **raw 24V** (not armed). For the bench, use the LED stand-in or just
@@ -247,7 +266,7 @@ Only now connect the thing that moves water — and put it where the watchdog ca
 - **Kill heartbeat during a pump run → pump de-powers** (safety relay opens upstream of the
   welded-relay case: even a welded pump relay can't keep the pump live, because its supply
   is gone).
-- **Master switch OFF → pump dead instantly.**
+- **AC kill (master switch / breaker) OFF → pump dead instantly.**
 - Idle (no run) → pump has **no power** (armed rail open).
 
 > If the pump can run with the heartbeat dead, with the run stopped, or with the master off —
@@ -260,7 +279,7 @@ Only now connect the thing that moves water — and put it where the watchdog ca
 The flow sensor gates nothing (DEC-015 lets its faults be muted), so it comes after the
 actuation chain is proven.
 
-1. Flow sensor power from the **5V buck**.
+1. **Leridian 3/4" NPT hall sensor** (2–45 L/min, 253 psi) powered from the **5V buck**.
 2. Sensor pulse output → **5V→3.3V level shift** (divider or module) → **GPIO27**
    (interrupt, INPUT_PULLUP).
 3. **Do not feed the 5V pulse straight to GPIO27** — it cooks the input over time.
@@ -270,8 +289,9 @@ actuation chain is proven.
   pulse count on the SPA / serial.
 - The level-shifted pulse at GPIO27 peaks at ~3.3V, never 5V (meter or scope it).
 - Calibrate K **empirically later** with real water (run a known volume, count pulses) —
-  don't trust the datasheet K at our ~1.78 GPM (low third of range). That's a wet-confirm
-  task, not a bench-electrical one.
+  don't trust the datasheet K. The Leridian **won't register below 2 L/min**; our zone runs
+  ~1.78 GPM ≈ 6.7 L/min, comfortably above the floor. Calibration is a wet-confirm task, not
+  a bench-electrical one.
 
 ---
 
@@ -303,14 +323,14 @@ not part of this electrical bring-up.
 
 ## Quick reference — the order in one breath
 
-1. **24V rail** + fuse/TVS/reverse-protect + **master switch** → meter the bus.
-2. **Bucks** (3.3V, 5V) with outputs floating → meter the outputs.
+1. **24V rail** + fuse/TVS/reverse-protect + **AC kill** (master switch/breaker) → meter the bus.
+2. **One 24→5V buck**, output floating → meter the output (no 3.3V buck; ESP32 makes its own).
 3. **Common ground** star point → continuity.
-4. **ESP32 alone** → alive LED blinks, SPA loads.
+4. **ESP32 alone** (fed 5V on 5V/VIN) → 3V3 pin ~3.3V, alive LED blinks, SPA loads.
 5. **Watchdog + safety relay** → armed 24V live *only* during a healthy run; dies on every fault.
-6. **One valve FET** (gate R + pulldown + TVS, raw 24V) → boots off, actuates on command.
+6. **One valve FET** (gate R + pulldown + 1.5KE30A TVS, raw 24V) → boots off, actuates on command.
 7. **Remaining 4 valve FETs** → each off at boot, diverter rests plain-water.
-8. **Pump relay on the armed rail** (LAST) → runs only with both keys; dies on heartbeat/master loss.
+8. **Pump relay on the armed rail** (LAST) → runs only with both keys; dies on heartbeat/AC loss.
 9. **Flow sensor** via 5V→3.3V level shift → pulses on GPIO27, ≤3.3V.
 10. **Walk the §6/§17 fail-dry table** → that's done.
 
