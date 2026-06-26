@@ -435,14 +435,14 @@ function show(name) {
   if ((name === 'set' || name === 'run') && !setDirty) loadSettings();
   if (name === 'history') loadHistory();                    // lazy fetch on open (not polled)
 }
-// Guard a tab switch that would abandon unsaved Schedule/Settings edits (#82). OK clears the
-// leaving screen's flag so the existing reload-on-reentry refreshes it from the device.
+// Guard a tab switch that would abandon unsaved Schedule/Settings edits (#82). OK reverts the
+// leaving screen in place from its cached device copy (offline-safe — no fetch dependency).
 function requestShow(name) {
   const dirty = (current === 'sched' && schedDirty) || (current === 'set' && setDirty);
   if (dirty && name !== current) {
     if (!confirm('Discard unsaved changes?')) return;       // Cancel — stay put
-    if (current === 'sched') schedSetDirty(false);
-    if (current === 'set')   setSetDirty(false);
+    if (current === 'sched') discardSched();                // revert in place (offline-safe)
+    if (current === 'set')   discardSettings();
   }
   show(name);
 }
@@ -486,12 +486,17 @@ $('#run-go').addEventListener('click', async () => {
 
 /* ---- schedule ---- */
 let sched = [];
+let schedSaved = [];                          // last device-known schedule, for Discard (#82)
+const clone = x => JSON.parse(JSON.stringify(x));
 const DAY_CH = ['S','M','T','W','T','F','S'];
 async function loadSchedule() {
   const r = await api('/api/schedule');
-  if (r.ok) { sched = r.entries || []; schedSetDirty(false); renderSched(); }
+  if (r.ok) { sched = r.entries || []; schedSaved = clone(sched); schedSetDirty(false); renderSched(); }
 }
-$('#sched-discard').addEventListener('click', loadSchedule);   // revert to the device copy (#82)
+// Revert in place from the cached device copy — no fetch, so Discard works offline and the
+// nav guard can never leave abandoned edits live behind a cleared flag (#82).
+function discardSched() { sched = clone(schedSaved); schedSetDirty(false); renderSched(); }
+$('#sched-discard').addEventListener('click', discardSched);
 // Any interaction inside the list is an edit (inputs, day toggles, deletes).
 $('#sched-list').addEventListener('input',  () => schedSetDirty(true));
 $('#sched-list').addEventListener('change', () => schedSetDirty(true));
@@ -562,17 +567,16 @@ $('#sched-save').addEventListener('click', async () => {
     flash('#sched-msg', 'Every entry needs a duration (1–120 minutes).', false); return;
   }
   const r = await api('/api/schedule', { entries: sched });
-  if (r.ok) schedSetDirty(false);
+  if (r.ok) { schedSetDirty(false); schedSaved = clone(sched); }   // saved copy is now the device copy
   flash('#sched-msg', r.ok ? 'Saved ' + r.count + ' entries.'
                            : 'Refused: ' + (r.error || r.code), r.ok);
 });
 
 /* ---- settings ---- */
-async function loadSettings() {
-  const r = await api('/api/settings');
-  if (!r.ok) return;
-  SET = r;
-  setSetDirty(false);
+// Render the form from the cached SET (the device copy). Programmatic value sets fire no
+// input events, so this never marks the form dirty.
+function populateSettings() {
+  const r = SET;
   fillZoneSelect($('#run-zone'));
   fillZoneSelect($('#cal-zone'));
   const host = $('#set-zones');
@@ -591,8 +595,17 @@ async function loadSettings() {
   $('#set-ssid').value = (r.wifi && r.wifi.ssid) || '';
   $('#set-pass').value = '';
 }
+async function loadSettings() {
+  const r = await api('/api/settings');
+  if (!r.ok) return;
+  SET = r;
+  populateSettings();
+  setSetDirty(false);
+}
+// Revert in place from the cached SET — offline-safe, mirrors discardSched (#82).
+function discardSettings() { if (SET) { populateSettings(); setSetDirty(false); } }
 $('#scr-set').addEventListener('input', () => setSetDirty(true));
-$('#set-discard').addEventListener('click', loadSettings);     // revert to the device copy (#82)
+$('#set-discard').addEventListener('click', discardSettings);
 $('#set-save').addEventListener('click', async () => {
   const mins = Array.prototype.map.call(
     document.querySelectorAll('#set-zones input'), i => +i.value);
