@@ -30,10 +30,19 @@ public:
     void begin(uint32_t nowMs) {
         startMs_ = nowMs;
         WiFi.persistent(false);                 // NVS creds are ours (DEC-008), not the SDK's
-        if (store_.wifiSsid()[0] != '\0') {
+        const char* ssid = store_.wifiSsid();
+        const char* pass = store_.wifiPass();
+#ifdef TINKLE_SIM
+        // Wokwi (#62): a fresh sim has empty NVS, and the SoftAP fallback isn't
+        // reachable from outside the simulator — default to Wokwi's open guest AP
+        // so the net.forward'd SPA + NTP work out of the box. Stored creds (set
+        // via /api/settings inside the sim) still win.
+        if (ssid[0] == '\0') { ssid = "Wokwi-GUEST"; pass = ""; }
+#endif
+        if (ssid[0] != '\0') {
             WiFi.mode(WIFI_STA);
             WiFi.setAutoReconnect(true);
-            WiFi.begin(store_.wifiSsid(), store_.wifiPass());
+            WiFi.begin(ssid, pass);
             mode_ = Mode::Connecting;
         } else {
             startSoftAp();

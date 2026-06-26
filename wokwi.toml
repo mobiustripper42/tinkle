@@ -1,17 +1,39 @@
-# Wokwi simulation config — DEC-004 tier 2 (Phase 0.7 / #7).
+# Wokwi simulation config — DEC-004 tier 2 (Phase 0.7 / #7, full-sim session #62).
 #
-# Boots the real esp32 firmware in simulation: TM1637 panel, the three zone buttons
-# (B1/B2/B3 each run their own zone; any press stops a running zone; >=3 s long-press
-# clears a latched fault — DEC-006), and status LEDs on the pump relay, the three zone
-# valve FETs, the two diverter legs, and the zone button rings — enough to watch a full
-# run sequence (zone -> pump -> unwind, button-driven, live countdown). v1.4: no master
-# valve (DEC-012); the pump is the source gate.
+# Boots the real esp32_sim firmware in simulation. Phone-only (DEC-019): there is no
+# TM1637 panel and no buttons — the diagram shows the alive LED (~1 Hz) plus status
+# LEDs on the pump relay, the three zone valve FETs, and the two diverter legs, and a
+# "FLOW on/off" slide switch feeding the fake flow source. v1.4: no master valve
+# (DEC-012); the pump is the source gate.
 #
-# Run:
-#   1. pio run -e esp32_sim                       # build first; paths below point at the output.
+# Two ways to drive it:
+#
+#   A. Interactive (VS Code Wokwi) — the SPA-driven session (#62, primary):
+#      1. pio run -e esp32_sim                    # build first; paths below point at the output.
 #                                                 # esp32_sim defines TINKLE_SIM -> short valve
 #                                                 # travel + run duration so a run is watchable.
-#   2. VS Code: F1 -> "Wokwi: Start Simulator"    # needs the (free) Wokwi extension license
+#      2. VS Code: F1 -> "Wokwi: Start Simulator" # needs the (free) Wokwi extension license
+#      3. The firmware joins Wokwi-GUEST by itself (empty sim NVS -> TINKLE_SIM default
+#         creds), NTP syncs, and the SPA/API forward to the host at http://localhost:8180/
+#         (remote VPS: let VS Code forward 8180, or tunnel it). On mill-dev that 8180
+#         forward drops the SPA after ~20s — prefer the Private Gateway ([net] block
+#         below + test/sim/MANUAL.md), stable at http://localhost:9080/. Drive the run from the
+#         phone UI: Manual run -> pick a zone -> start; slide FLOW on as it runs; watch
+#         the valve + pump LEDs and the live countdown; STOP ALL to stop. See
+#         test/sim/MANUAL.md for the full walkthrough.
+#
+#   B. Headless (wokwi-cli) — the automated fail-dry checks that need no run:
+#      test/sim/run.sh — boot-safe-state + idle-unexpected-flow, asserted via expect-pin.
+#      The CLI can't reach the SPA (no [[net.forward]]) or serial, and there are no
+#      buttons, so run-driven scenarios live in the interactive session above. See
+#      test/sim/README.md.
+#
+# Flow sensor: the sim firmware generates its own fake hall pulses — a 15 Hz LEDC
+# square wave on GPIO19 (TINKLE_SIM only; ~2.0 GPM at the 450 K seed), looped back to
+# GPIO27 in the diagram through the "FLOW on/off" slide switch. The switch BOOTS QUIET
+# (flow-on at boot would cross the 50-pulse idle threshold in ~3.3 s and latch
+# FAULT_UNEXPECTED_FLOW unprovoked). Slide it up as a run starts (the ~2 s staging +
+# 3 s grace leave room); leave it up while idle to provoke FAULT_UNEXPECTED_FLOW.
 #
 # Diagram omits LED series resistors (sim convenience); the breadboard bench (tier 3)
 # uses real current-limiting per the wiring doc.
@@ -20,3 +42,19 @@
 version = 1
 firmware = ".pio/build/esp32_sim/firmware.bin"
 elf = ".pio/build/esp32_sim/firmware.elf"
+
+# Private Wokwi IoT Gateway (paid). The extension connects to a locally-run gateway
+# over WebSocket; run the Linux gateway on THIS host (it prints "Listening on TCP
+# Port 9011") BEFORE starting the sim, or the sim errors "Failed to connect to the
+# IoT Gateway". With it, the ESP32 gets 10.13.37.2 (vs 10.10.0.2 public), incoming
+# connections are stable (real keep-alive — no net.forward socket churn), and the SPA
+# is reachable at http://localhost:9080/ (the gateway forwards 9080 -> target:80).
+[net]
+gateway = "ws://localhost:9011"
+
+# SPA + API reachable from a host browser against the simulated device (#62). VS Code
+# Wokwi only; wokwi-cli (the headless run.sh tier) does not implement port forwarding.
+# Kept as the free-tier fallback; the Private Gateway's 9080 is the stable path.
+[[net.forward]]
+from = "localhost:8180"
+to = "target:80"

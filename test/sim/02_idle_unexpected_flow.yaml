@@ -1,0 +1,28 @@
+name: 'Unexpected idle flow stays dry (E2 fail-dry)'
+version: 1
+author: 'Tinkle'
+# With no run active, flow should be impossible. Slide FLOW on while idle and the
+# firmware latches FAULT_UNEXPECTED_FLOW (>50 pulses over a 5 s window, ~3.3 s at the
+# 15 Hz fake-flow source) and commands the safe state.
+#
+# Phone-only (DEC-019): the fault is surfaced on the SPA, not on the box, and idle vs.
+# faulted both rest with every actuator LOW — so there is no actuator-pin signature
+# that distinguishes "latched fault" from "idle" headless. What this scenario asserts
+# is the fail-dry PROPERTY that matters: unexpected flow never tricks the controller
+# into energizing the pump or a valve. The latch itself (the "FLOW" fault banner +
+# /api/status) is confirmed in the interactive SPA session — see MANUAL.md.
+steps:
+  - delay: 2s
+  - set-control: { part-id: flow_sw, control: value, value: 1 }   # FLOW on while IDLE (sim t~2s)
+  # The detector evaluates on tumbling 5 s window boundaries. The first boundary
+  # (~t=5s) spans t=0-5s and sees only ~3 s of flow (~45 pulses, under the 50
+  # threshold); it LATCHES at the SECOND boundary (~t=10s, a full 5 s of flow). So
+  # this delay must reach that second boundary -- don't tighten it below ~7 s.
+  - delay: 8s
+  - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump never energizes
+  - expect-pin: { part-id: esp, pin: 13, value: 0 }   # no zone opens
+  - expect-pin: { part-id: esp, pin: 14, value: 0 }
+  - expect-pin: { part-id: esp, pin: 16, value: 0 }
+  - expect-pin: { part-id: esp, pin: 17, value: 0 }   # diverter undisturbed (rest)
+  - expect-pin: { part-id: esp, pin: 18, value: 0 }
+  - set-control: { part-id: flow_sw, control: value, value: 0 }   # FLOW off
