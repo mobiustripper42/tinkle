@@ -1340,7 +1340,7 @@ static void test_cal_happy_path_k_to_nvs() {
     r.cal.tick(r.rc.state(), pulses, now);
     TEST_ASSERT_EQUAL_UINT32(900, r.cal.pulsesCounted());
 
-    // 900 / 1.5 = 600 — deliberately NOT the 450 default, or Persistence's
+    // 900 / 1.5 = 600 — deliberately NOT the default K, or Persistence's
     // write-on-change would (correctly) skip the flash write and hide the path.
     TEST_ASSERT_EQUAL(CalResult::Ok, r.cal.finish(1.5f, pulses, now));
     TEST_ASSERT_EQUAL_FLOAT(600.0f, r.cal.lastK());

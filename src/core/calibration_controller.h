@@ -44,8 +44,8 @@ public:
 #else
         uint32_t runSec = 120;          // CAL_RUN_SEC (§15 seed)
 #endif
-        // Sanity bounds. K bounds are ~10x around the 450 datasheet seed; minGallons
-        // rejects a volume too small to calibrate against (§15 seeds, tune on bench).
+        // Sanity bounds. minK/maxK (50–5000 p/gal) bracket the ~1670 datasheet seed;
+        // minGallons rejects a volume too small to calibrate against (§15 seeds, tune on bench).
         float minGallons = 0.25f;
         float minK       = 50.0f;
         float maxK       = 5000.0f;
