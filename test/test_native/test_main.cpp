@@ -1725,7 +1725,7 @@ static void test_fm_clear_blocked_until_condition_resolves() {
     FaultManager fm(rc);
 
     rc.raiseFault(Fault::Watchdog, 100);
-    fm.tick(100);
+    fm.tick(1750000000u, true);
     fm.setConditionActive(Fault::Watchdog, true);    // trip line still asserted
     TEST_ASSERT_FALSE(fm.clearAllowed());
     TEST_ASSERT_FALSE(fm.requestClear());
@@ -1750,7 +1750,7 @@ static void test_fm_not_faulted_and_unconditioned_codes() {
     TEST_ASSERT_FALSE(fm.requestClear());
 
     rc.raiseFault(Fault::CalRange, 50);
-    fm.tick(50);
+    fm.tick(1750000000u, true);
     TEST_ASSERT_TRUE(fm.requestClear());             // no live condition — clears
     TEST_ASSERT_TRUE(rc.isIdle());
 }
@@ -1763,32 +1763,81 @@ static void test_fm_log_edges_and_ring_wrap() {
     rc.begin(0);
     FaultManager fm(rc);
 
+    const uint32_t E0 = 1750000000u;
     rc.raiseFault(Fault::NoFlow, 100);
-    for (uint32_t t = 100; t < 600; t += 100) fm.tick(t);   // held latch: one entry
+    for (uint32_t t = 100; t < 600; t += 100) fm.tick(E0, true);   // held latch: one entry
     TEST_ASSERT_EQUAL_UINT8(1, fm.logCount());
     TEST_ASSERT_EQUAL(Fault::NoFlow, fm.logEntry(0).code);
-    TEST_ASSERT_EQUAL_UINT32(100, fm.logEntry(0).atMs);
+    TEST_ASSERT_EQUAL_UINT32(E0, fm.logEntry(0).epoch);
+    TEST_ASSERT_TRUE(fm.logEntry(0).clockWasValid);
 
     TEST_ASSERT_TRUE(fm.requestClear());
     rc.raiseFault(Fault::CalRange, 700);
-    fm.tick(700);
+    fm.tick(E0 + 7, true);
     TEST_ASSERT_EQUAL_UINT8(2, fm.logCount());
     TEST_ASSERT_EQUAL(Fault::CalRange, fm.logEntry(0).code);   // newest first
     TEST_ASSERT_EQUAL(Fault::NoFlow,   fm.logEntry(1).code);
 
-    // Churn past LOG_SIZE: the ring keeps the newest 8.
-    uint32_t t = 1000;
-    for (int i = 0; i < 10; ++i) {
+    // Churn past LOG_SIZE (now 16): the ring keeps the newest LOG_SIZE.
+    uint32_t e = E0 + 1000;
+    for (int i = 0; i < 18; ++i) {
         TEST_ASSERT_TRUE(fm.requestClear());
-        rc.raiseFault(Fault::UnexpectedFlow, t);
-        fm.tick(t);
-        t += 100;
+        rc.raiseFault(Fault::UnexpectedFlow, 1000 + i);
+        fm.tick(e, true);
+        e += 100;
     }
     TEST_ASSERT_EQUAL_UINT8(FaultManager::LOG_SIZE, fm.logCount());
     TEST_ASSERT_EQUAL(Fault::UnexpectedFlow, fm.logEntry(0).code);
-    TEST_ASSERT_EQUAL_UINT32(t - 100, fm.logEntry(0).atMs);    // the last raise
+    TEST_ASSERT_EQUAL_UINT32(e - 100, fm.logEntry(0).epoch);    // the last raise
     TEST_ASSERT_EQUAL(Fault::UnexpectedFlow,
                       fm.logEntry(FaultManager::LOG_SIZE - 1).code);  // oldest kept
+}
+
+// #90: epoch stamping + the 2025 sanity guard + serialize/deserialize + NVS round-trip.
+static void test_fm_epoch_guard_and_persist() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    FaultManager fm(rc);
+
+    fm.note(Fault::NoFlow,    1700000000u, true);   // 2023: pre-2025 → bit clear
+    fm.note(Fault::ValveRest, 1750000000u, true);   // 2025 + synced → set
+    fm.note(Fault::CalRange,  1750000000u, false);  // unsynced → clear
+    TEST_ASSERT_EQUAL_UINT8(3, fm.logCount());
+    TEST_ASSERT_FALSE(fm.logEntry(2).clockWasValid);              // oldest = NoFlow (pre-2025)
+    TEST_ASSERT_EQUAL_UINT32(1700000000u, fm.logEntry(2).epoch);  // stored, just flagged
+    TEST_ASSERT_TRUE (fm.logEntry(1).clockWasValid);             // ValveRest
+    TEST_ASSERT_FALSE(fm.logEntry(0).clockWasValid);             // CalRange (unsynced)
+    TEST_ASSERT_TRUE(fm.dirty());                                // note() dirties
+
+    uint8_t blob[FaultManager::BLOB_BYTES];
+    const uint16_t len = fm.serialize(blob, sizeof(blob));
+    TEST_ASSERT_EQUAL_UINT16(3 * FaultManager::ENTRY_BYTES, len);
+    FaultManager fm2(rc);
+    fm2.deserialize(blob, len);
+    TEST_ASSERT_EQUAL_UINT8(3, fm2.logCount());
+    TEST_ASSERT_EQUAL(Fault::CalRange, fm2.logEntry(0).code);     // newest preserved
+    TEST_ASSERT_EQUAL(Fault::NoFlow,   fm2.logEntry(2).code);     // oldest preserved
+    TEST_ASSERT_EQUAL_UINT32(1750000000u, fm2.logEntry(1).epoch);
+    TEST_ASSERT_TRUE(fm2.logEntry(1).clockWasValid);
+    TEST_ASSERT_FALSE(fm2.dirty());                              // rehydrate is not a change
+
+    FakeKvStore s;
+    Persistence p(s, 3);
+    p.begin();
+    FaultManager absent(rc);
+    p.loadFaultLog(absent);
+    TEST_ASSERT_EQUAL_UINT8(0, absent.logCount());               // absent key → empty
+    p.saveFaultLog(fm);
+    TEST_ASSERT_EQUAL_INT(1, s.writesTo("faultlog"));
+    Persistence p2(s, 3);
+    p2.begin();
+    FaultManager loaded(rc);
+    p2.loadFaultLog(loaded);
+    TEST_ASSERT_EQUAL_UINT8(3, loaded.logCount());
+    TEST_ASSERT_EQUAL(Fault::CalRange, loaded.logEntry(0).code);
+    TEST_ASSERT_FALSE(loaded.logEntry(0).clockWasValid);
+    TEST_ASSERT_EQUAL_UINT32(1750000000u, loaded.logEntry(1).epoch);
 }
 
 // ----------------------------------------------------------------------------
@@ -2077,7 +2126,7 @@ static void test_api_fault_gate_and_exemptions() {
     ApiRig r;
     JsonDocument out;
     r.rc.raiseFault(Fault::Watchdog, 100);
-    r.fm.tick(100);
+    r.fm.tick(1750000000u, true);
     r.fm.setConditionActive(Fault::Watchdog, true);        // trip line still asserted
 
     JsonDocument body = parseJson("{\"zoneIndex\":0}");
@@ -2203,7 +2252,7 @@ static void test_api_flow_override_dec015() {
     JsonDocument out;
 
     r.rc.raiseFault(Fault::UnexpectedFlow, 100);
-    r.fm.tick(100);
+    r.fm.tick(1750000000u, true);
     r.fm.setConditionActive(Fault::UnexpectedFlow, true);  // water still pulsing
     TEST_ASSERT_EQUAL_INT(409, r.api.postFaultClear(out, 150));
 
@@ -2218,7 +2267,7 @@ static void test_api_flow_override_dec015() {
 
     // A NON-flow fault is untouched by the override path: the watchdog keeps its gate.
     r.rc.raiseFault(Fault::Watchdog, 300);
-    r.fm.tick(300);
+    r.fm.tick(1750000300u, true);
     r.fm.setConditionActive(Fault::Watchdog, true);
     out.clear();
     body = parseJson("{\"flowOverride\":true}");           // re-post, already on
@@ -2367,10 +2416,10 @@ static void test_fm_note_is_nonlatching() {
     rc.begin(0);
     FaultManager fm(rc);
 
-    fm.note(Fault::ValveRest, 123);
+    fm.note(Fault::ValveRest, 1750000000u, true);
     TEST_ASSERT_EQUAL_UINT8(1, fm.logCount());
     TEST_ASSERT_EQUAL(Fault::ValveRest, fm.logEntry(0).code);
-    TEST_ASSERT_EQUAL_UINT32(123, fm.logEntry(0).atMs);
+    TEST_ASSERT_EQUAL_UINT32(1750000000u, fm.logEntry(0).epoch);
     TEST_ASSERT_FALSE(rc.isFaulted());
 
     RunRequest req; req.zoneIndex = 0; req.durationSec = 1;
@@ -2627,7 +2676,7 @@ static void test_api_history_shape() {
     uint32_t now = 0;
     now = runOnce(r.rc, now, 0, 1, false, 1750000000u, true, 250);    // 2.50 gal, synced
     now = runOnce(r.rc, now, 1, 2, true,  0,           false, 500);   // 5.00 gal, unsynced, fert
-    r.fm.note(Fault::ValveRest, 5000);
+    r.fm.note(Fault::ValveRest, 1750000000u, true);
 
     out.clear();
     TEST_ASSERT_EQUAL_INT(200, r.api.getHistory(out, 9000));
@@ -2650,7 +2699,8 @@ static void test_api_history_shape() {
     JsonArray faults = out["faults"];
     TEST_ASSERT_EQUAL_INT(1, faults.size());
     TEST_ASSERT_EQUAL_STRING("valveRest", faults[0]["code"].as<const char*>());
-    TEST_ASSERT_EQUAL_UINT32(5000, faults[0]["atMs"].as<uint32_t>());
+    TEST_ASSERT_EQUAL_UINT32(1750000000u, faults[0]["epoch"].as<uint32_t>());
+    TEST_ASSERT_TRUE(faults[0]["clockWasValid"].as<bool>());
 
     TEST_ASSERT_TRUE(out["clockValid"].as<bool>());
     TEST_ASSERT_EQUAL_UINT32(9000, out["uptimeMs"].as<uint32_t>());
@@ -2794,6 +2844,7 @@ int main() {
     RUN_TEST(test_fm_clear_blocked_until_condition_resolves);
     RUN_TEST(test_fm_not_faulted_and_unconditioned_codes);
     RUN_TEST(test_fm_log_edges_and_ring_wrap);
+    RUN_TEST(test_fm_epoch_guard_and_persist);
 
     RUN_TEST(test_rest_clean_close_no_flag);
     RUN_TEST(test_rest_stuck_valve_flags_zone);

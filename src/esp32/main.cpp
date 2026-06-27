@@ -175,6 +175,12 @@ void setup() {
     if (runController.runLog().count())
         Serial.printf("[tinkle] runlog: %u entries loaded\n", runController.runLog().count());
 
+    // Rehydrate the fault-log ring from its NVS blob (#90) — the §8 fault log now survives
+    // reboot. Absent blob => empty ring; feeds /api/status + /api/history immediately.
+    persistence.loadFaultLog(faultManager);
+    if (faultManager.logCount())
+        Serial.printf("[tinkle] faultlog: %u entries loaded\n", faultManager.logCount());
+
     // Configure TZ + SNTP and take the first sync attempt (§13). No network yet, so this
     // stays invalid until Phase 4 brings up WiFi; the call is harmless until then.
     systemClock.begin();
@@ -290,6 +296,21 @@ void loop() {
         runLogPending = false;
     }
 
+    // Persist the fault-log ring on change, debounced the same way (#90). A fault logged this
+    // pass dirties it; the write lands a tick or two later, off the hot loop.
+    static bool     faultLogPending   = false;
+    static uint32_t faultLogPendingMs = 0;
+    if (faultManager.dirty()) {
+        if (!faultLogPending) { faultLogPending = true; faultLogPendingMs = now; }
+        if ((uint32_t)(now - faultLogPendingMs) >= RUNLOG_PERSIST_DEBOUNCE_MS) {
+            persistence.saveFaultLog(faultManager);
+            faultManager.markPersisted();
+            faultLogPending = false;
+        }
+    } else {
+        faultLogPending = false;
+    }
+
     // Flow faults (§7/§14 / #35): no-flow during RUNNING (post-grace) / unexpected flow
     // during IDLE. The detector reads the post-tick rate + cumulative count against the
     // run state and returns the fault to raise; raiseFault is the sole actuator commander
@@ -334,7 +355,11 @@ void loop() {
     // on this staying false while overridden).
     faultManager.setConditionActive(Fault::UnexpectedFlow,
                                     !persistence.flowOverride() && flowMonitor.rateGPM() > 0.0f);
-    faultManager.tick(now);
+    // Wall-clock stamp for any fault logged this pass (#90 — pushed in like the runlog so the
+    // fault log persists with a meaningful timestamp; epoch()/valid() are 0/false until NTP).
+    const uint32_t faultEpoch = wallClock.epoch(now);
+    const bool     faultClockValid = wallClock.valid();
+    faultManager.tick(faultEpoch, faultClockValid);
 
     // Auto-return self-test (DEC-014 / #52): fresh state read — a fault latching
     // this pass must abort the rest window, not get measured by it.
@@ -342,7 +367,7 @@ void loop() {
                                            runController.lastRun().zoneIndex,
                                            flowSensor.pulses(), now);
     if (restFlagged >= 0) {
-        faultManager.note(Fault::ValveRest, now);
+        faultManager.note(Fault::ValveRest, faultEpoch, faultClockValid);
         Serial.printf("[tinkle] DEC-014 flag: zone %d still passing flow after close"
                       " — auto-return cap suspect, service the valve\n", restFlagged);
     }

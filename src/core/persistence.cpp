@@ -13,6 +13,7 @@ static constexpr const char* KEY_SSID    = "wifi_ssid";   //  9  Phase 4 (#55)
 static constexpr const char* KEY_PASS    = "wifi_pass";   //  9
 static constexpr const char* KEY_SCHED   = "sched";       //  5  packed schedule blob (#56)
 static constexpr const char* KEY_RUNLOG  = "runlog";      //  6  packed run-history blob (DEC-018)
+static constexpr const char* KEY_FAULTLOG = "faultlog";   //  8  packed fault-log blob (#90)
 
 const char* Persistence::zoneKey(char* buf, uint8_t zone) {
     // "z<N>_dur": longest is two-digit zone "z15_dur" = 7 chars + NUL. buf must be >= 8.
@@ -152,6 +153,18 @@ void Persistence::saveRunLog(const RunLog& log) {
     // The blob is the whole ring, replaced atomically each write (DEC-018). No per-entry diff:
     // writes are run-rate, and main debounces them (write-on-change of the ring head).
     store_.putBytes(KEY_RUNLOG, blob, len);
+}
+
+void Persistence::loadFaultLog(FaultManager& fm) {
+    uint8_t blob[FaultManager::BLOB_BYTES];
+    const uint16_t len = store_.getBytes(KEY_FAULTLOG, blob, sizeof(blob));   // 0 when absent
+    fm.deserialize(blob, len);                                               // empty ring on 0
+}
+
+void Persistence::saveFaultLog(const FaultManager& fm) {
+    uint8_t blob[FaultManager::BLOB_BYTES];
+    const uint16_t len = fm.serialize(blob, sizeof(blob));
+    store_.putBytes(KEY_FAULTLOG, blob, len);                                // whole ring, atomic
 }
 
 } // namespace tinkle
