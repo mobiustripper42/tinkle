@@ -176,13 +176,11 @@ Survives reboot and power loss:
 - Run log: `RunLog` ring (`RUNLOG_DEPTH` = 32 entries) as one packed `runlog` blob — 11 B/entry
   `{startEpoch, zone, durationSec, centigallons, flags(fert|result|clockWasValid), faultCode}`,
   write-on-change + debounce, rehydrate read-with-default (DEC-018; additive under DEC-008).
-
-**Not persisted — the fault log is RAM-only by decision (#72).** `FaultManager` keeps a fixed ring
-(`LOG_SIZE = 8`, `{code, atMs}` millis-domain) that resets every boot; it is surfaced **live** via
-`/api/status` (§14) and `/api/history` (DEC-018) during uptime, never stored. Making it survive reboot
-would mean epoch-stamping each entry (millis timestamps are meaningless after a reboot) and
-mirroring the `runlog` blob — deferred as a feature to
-[#90](https://github.com/mobiustripper42/tinkle/issues/90).
+- Fault log: `FaultManager` ring (`LOG_SIZE` = 16) as one packed `faultlog` blob — 6 B/entry
+  `{epoch, code, flags(clockWasValid)}`, mirroring `runlog` (write-on-change + debounce, rehydrate
+  read-with-default; additive under DEC-008, no `schema_ver` bump). Each entry is epoch-stamped with a
+  per-entry `clockWasValid` bit (pre-2025 guard ⇒ bit clear), so it survives reboot with a meaningful
+  timestamp; surfaced via `/api/status` (§14) + `/api/history` (DEC-018). (#90 — closes the #72 RAM-only gap.)
 
 (No cached diverter position — the two-leg NO/NC diverter has no hold-state to remember, DEC-013.)
 

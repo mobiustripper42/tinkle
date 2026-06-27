@@ -448,9 +448,9 @@ surface touched — the SPA has no safety role (§10.1) and a read path can't ac
 **Scope guard — fault ring stays RAM-only:** §8 *described* the fault log as NVS-persisted ~16
 entries, but the shipped `FaultManager` ring is RAM-only, `LOG_SIZE = 8`, millis-domain. This DEC does
 **not** persist or migrate the fault ring — `/api/history` serializes it as-is. **Resolved (#72):**
-§8 was corrected to state the RAM-only reality; the fault ring stays RAM-only by decision, and the
-actual persistence feature (epoch-stamped entries, mirroring `runlog`) is deferred to
-[#90](https://github.com/mobiustripper42/tinkle/issues/90).
+§8 was corrected to the RAM-only reality, with the persistence feature deferred. **Shipped (#90):**
+that feature then landed — `FaultManager` entries are now epoch-stamped (+ a `clockWasValid` bit) and
+the ring persists as the `faultlog` NVS blob (`LOG_SIZE = 16`), mirroring `runlog`; §8 updated to match.
 **Consequences:** a new `runlog` NVS key; `RunController` gains a SETTLE-time push; `/api/status`
 `lastRun` becomes a view onto the ring head; the "six screens" line in two docs becomes "seven".
 

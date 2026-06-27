@@ -28,22 +28,31 @@ namespace tinkle {
 
 class FaultManager {
 public:
-    static constexpr uint8_t LOG_SIZE = 8;
+    // ~16 entries, persisted (#90, the DEC-018 follow-up — was 8 and RAM-only). The §8 fault
+    // log now survives reboot, mirroring the `runlog` blob.
+    static constexpr uint8_t LOG_SIZE = 16;
 
     struct Entry {
-        Fault    code = Fault::None;
-        uint32_t atMs = 0;
+        Fault    code          = Fault::None;
+        uint32_t epoch         = 0;       // local epoch sec at log time (0 / implausible => !valid)
+        bool     clockWasValid = false;   // NTP had synced + epoch plausible when logged (#90)
     };
+
+    // Packed NVS record (6 B): epoch u32 LE | code u8 | flags u8 (bit0 clockWasValid).
+    static constexpr uint16_t ENTRY_BYTES = 6;
+    static constexpr uint16_t BLOB_BYTES  = LOG_SIZE * ENTRY_BYTES;   // 96
 
     explicit FaultManager(RunController& rc) : rc_(rc) {}
 
-    // Call every loop tick: edge-detects a newly latched fault into the log.
-    void tick(uint32_t nowMs);
+    // Call every loop tick: edge-detects a newly latched fault into the log. epoch + clockValid
+    // are pushed in from main (the runlog idiom — this module has no clock); the pre-2025
+    // epoch-sanity guard runs here so a pre-NTP fault logs clockWasValid CLEAR (#90).
+    void tick(uint32_t epoch, bool clockValid);
 
     // Append a NON-LATCHING entry to the log ring — maintenance findings (the
     // DEC-014 valve-rest flag) that deserve the §10 Faults surface without
     // commanding the safe state or blocking runs. None is ignored.
-    void note(Fault code, uint32_t nowMs);
+    void note(Fault code, uint32_t epoch, bool clockValid);
 
     // Detectors push the current truth of their fault's underlying condition.
     // Out-of-range codes are ignored.
@@ -62,10 +71,18 @@ public:
     uint8_t logCount() const { return logCount_; }
     Entry   logEntry(uint8_t i) const;
 
+    // NVS persistence (#90), mirroring RunLog: pack the ring OLDEST-first; deserialize replays
+    // in order so the head lands newest. dirty() drives main's debounced write; rehydrate does
+    // not dirty.
+    uint16_t serialize(uint8_t* out, uint16_t cap) const;
+    void     deserialize(const uint8_t* in, uint16_t len);
+    bool     dirty() const { return dirty_; }
+    void     markPersisted()   { dirty_ = false; }
+
 private:
     static constexpr uint8_t CODE_COUNT = (uint8_t)Fault::Count;   // sized off the enum
     static uint8_t idx(Fault code) { return (uint8_t)code; }
-    void append(Fault code, uint32_t nowMs);
+    void append(Fault code, uint32_t epoch, bool clockWasValid);
 
     RunController& rc_;
     Fault          prevFault_ = Fault::None;
@@ -74,6 +91,7 @@ private:
     Entry   log_[LOG_SIZE] = {};
     uint8_t logHead_  = 0;   // next write slot
     uint8_t logCount_ = 0;   // valid entries, capped at LOG_SIZE
+    bool    dirty_    = false;   // a fault was logged, awaiting the debounced NVS write
 };
 
 } // namespace tinkle

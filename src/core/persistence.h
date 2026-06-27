@@ -3,6 +3,7 @@
 #include "valve_driver.h"   // ValveConfig::MAX_ZONES — the single source of zone capacity
 #include "scheduler.h"      // ScheduleEntry + pack helpers — the §8 schedule blob (Phase 4)
 #include "run_log.h"        // RunLog + RUNLOG_BLOB_BYTES — the §8 run-history blob (DEC-018)
+#include "fault_manager.h"  // FaultManager + BLOB_BYTES — the §8 fault-log blob (#90)
 
 // Persistence — NVS/Preferences read/write of stored state (firmware spec §8, DEC-008).
 //
@@ -23,8 +24,8 @@
 //   - schedule entries        -> Scheduler (#27, §13 model)
 //   - fertigation policy      -> Fert policy (#28)
 //   - Wi-Fi credentials       -> Web/config (Phase 4)
-// The fault-log ring is RAM-only by decision (#72) — NOT persisted; FaultManager keeps it in
-// RAM and the §10 API surfaces it live. Epoch-stamped NVS persistence is deferred to #90.
+// The fault-log ring is epoch-stamped + NVS-persisted (#90) via loadFaultLog/saveFaultLog
+// below — survives reboot, mirroring the runlog blob (was RAM-only through #72).
 //
 // FORWARD-COMPAT (DEC-008): zones will be added after V1. Per-zone state uses
 // zone-indexed keys ("z<N>_dur") read-with-default and iterated over the runtime
@@ -119,6 +120,12 @@ public:
     // write cadence (run-rate), the same save-on-edit split the schedule uses.
     void loadRunLog(RunLog& log);
     void saveRunLog(const RunLog& log);
+
+    // --- fault-log blob (§8; #90) ---
+    // One packed `faultlog` blob = the whole fault ring, mirroring `runlog` (additive under
+    // DEC-008, no schema_ver bump; absent => empty ring). main owns the debounced write.
+    void loadFaultLog(FaultManager& fm);
+    void saveFaultLog(const FaultManager& fm);
 
 private:
     // Build the per-zone key "z<N>_dur" into buf (capacity must be >= 8; NVS keys cap at

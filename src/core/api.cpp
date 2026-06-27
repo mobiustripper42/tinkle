@@ -75,8 +75,9 @@ int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
     for (uint8_t i = 0; i < d_.faults.logCount(); ++i) {
         const FaultManager::Entry e = d_.faults.logEntry(i);
         JsonObject o = log.add<JsonObject>();
-        o["code"] = faultName(e.code);
-        o["atMs"] = e.atMs;
+        o["code"]          = faultName(e.code);
+        o["epoch"]         = e.epoch;            // wall-clock when clockWasValid, else !valid (#90)
+        o["clockWasValid"] = e.clockWasValid;
     }
 
     out["valveRestFlags"] = d_.rest.flaggedMask();          // DEC-014 maintenance flags
@@ -120,22 +121,20 @@ int Api::getHistory(JsonDocument& out, uint32_t nowMs) {
         o["fault"]         = faultName((Fault)e.faultCode);
     }
 
-    // Fault ring serialized AS-IS (RAM, millis-domain — not persisted; the fault-log bug is
-    // #72). Same {code, atMs} shape as /api/status so the SPA reuses its renderer; uptimeMs
-    // below dates these via ago(uptimeMs - atMs) — the run ring carries its own epoch instead.
+    // Fault ring — now epoch-stamped + NVS-persisted (#90, resolving #72's RAM-only gap). Same
+    // {code, epoch, clockWasValid} shape as /api/status + the run rows, so the SPA reuses one
+    // wall-clock-or-"unsynced" renderer across all three.
     JsonArray faults = out["faults"].to<JsonArray>();
     for (uint8_t i = 0; i < d_.faults.logCount(); ++i) {
         const FaultManager::Entry fe = d_.faults.logEntry(i);
         JsonObject o = faults.add<JsonObject>();
-        o["code"] = faultName(fe.code);
-        o["atMs"] = fe.atMs;
+        o["code"]          = faultName(fe.code);
+        o["epoch"]         = fe.epoch;
+        o["clockWasValid"] = fe.clockWasValid;
     }
 
-    out["clockValid"] = d_.clock.valid();                  // wall-clock vs relative render flag
-    // uptimeMs dates the millis-domain fault ring via ago(uptimeMs - atMs). Emitted here in
-    // core (not the WebServer glue, where /api/status adds it) so the full history shape is
-    // host-tested; the run ring carries its own epoch and ignores this.
-    out["uptimeMs"]   = nowMs;
+    out["clockValid"] = d_.clock.valid();                  // current clock state (render flag)
+    out["uptimeMs"]   = nowMs;                             // device uptime telemetry (parallels /api/status)
     return 200;
 }
 
