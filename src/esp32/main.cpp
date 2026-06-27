@@ -11,6 +11,7 @@
 #include "../core/flow_fault_detector.h"
 #include "../core/calibration_controller.h"
 #include "../core/watchdog.h"
+#include "../core/watchdog_trip.h"   // WatchdogTrip::Config — for the #101 inter-run-gap guard
 #include "../core/fault_manager.h"
 #include "../core/valve_rest_monitor.h"
 #include "../core/api.h"
@@ -53,6 +54,19 @@ static const ValveConfig valveCfg = makeValveConfig();
 static ValveDriver       valve(gpio, valveCfg);
 static const RunConfig   runCfg;                  // firmware spec §15 defaults
 static RunController      runController(valve, runCfg);
+
+// §9 / #101 guard — queued runs must NOT chain into one armed heartbeat window. The heartbeat
+// is emitted only during START_PUMP + RUNNING (watchdog.h), so between two queued runs it is
+// absent across CloseZone + Settle + OpenZone = 2*zoneTravelMs + settleMs (PrepDiverter is
+// conditional, so excluded for the worst case). That gap must exceed HB_TIMEOUT_MS so the
+// ATtiny de-arms and resets its HARD_MAX clock per run; otherwise a queue accumulates armed
+// time and can trip HARD_MAX mid-queue. 6.2 tunes the travel constants, so this compile-time
+// fence stops a tuning from eroding the gap below the timeout. (TINKLE_SIM's shortened 1 s
+// travels still clear it: 2*1000 + 1000 = 3000 > 2000; real valves are seconds, never close.)
+static_assert(2u * ValveConfig{}.zoneTravelMs + RunConfig{}.settleMs
+                  > WatchdogTrip::Config{}.hbTimeoutMs,
+              "Inter-run heartbeat gap (2*ZONE_TRAVEL_MS + settleMs) must exceed HB_TIMEOUT_MS, "
+              "or queued runs share one armed window and can trip HARD_MAX mid-queue");
 
 // Persistence (§8 / DEC-008). Owns the per-zone manual default durations and
 // swMaxRuntimeSec in NVS, keyed for forward-compat as zones grow. begin() runs in
