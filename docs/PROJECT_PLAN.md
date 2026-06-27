@@ -24,6 +24,7 @@ Tests are baked into every task estimate — no separate testing tasks.
 | 2 | 2 | 16 | 2.92 | — | — | legacy dev-metric: 0.10 h/pt (dev 1.66 h, review 0.16 h) — don't blend with active |
 | 3 | 3 | 24\** | 41.79 | 35.86 | 5.93 | 0.25 |
 | 4 | 5 | 42 | — | — | — | **DEC-S026** (Wall/Breaks/Active/h-pt retired): throughput **18.4 pts/calendar-wk** (16d span, 06-10→06-26); est-calibration 0 re-est / 0 drift. See RETROSPECTIVES P4 |
+| 5 | 5 | 32 | — | — | — | **DEC-S026**: throughput **14.0 pts/calendar-wk** (16d span, 06-10→06-26 — **parallel with P4**); est-calibration 0 re-est / 0 drift. See RETROSPECTIVES P5 |
 
 \* 31 = 25 Phase-1-labeled (#9–#14) + 6 spillover (Wokwi #7 [3, Phase 0], C++11 build-standard fix [2], TM1637 lib unblock [1]). Wall clock was ~66% breaks (toolchain download, a connection-drop gap), so treat Phase 1 as a **noisy baseline** — Phase 2 is the first clean read. Full detail in `RETROSPECTIVES.md`.
 \** 24 = 13 Phase-3-labeled (#34–#36) + 11 absorbed in the window (1.8 valve rework [8], sim tooling [2], seeds-v4 pull [1]). Phases 1–2 used the retired per-PR dev/review split; Phase 3 is the first phase on the `active = wall − breaks` model, so cross-model comparisons are apples-to-oranges.
@@ -79,8 +80,8 @@ The safety-critical heart. Bench-testable on LEDs/scope; no water.
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
 | 1.8 | `ValveDriver` + `RunController` + `pins.h` to the on/off model — one FET per valve (no H-bridge, no `IN1/IN2`, no never-both-high), **master removed**, diverter = two leg FETs, `pulseOpen/Close`→`openZone/closeZone` + `setDiverter(fertigate)`, drop `MASTER_FET`/`div_pos` cache, `ZONE_TRAVEL_MS`≈10s, re-map pins, update native tests | 8 | [x] · §3/§4/§5; DEC-011/012/013 |
-| 3.x | Flow-fault manual override (DEC-015) — settings flag + `/api/settings` + SPA banner; `FlowMonitor` honors it | 3 | [ ] · §7/§10; lands with Phase 3/4 |
-| 5.x | Auto-return self-test (DEC-014) — periodic valve-rests-closed check; flags a stuck/degraded valve | 3 | [ ] · §14; correctness, not a safety barrier |
+| 3.x | Flow-fault manual override (DEC-015) — settings flag + `/api/settings` + SPA banner; `FlowMonitor` honors it | 3 | [x] [#57](https://github.com/mobiustripper42/tinkle/issues/57) · shipped as 4.x; reconciled at P5 retro |
+| 5.x | Auto-return self-test (DEC-014) — periodic valve-rests-closed check; flags a stuck/degraded valve | 3 | [x] [#52](https://github.com/mobiustripper42/tinkle/issues/52) · shipped as 5.5; reconciled at P5 retro |
 
 Scope note: v1.4 sourcing settled on a 2-wire **auto-return on/off** valve (not the reverse-polarity hold-position part v1.3 assumed), so 1.8 was a real `ValveDriver` re-architecture, not the rename it was first scoped as (3→8). The §4 run sequence already gated on `zoneBusy()`, so the `RunController` seam survived; the driver + pin map underneath changed, and the master open/close states dropped. Done: `src/core/valve_driver.*`, `run_controller.*`, `persistence.*` (div_pos cache out), `src/esp32/pins.h` + `main.cpp`, the ATtiny comment, the Wokwi `diagram.json`, and the native tests (72 green). (Renumbered from 1.7 — Phase 1.7 was the 3-zone button model, #23.)
 
@@ -171,13 +172,13 @@ rather than a 1970 wall-clock. SPA renders wall-clock when the bit is set, else 
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 5.1 | ATtiny85 sketch — heartbeat edge-detect, two trip conditions, fail-dry default | 8 | [#48](https://github.com/mobiustripper42/tinkle/issues/48) · §9; DEC-003 |
-| 5.2 | ESP32 `Watchdog` — heartbeat emit (active runs only), trip-line read, force safe | 5 | [#49](https://github.com/mobiustripper42/tinkle/issues/49) · §9 |
-| 5.3 | Safety relay wiring + `FaultManager` integration | 3 | [#50](https://github.com/mobiustripper42/tinkle/issues/50) · §14; software half only — wiring under 5.4 |
-| 5.4 | §17 acceptance checklist — full pass on the bench | 5 | [#51](https://github.com/mobiustripper42/tinkle/issues/51) · LED/pulse stand-ins; parts-gated |
-| 5.5 | DEC-014 auto-return self-test — rest-closed verify, degraded-valve flag | 3 | [#52](https://github.com/mobiustripper42/tinkle/issues/52) · DEC-014, DEC-016; follow-on PR after Unit B |
-| 5.6 | Full sim test — end-to-end Wokwi session (SPA-driven schedule start/stop) | 3 | [#62](https://github.com/mobiustripper42/tinkle/issues/62) · sim tier; gates the bench (5.4); **diagram + scenarios rebuilt SPA-driven after 5.7 (was button-driven)** |
-| 5.7 | Phone-only pivot (DEC-019) — delete buttons + TM1637 + LED rings; keep one alive LED; SPA is sole interface | 5 | [#77](https://github.com/mobiustripper42/tinkle/issues/77) · DEC-019; firmware + 9 docs; modules git-recoverable |
+| 5.1 | ATtiny85 sketch — heartbeat edge-detect, two trip conditions, fail-dry default | 8 | [x] [#48](https://github.com/mobiustripper42/tinkle/issues/48) · §9; DEC-003 |
+| 5.2 | ESP32 `Watchdog` — heartbeat emit (active runs only), trip-line read, force safe | 5 | [x] [#49](https://github.com/mobiustripper42/tinkle/issues/49) · §9 |
+| 5.3 | Safety relay wiring + `FaultManager` integration | 3 | [x] [#50](https://github.com/mobiustripper42/tinkle/issues/50) · §14; software half only — wiring under 6.1d |
+| 5.4 | §17 acceptance checklist — full pass on the bench (LED/pulse stand-ins) | 5 | [x] [#51](https://github.com/mobiustripper42/tinkle/issues/51) · bench accept; wet confirm = 6.4 |
+| 5.5 | DEC-014 auto-return self-test — rest-closed verify, degraded-valve flag | 3 | [x] [#52](https://github.com/mobiustripper42/tinkle/issues/52) · DEC-014, DEC-016; follow-on PR after Unit B |
+| 5.6 | Full sim test — end-to-end Wokwi session (SPA-driven schedule start/stop) | 3 | [x] [#62](https://github.com/mobiustripper42/tinkle/issues/62) · sim tier; **diagram + scenarios rebuilt SPA-driven after 5.7 (was button-driven)** |
+| 5.7 | Phone-only pivot (DEC-019) — delete buttons + TM1637 + LED rings; keep one alive LED; SPA is sole interface | 5 | [x] [#77](https://github.com/mobiustripper42/tinkle/issues/77) · DEC-019; firmware + 9 docs; modules git-recoverable |
 
 **Phase 5 total: 32 pts** — DEC-016 batches: Unit B = 5.1+5.2+5.3-software (one PR), 5.5 follow-on, 5.4 parts-gated. 5.7 = the phone-only pivot (DEC-019).
 **Validation ladder:** full sim (5.6) → full bench (5.4/#51) → install (Phase 6 wet confirm).

@@ -5,6 +5,39 @@ Phase-end retrospectives, written by `/retro`. Most recent first.
 <!-- Entries appended here at each phase boundary: velocity, scope changes,
      process notes, forecast update. -->
 
+## Phase 5 — 2026-06-26 (Watchdog + integration)
+
+**Points:** 32 / 32 planned (100%)
+**Span:** 16 days (2026-06-10 → 2026-06-26) — **parallel with Phase 4** (identical window; the two phases were interleaved, so the throughputs split one calendar's output rather than describing two paces)
+**Throughput:** 14.0 pts/calendar-week  ← headline (DEC-S026). Active companion: 10.7 pts/active-ISO-week.
+**Estimate calibration:** 0 tasks re-estimated, net drift 0 pts  ← second clean-calibration phase in a row
+**Sessions:** ~5 (in window, shared with Phase 4)   **PRs merged:** overlaps the Phase 4 set
+**Issues:** 7 closed (#48–#52, #62, #77), 0 moved, 0 descoped
+
+### Phase throughput line
+| Phase | Date | Points | Span(d) | Throughput | Re-est'd | Net drift | Sessions | PRs |
+|-------|------|--------|---------|------------|----------|-----------|----------|-----|
+| 5 | 2026-06-26 | 32 | 16 | 14.0 pts/cal-wk | 0 | 0 | ~5 | ~7 |
+
+### Retro notes
+User skipped the worked/didn't/changed questions for this phase — process notes were captured in the Phase 4 retro (WiFi diagnosed twice → search session/docs sooner) and apply across both parallel phases. User requested the PM narrative as the qualitative record instead.
+
+### Scope changes
+- **#77 — DEC-019 phone-only pivot** added mid-phase: the first scope event that *removed* scope (deleted buttons + TM1637 + LED rings), promoting the SPA to the device's only interface. Done through the @architect gate; 9 docs reconciled, 14 dead tests pulled.
+- **#77 points label** was missing — fixed to 5 (PROJECT_PLAN's documented estimate) at this retro.
+- **Spillover rows reconciled:** PROJECT_PLAN's `3.x` (DEC-015 override) and `5.x` (DEC-014 self-test) were stale `[ ]` placeholders that actually shipped as #57 and #52 — marked `[x]` at this retro.
+
+### PM read
+Phase 5 closed 32 points across 7 issues in the now-familiar burst shape, only more extreme. Nineteen of those points — the entire two-key safety core (#48 ATtiny watchdog, #49 ESP32 heartbeat, #50 FaultManager, #52 the DEC-014 auto-return self-test) — landed in a single day-one burst on 06-10/11, shipped as one ~16-point coherent PR (Unit B) plus a 3-point follow. Then twelve quiet days, the phone-only pivot on 06-23, and a closing burst on 06-26 for the §17 acceptance stand-ins (#51) and the SPA-driven sim (#62). The 14.0 pts/calendar-week headline is real, but do not read it against Phase 4's 18.4: both numbers are carved from the *same* 16-day window — the two phases ran interleaved — so they split one calendar's output rather than describing two paces. Together the window produced ~74 points; Phase 5 is the safety-and-validation half. The pace story isn't the rate anyway. It's that the most safety-critical unit in the project — both halves of one heartbeat protocol, the second key of the fail-dry chain — went in fast and came out clean.
+
+Second consecutive clean-calibration phase: zero re-estimates, zero net drift, every firmware issue landing on its planned label. The asterisk is #77, the DEC-019 phone-only pivot — it didn't exist at phase-scoping and went in mid-stream with its points label missing (fixed to 5 at this retro). So Phase 5, like Phase 4 with #72, absorbed an unplanned mid-phase task; the difference is direction. Every prior phase's scope event was an *addition* — Phase 1's toolchain absorbs, Phase 3's 8-point v1.4 valve rework. DEC-019 is the first that *removed* scope: it deleted the buttons, the TM1637, and the LED rings — real fabrication, parts, and enclosure-cutout work — to protect the deploy date, promoting the SPA to the device's only interface. A 5-point deletion task that subtracted far more than 5 points of downstream build. And it was done the right way: @architect gate first, one substantive correction taken (don't narrow SPEC's local-autonomy claim — retire DEC-006's narrower sub-claim instead), 9 docs reconciled, 14 now-dead tests pulled, build green.
+
+Three things from the session files. First, and most important: @code-review caught a real fail-dry bug *in the watchdog itself* — the UnexpectedFlow resolved-condition was qualified with `isIdle()`, which defeated itself once latched (state reads Fault while water still pulses, so the gate reports "resolved" and clears the latch under live flow). On the one module the whole project exists to get right, the unit tests passed and the review tier caught it (PR #53, commit 46e6ba4). Worth noting the parallel Phase 4 retro filed this same catch under *its* ledger — shared window, easy to mis-attribute, but it's Phase 5's bug. The tiers have now earned their cost on fail-dry-class defects in the scaffolding (Phase 1) and the watchdog (here); keep them pinned to the safety layer. Second, the sim saga (#62) was the phase's real time sink and was never a code problem: a Wokwi custom chip that wouldn't compile gave way to an LEDC flow loopback, and then a recurring ~16–25s SPA drop — diagnosed only in Session 11 as the `net.forward` proxy exhausting the device's TCP pool — was fixed by buying the Private Wokwi Gateway, after a slow-poll code mitigation was tried and reverted. Infrastructure, not code; invisible until a session had been spent proving the firmware was fine. Third, a latent constraint is logged in three session files and still unguarded: if travel/settle timings ever shrink so the inter-run gap drops below HB_TIMEOUT_MS, queued runs share one armed heartbeat period and could trip HARD_MAX mid-queue. It's a comment, not a static_assert. Close it before someone tunes timings into it.
+
+Forward: Phase 6, the bench build, is already materialized as 8 issues (#93–#100, 36 points), with 6.1 split into 6.1a–e against a rewritten step-by-step build-up doc. It's an interactive, hardware-paced phase — the bottleneck moves off the keyboard and onto a soldering iron and a shipping box, so throughput-per-week will fall hard, by design, not regression. Phase 5 already previewed this: #62 stayed open across three sessions as interactive-only validation no point total captures, because the run path now needs a human driving the SPA through the gateway in a browser. Carry three debts in. The heartbeat-encoding caveat above wants closing before bench timings get tuned. **[retro correction: the SPA *has* been hands-tested on the user's phone — the real ~375px target — so the visual is confirmed; the only residual gap is automated/CI 375px coverage, not a missing eyeball.]** And #51 (§17 acceptance) closed against LED/pulse stand-ins, not the wet bench — so the real acceptance still rides on Phase 6 hardware, regardless of the checkbox.
+
+---
+
 ## Phase 4 — 2026-06-26 (Web API + SPA)
 
 **Points:** 42 / 40 planned (105% — the +2 is #72, the fault-log doc-drift bug picked up mid-phase)
