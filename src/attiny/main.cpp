@@ -37,7 +37,10 @@ constexpr uint8_t HEARTBEAT_IN = PB2;
 constexpr uint8_t ARM_OUT      = PB1;
 constexpr uint8_t TRIPPED_OUT  = PB0;
 
-const tinkle::WatchdogTrip::Config cfg;   // §15 defaults: 2 s timeout, 30 min ceiling
+// §15 defaults: 2 s timeout, 30 min ceiling. NOTE: the esp32-side #101 static_assert checks the
+// inter-run heartbeat gap against this struct's DEFAULT hbTimeoutMs — if you override hbTimeoutMs
+// here, update that assert (esp32/main.cpp) too, or it silently checks a stale value.
+const tinkle::WatchdogTrip::Config cfg;
 tinkle::WatchdogTrip trip(cfg);
 
 void writeTripped(bool asserted) {
