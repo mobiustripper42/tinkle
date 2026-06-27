@@ -23,6 +23,7 @@ Tests are baked into every task estimate — no separate testing tasks.
 | 1 | 2 | 31\* | 15.75 | — | — | legacy dev-metric: 0.12 h/pt (dev 3.58 h, review 1.75 h) — don't blend with active |
 | 2 | 2 | 16 | 2.92 | — | — | legacy dev-metric: 0.10 h/pt (dev 1.66 h, review 0.16 h) — don't blend with active |
 | 3 | 3 | 24\** | 41.79 | 35.86 | 5.93 | 0.25 |
+| 4 | 5 | 42 | — | — | — | **DEC-S026** (Wall/Breaks/Active/h-pt retired): throughput **18.4 pts/calendar-wk** (16d span, 06-10→06-26); est-calibration 0 re-est / 0 drift. See RETROSPECTIVES P4 |
 
 \* 31 = 25 Phase-1-labeled (#9–#14) + 6 spillover (Wokwi #7 [3, Phase 0], C++11 build-standard fix [2], TM1637 lib unblock [1]). Wall clock was ~66% breaks (toolchain download, a connection-drop gap), so treat Phase 1 as a **noisy baseline** — Phase 2 is the first clean read. Full detail in `RETROSPECTIVES.md`.
 \** 24 = 13 Phase-3-labeled (#34–#36) + 11 absorbed in the window (1.8 valve rework [8], sim tooling [2], seeds-v4 pull [1]). Phases 1–2 used the retired per-PR dev/review split; Phase 3 is the first phase on the `active = wall − breaks` model, so cross-model comparisons are apples-to-oranges.
@@ -122,11 +123,11 @@ to safe state, driven by a button, with a live countdown.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 4.1 | ESPAsyncWebServer + STA-join/SoftAP fallback + mDNS | 5 | [#55](https://github.com/mobiustripper42/tinkle/issues/55) · §10 |
-| 4.2 | REST endpoints (status, schedule, settings, run, stop, calibrate, fault) | 8 | [#56](https://github.com/mobiustripper42/tinkle/issues/56) · §10; range-validate, FAULT-gate |
-| 4.x | DEC-015 flow-check manual override (settings flag + API) | 3 | [#57](https://github.com/mobiustripper42/tinkle/issues/57) · DEC-015; banner in 4.3 |
-| 4.3 | SPA — 6 screens, vanilla, mobile-first, graceful degrade | 8 | [#58](https://github.com/mobiustripper42/tinkle/issues/58) · §10.1; dev vs mock API |
-| 4.4 | gzip-embed pipeline (`build-spa`) → PROGMEM, < 50 KB | 3 | [#59](https://github.com/mobiustripper42/tinkle/issues/59) · DEC-002 |
+| 4.1 | ESPAsyncWebServer + STA-join/SoftAP fallback + mDNS | 5 | [x] [#55](https://github.com/mobiustripper42/tinkle/issues/55) · §10 |
+| 4.2 | REST endpoints (status, schedule, settings, run, stop, calibrate, fault) | 8 | [x] [#56](https://github.com/mobiustripper42/tinkle/issues/56) · §10; range-validate, FAULT-gate |
+| 4.x | DEC-015 flow-check manual override (settings flag + API) | 3 | [x] [#57](https://github.com/mobiustripper42/tinkle/issues/57) · DEC-015; banner in 4.3 |
+| 4.3 | SPA — 6 screens, vanilla, mobile-first, graceful degrade | 8 | [x] [#58](https://github.com/mobiustripper42/tinkle/issues/58) · §10.1; dev vs mock API |
+| 4.4 | gzip-embed pipeline (`build-spa`) → PROGMEM, < 50 KB | 3 | [x] [#59](https://github.com/mobiustripper42/tinkle/issues/59) · DEC-002 |
 
 **Phase 4 total: 27 pts** — DEC-016 batches: Unit C = 4.1+4.2+4.x (one PR), Unit D = 4.3+4.4 (one PR).
 
@@ -150,10 +151,11 @@ rather than a 1970 wall-clock. SPA renders wall-clock when the bit is set, else 
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 4.5 | @architect ratify (✓ DEC-018) + write DEC-018 + doc updates: SPEC §4/L66+L85, firmware §4-step7/§8/§10/§10.1/§15 (`RUNLOG_DEPTH=32`); flip "six screens" → seven | 2 | [#68](https://github.com/mobiustripper42/tinkle/issues/68) · gate; lands before 4.6 |
-| 4.6 | `RunLog` core module — 11 B packed ring (record above), depth 32; `RunController` pushes at SETTLE so `/api/status` `lastRun` becomes the ring **head** (one source of truth); NVS `runlog` blob (write-on-change + debounce, rehydrate read-with-default, DEC-008 additive — no `schema_ver` bump); epoch sanity + `clockWasValid` bit; host-tested w/ fake clock | 5 | [#69](https://github.com/mobiustripper42/tinkle/issues/69) · src/core; §4 step 7, §8 |
-| 4.7 | `GET /api/history` — `Api` serializes run ring + fault ring (as-is, RAM); host-tested JSON shapes; read-only, no FAULT gate (§10 mutating-only rule). Payload ≈ 3 KB at depth | 3 | [#70](https://github.com/mobiustripper42/tinkle/issues/70) · §10; one firmware PR with 4.6 |
-| 4.8 | SPA History screen (7th tab) — runs list (wall-clock if `clockWasValid` else relative, zone, MM:SS, gallons, fert, result/fault) + fault entries; lazy-fetch on open + refresh; mock-API rows; DISCONNECTED degrade; bottom tab-bar gains a 7th button | 3 | [#71](https://github.com/mobiustripper42/tinkle/issues/71) · §10.1; own PR (DEC-016 Unit-style) |
+| 4.5 | @architect ratify (✓ DEC-018) + write DEC-018 + doc updates: SPEC §4/L66+L85, firmware §4-step7/§8/§10/§10.1/§15 (`RUNLOG_DEPTH=32`); flip "six screens" → seven | 2 | [x] [#68](https://github.com/mobiustripper42/tinkle/issues/68) · gate; lands before 4.6 |
+| 4.6 | `RunLog` core module — 11 B packed ring (record above), depth 32; `RunController` pushes at SETTLE so `/api/status` `lastRun` becomes the ring **head** (one source of truth); NVS `runlog` blob (write-on-change + debounce, rehydrate read-with-default, DEC-008 additive — no `schema_ver` bump); epoch sanity + `clockWasValid` bit; host-tested w/ fake clock | 5 | [x] [#69](https://github.com/mobiustripper42/tinkle/issues/69) · src/core; §4 step 7, §8 |
+| 4.7 | `GET /api/history` — `Api` serializes run ring + fault ring (as-is, RAM); host-tested JSON shapes; read-only, no FAULT gate (§10 mutating-only rule). Payload ≈ 3 KB at depth | 3 | [x] [#70](https://github.com/mobiustripper42/tinkle/issues/70) · §10; one firmware PR with 4.6 |
+| 4.8 | SPA History screen (7th tab) — runs list (wall-clock if `clockWasValid` else relative, zone, MM:SS, gallons, fert, result/fault) + fault entries; lazy-fetch on open + refresh; mock-API rows; DISCONNECTED degrade; bottom tab-bar gains a 7th button | 3 | [x] [#71](https://github.com/mobiustripper42/tinkle/issues/71) · §10.1; own PR (DEC-016 Unit-style) |
+| 4.9 | Fault-log doc-drift fix — §8 corrected to RAM-only reality (the persistence feature deferred to [#90](https://github.com/mobiustripper42/tinkle/issues/90)) | 2 | [x] [#72](https://github.com/mobiustripper42/tinkle/issues/72) · _added during P4 retro_; bug, not a planned 4.x row |
 
 **Run-history subtotal: 13 pts.** Batches: firmware (4.6+4.7) one PR, SPA (4.8) one PR, after the 4.5 gate.
 

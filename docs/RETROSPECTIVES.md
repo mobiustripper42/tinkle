@@ -5,6 +5,47 @@ Phase-end retrospectives, written by `/retro`. Most recent first.
 <!-- Entries appended here at each phase boundary: velocity, scope changes,
      process notes, forecast update. -->
 
+## Phase 4 — 2026-06-26 (Web API + SPA)
+
+**Points:** 42 / 40 planned (105% — the +2 is #72, the fault-log doc-drift bug picked up mid-phase)
+**Span:** 16 days (2026-06-10 → 2026-06-26)
+**Throughput:** 18.4 pts/calendar-week  ← headline (DEC-S026 — first phase on this metric; not comparable to the retired h/pt of Phases 1–3). Active companion: 14 pts/active-ISO-week. Caveat: the 16-day window overlapped Phase 5 sim work, so this dilutes keyboard output (~26 PRs merged in-window, ~10 were Phase 4).
+**Estimate calibration:** 0 tasks re-estimated, net drift 0 pts  ← point unit held perfectly
+**Sessions:** 5 (in window)   **PRs merged:** 26 (calendar window; ~10 Phase 4)
+**Issues:** 10 closed (#55–#59, #68–#72), 0 moved, 0 descoped; #90 filed as a deferred follow-up
+
+### Phase throughput line
+| Phase | Date | Points | Span(d) | Throughput | Re-est'd | Net drift | Sessions | PRs |
+|-------|------|--------|---------|------------|----------|-----------|----------|-----|
+| 4 | 2026-06-26 | 42 | 16 | 18.4 pts/cal-wk | 0 | 0 | 5 | ~10 |
+
+### What worked
+- Eventually able to get the sim to run; now familiar with what's possible simulation-wise.
+
+### What didn't
+- Diagnosing the WiFi was brutal — and we did it twice.
+
+### Changes for next phase
+- Search the session files and docs sooner for answers (the WiFi was diagnosed twice because the answer was likely already logged).
+
+### Scope changes
+- **#72** (fault-log doc-drift, 2 pts) picked up mid-phase — not a planned 4.x row; added to PROJECT_PLAN as 4.9 during this retro. Resolved by correcting spec §8 to the RAM-only reality (Option 2).
+- **#90** filed (fault-log epoch-stamped NVS persistence, ~4–5 pt) — the deferred Option-1 feature, for a future phase.
+- Context (Session 10, DEC-019 phone-only pivot): deleting the buttons / TM1637 / LED rings promoted the six-screen SPA to the device's **only** interface — it was built before it became load-bearing.
+
+### PM read
+Phase 4 is the first phase to close with the estimate model fully honest: 42 points, zero re-estimates, net drift zero — every issue's final `points:` label matched what PROJECT_PLAN guessed going in. After Phase 1 diverged ~24%, Phase 2 hit 100% only by absorbing a pre-built fertigation task, and Phase 3 ran 185% on unplanned valve rework, a phase that lands exactly where it was scoped is the real headline — not the 18.4 pts/calendar-week throughput. Read that throughput with a caveat, though: the 16-day span it's computed over was shared bumper-to-bumper with a whole second phase of Phase 5 sim work, so 18.4 pts/wk dilutes what the keyboard actually produced (~26 PRs merged in the window, only ~10 of them Phase 4). This is also the first phase on DEC-S026 throughput, so there's nothing in the same units to compare it against — Phases 1–3 quoted active h/pt. Treat it as the new baseline, not a trend.
+
+The shape is the one every prior phase has worn: two dense bursts (~27 pts on 06-10/11, ~15 pts on 06-26) bracketing a two-week gap, with the only mid-phase work being the 06-15 @architect/DEC-018 gate. Scope inside Phase 4 was clean — 10 issues closed, none moved, none descoped — plus #72, the fault-log doc-drift bug, picked up mid-phase for 2 points. The genuinely large scope event in this window wasn't Phase 4's at all: the phone-only pivot (DEC-019, Session 10) deleted the buttons, the TM1637, and the LED rings, which quietly promoted Phase 4's six-screen SPA from "one of several interfaces" to the *only* interface the device has. The SPA happened to be built before it became load-bearing. Lucky — but it also means the SPA now carries weight it wasn't reviewed under.
+
+Three patterns from the session files. First, #72 is the third consecutive phase where a source-of-truth doc contradicted the code — spec §8 listed the fault log as surviving power loss; it was RAM-only the whole time. Phase 1 had the C++-standard tier divergence, Phase 3 had v1.4 docs outrunning v1.3 firmware, now §8 promised a persistence that never shipped. That's not bad luck three times; it's a standing gap, and it earns a real habit: any PR touching a source-of-truth doc states what code is now in or out of compliance. Second, the merge-order trap fired in Session 9 — #61 stacked on #60 merged onto the dead Unit C branch instead of main (GitHub only re-targets when the base is *deleted*), forcing a re-deliver as #63. That's a cousin of Phase 1's #22 merge-race, and the second time a merge mechanic has put the wrong thing where it shouldn't be. Third, the verification tiers kept paying: @code-review caught a real fail-dry bug (the UnexpectedFlow clear-gate that defeated itself once latched), a lock-ordering bug, and two SPA contract bugs across the phase. Keep it on the safety-adjacent work.
+
+On your three answers. "Eventually able to get the sim to run" — *eventually* is doing heavy lifting: a custom chip that wouldn't compile, then an LEDC loopback, then a paid Private Wokwi Gateway across three sessions just to get a connection that doesn't drop every 20 seconds. The familiarity is the durable asset there; the interactive-SPA + headless-wokwi-cli ladder is now a permanent capability, and that survives the phase. "Diagnosing the WiFi was brutal and we did it twice" — agreed, and the "twice" has a specific cost: the slow-poll mitigation got applied and then reverted before the gateway fix landed, so one of the two passes was thrown away. The real fix was infrastructure, not code — the kind of thing that's invisible until you've burned a session proving the code was fine all along. "Search the session and docs sooner for answers" — right instinct, worth pushing one step further: it only works if the docs are honest, and this is the same phase where §8 was actively lying about fault-log persistence. Pair it — search sooner *and* keep the docs trustworthy, or you'll just find the wrong answer faster. The clock-drift resolution this session (sim artifact vs. crystal-backed real `millis()`) is exactly the kind of answer that, written down once, kills a future re-debug.
+
+Forward: the estimate model is finally calibrated — but it's calibrated on firmware. What's left (#51's §17 bench pass, the Phase 6 wet work) is all parts-gated and hardware-paced, so throughput-per-week will crater, not because anything slowed but because the bottleneck moves off the keyboard and onto a shipping box. Don't read that drop as a regression. Two debts to carry: the SPA has never been eyeballed at 375px (headless env, no @ui-reviewer, mock-preview only) and it's now the only interface the device has — close that before calling the UI done; and #90 (fault-log epoch-stamped NVS persistence, ~4–5 pt) is the one real piece of deferred feature work, so budget it rather than rediscover it.
+
+---
+
 ## Phase 3 — 2026-06-10 (Flow + Calibration)
 
 **Sessions:** 3 (Sessions 6–8)
