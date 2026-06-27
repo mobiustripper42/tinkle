@@ -186,16 +186,22 @@ rather than a 1970 wall-clock. SPA renders wall-clock when the bit is set, else 
 
 ## Phase 6: Bench validation + wet confirm
 
-Parts-gated (Winter 2026–27). Does not block Phases 1–5.
+Parts on hand — bench build underway (2026-06), driven interactively stage-by-stage from
+`docs/tinkle_buildup.md` (11 staged gates). 6.1 split into 6.1a–e, each **5 pts** — bench work
+is sized slow + deliberate because it's irreversible once it goes to the tunnel.
 
 | # | Task | Effort | Notes |
 |---|------|--------|-------|
-| 6.1 | Breadboard bring-up — real ESP32 + ATtiny + IRLZ44N valve FETs, LED/pulse stand-ins | 5 | |
-| 6.2 | Confirm `ZONE_TRAVEL_MS` / `DIVERTER_TRAVEL_MS` against real parts | 3 | §15 |
-| 6.3 | Calibrate flow K empirically (bucket test) | 3 | §7 |
-| 6.4 | Wet confirm — full water run, all faults, fail-dry chain | 5 | §17 |
+| 6.1a | Power rails + ground + ESP32 boot (buildup Stages 0–4) | 5 | [#93](https://github.com/mobiustripper42/tinkle/issues/93) · 24V+protect, 5V buck, star gnd, ESP32 boots |
+| 6.1b | Watchdog + safety relay — the arm key (Stage 5) | 5 | [#94](https://github.com/mobiustripper42/tinkle/issues/94) · fail-dry chain before any load; DEC-003/012 |
+| 6.1c | Valve FET channels (Stages 6–7) | 5 | [#95](https://github.com/mobiustripper42/tinkle/issues/95) · one FET pattern → all 5; diverter rests plain |
+| 6.1d | Pump relay on the armed rail — LAST (Stage 8) | 5 | [#96](https://github.com/mobiustripper42/tinkle/issues/96) · two-key chain; dies on heartbeat/AC loss |
+| 6.1e | Flow sensor + bench §17 fail-dry acceptance (Stages 9–10) | 5 | [#97](https://github.com/mobiustripper42/tinkle/issues/97) · level-shift; walk §6/§17 table |
+| 6.2 | Confirm `ZONE_TRAVEL_MS` / `DIVERTER_TRAVEL_MS` against real parts | 3 | [#98](https://github.com/mobiustripper42/tinkle/issues/98) · §15 |
+| 6.3 | Calibrate flow K empirically (bucket test) | 3 | [#99](https://github.com/mobiustripper42/tinkle/issues/99) · §7 |
+| 6.4 | Wet confirm — full water run, all faults, fail-dry chain | 5 | [#100](https://github.com/mobiustripper42/tinkle/issues/100) · §17 |
 
-**Phase 6 total: 16 pts**
+**Phase 6 total: 36 pts** (6.1 5→25 on the split; deliberate bench sizing)
 
 ---
 
