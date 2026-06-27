@@ -296,19 +296,16 @@ void loop() {
         runLogPending = false;
     }
 
-    // Persist the fault-log ring on change, debounced the same way (#90). A fault logged this
-    // pass dirties it; the write lands a tick or two later, off the hot loop.
-    static bool     faultLogPending   = false;
-    static uint32_t faultLogPendingMs = 0;
+    // Persist the fault log IMMEDIATELY on change (#90) — deliberately NOT debounced like the
+    // run log. A fault log exists to survive the resets it's most correlated with (brownout,
+    // watchdog trip, crash), so a debounce window would swallow exactly the entry you want to
+    // keep. Faults are rare (not loop-rate), so the per-fault ~96 B blob write is negligible
+    // flash wear; and a latched fault has already commanded the safe state, so a few-ms blocking
+    // write off the time-critical path is fine. The run log's coalescing rationale (minute-rate
+    // runs, telemetry-grade loss) does not transfer here.
     if (faultManager.dirty()) {
-        if (!faultLogPending) { faultLogPending = true; faultLogPendingMs = now; }
-        if ((uint32_t)(now - faultLogPendingMs) >= RUNLOG_PERSIST_DEBOUNCE_MS) {
-            persistence.saveFaultLog(faultManager);
-            faultManager.markPersisted();
-            faultLogPending = false;
-        }
-    } else {
-        faultLogPending = false;
+        persistence.saveFaultLog(faultManager);
+        faultManager.markPersisted();
     }
 
     // Flow faults (§7/§14 / #35): no-flow during RUNNING (post-grace) / unexpected flow
