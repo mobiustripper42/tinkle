@@ -330,9 +330,38 @@ static void test_rc_full_sequence_completes() {
     TEST_ASSERT_EQUAL_UINT8(0, rc.lastRun().zoneIndex);
 }
 
-// The diverter only travels when the leg state must change (§6). A first fert run
-// establishes fert; a second fert run must NOT re-drive the legs.
+// The diverter skip-travel guard (§6) survives DEC-021 inside a QUEUE: with a run still
+// queued, SETTLE leaves the legs as-is, so a chained same-state run reaches RUNNING
+// without re-driving them. (Across SEPARATE runs the diverter returns to plain at SETTLE
+// — see test_rc_diverter_returns_plain_at_settle — so back-to-back fert via two requestRun
+// calls DOES re-travel; the queue is the only surviving consecutive-skip path.)
 static void test_rc_diverter_skip_when_unchanged() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 1; req.fertigate = true;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));        // first fert run
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));        // second fert run queued behind it
+    TEST_ASSERT_EQUAL_UINT8(1, rc.queueDepth());
+
+    // First fert run reaches RUNNING — legs travel to fert exactly once.
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_TRUE(vd.diverterFert());
+    int divWritesBefore = g.writesTo(DIV_FERT) + g.writesTo(DIV_CLEAN);
+
+    // Hand off to the queued fert run. The first run's SETTLE must NOT return to plain
+    // while a run is queued (qCount_ > 0), so the chained run skips travel: no new writes.
+    now = pump(rc, now, 5, 8000,
+               [&]{ return rc.state() == RunState::Running && rc.queueDepth() == 0; });
+    TEST_ASSERT_TRUE(vd.diverterFert());
+    TEST_ASSERT_EQUAL_INT(divWritesBefore, g.writesTo(DIV_FERT) + g.writesTo(DIV_CLEAN));
+}
+
+// DEC-021: on a clean run end with NOTHING queued, the diverter returns to its plain
+// rest state at SETTLE — both legs de-energized — restoring the documented rest state
+// (§5/§14, DEC-011/013) instead of resting fert-open between runs for up to ~24h.
+static void test_rc_diverter_returns_plain_at_settle() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
     rc.begin(0);
@@ -340,14 +369,32 @@ static void test_rc_diverter_skip_when_unchanged() {
     RunRequest req; req.zoneIndex = 0; req.durationSec = 1; req.fertigate = true;
     rc.requestRun(req, 0);
     uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
-    TEST_ASSERT_TRUE(vd.diverterFert());
-    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_TRUE(vd.diverterFert());            // fert leg open mid-run
+    TEST_ASSERT_TRUE(g.level[DIV_FERT]);
 
+    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_FALSE(vd.diverterFert());           // returned to plain
+    TEST_ASSERT_FALSE(g.level[DIV_FERT]);           // fert leg de-energized (closed)
+    TEST_ASSERT_FALSE(g.level[DIV_CLEAN]);          // bypass de-energized (open = plain)
+}
+
+// A plain run's SETTLE must not touch the diverter legs (the diverterFert() guard): the
+// diverter is already at plain rest, so there is nothing to return and no spurious ~10s
+// travel. Regression guard on the DEC-021 SETTLE return — a plain run writes the legs zero times.
+static void test_rc_plain_run_settle_no_diverter_travel() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
     int divWritesBefore = g.writesTo(DIV_FERT) + g.writesTo(DIV_CLEAN);
-    rc.requestRun(req, now);    // same fert state -> no travel
-    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Running; });
+
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 1; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_FALSE(vd.diverterFert());
     TEST_ASSERT_EQUAL_INT(divWritesBefore, g.writesTo(DIV_FERT) + g.writesTo(DIV_CLEAN));
-    TEST_ASSERT_TRUE(vd.diverterFert());
+    (void)now;
 }
 
 // v1.4 boot state is known to be plain (both legs de-energized), so a first PLAIN run
@@ -2755,6 +2802,8 @@ int main() {
     RUN_TEST(test_rc_begin_idle_safe);
     RUN_TEST(test_rc_full_sequence_completes);
     RUN_TEST(test_rc_diverter_skip_when_unchanged);
+    RUN_TEST(test_rc_diverter_returns_plain_at_settle);
+    RUN_TEST(test_rc_plain_run_settle_no_diverter_travel);
     RUN_TEST(test_rc_first_plain_run_skips_diverter);
     RUN_TEST(test_rc_stop_unwinds);
     RUN_TEST(test_rc_fault_latches_and_clears);

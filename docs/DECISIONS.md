@@ -537,3 +537,29 @@ the pump-power gate (DEC-012), armed by the ATtiny (DEC-003); valves still rest 
 default K) is a constant, gated behind empirical calibration, and ships in its own PR.
 **Status:** Decided. Docs/BOM/wiring reconciled in this pass; the default-K firmware change is
 tracked as a separate task/PR.
+
+## DEC-021: Diverter returns to plain at run end (SETTLE), not left energized
+**Decision:** On normal run completion, `RunController` returns the Dosatron diverter to its plain
+rest state at SETTLE (both leg FETs LOW) **when no run is queued** — not left in its last commanded
+position. A chained queued run still sets its legs in PREP, so the return runs only when the queue
+drains (`qCount_ == 0 && diverterFert()` at SETTLE entry; the `diverterFert()` guard keeps a plain
+run's SETTLE travel-free).
+
+**Why:** The prior code left the diverter "as-is" at SETTLE, citing no decision — unlike the DEC-018
+history-push immediately adjacent. That contradicted the ratified rest-state contract (DEC-011,
+DEC-013, firmware spec §5/§14, §17 acceptance: "unpowered rest = plain water flows, Dosatron
+isolated"). Under §6's one-fertigation-run/day policy the consecutive-same-state skip-travel
+optimization that motivated "as-is" effectively never fires — the run after the day's fert run is
+plain, so the legs differ and travel happens anyway — while the cost was paid daily: pin 18 (fert
+leg) held **energized/open** and pin 17 (bypass) held **closed**, two FETs and two valve coils
+energized continuously for up to ~24h between runs. The optimization bought nothing and violated
+both the rest-state contract and the unpowered-valve power budget (DEC-011).
+
+**Why it's safe / scope:** Not a fail-dry change. With zones NC-closed and the pump off (DEC-012
+source gate), an open fert leg is dead-ended upstream of the source — DEC-013's "any diverter state
+is at worst a fertigation error, never a flood" holds either way. The `PrepDiverter` skip-travel
+guard (§6) is unchanged and still serves the genuine consecutive-same-state case, which now lives
+only inside a queue. §6 policy and §15 travel timing are untouched; firmware spec §4 step 7 corrected
+from "Diverter legs left as-is" to the queue-aware return. **Surfaced at bench validation (task 6.1a):**
+the fert diverter LEDs stayed lit after a run ended.
+**Status:** Decided. Implemented in the same PR (core + host tests + spec correction).
