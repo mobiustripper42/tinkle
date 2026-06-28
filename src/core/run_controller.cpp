@@ -142,8 +142,13 @@ void RunController::enter(RunState s, uint32_t nowMs) {
         case RunState::StopPump:    valve_.pumpOff();                           break;
         case RunState::CloseZone:   valve_.closeZone(current_.zoneIndex, nowMs);break;
         case RunState::Settle:
-            // Push the run onto the history ring (§4 step 7 / DEC-018). Diverter left as-is.
+            // Push the run onto the history ring (§4 step 7 / DEC-018).
             logRun(stopping_ ? RunResult::Stopped : RunResult::Completed, Fault::None);
+            // Return the diverter to plain rest (§5/§14, DEC-011/013/021) — only when the
+            // queue is empty; a chained run sets its legs in PrepDiverter, so returning
+            // between queued runs is wasted travel and risks overlapping leg commands. The
+            // diverterFert() guard keeps a plain run's SETTLE travel-free.
+            if (qCount_ == 0 && valve_.diverterFert()) valve_.setDiverter(false, nowMs);
             break;
         default: break;
     }

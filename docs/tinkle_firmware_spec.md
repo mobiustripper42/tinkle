@@ -105,7 +105,7 @@ Sequence (each step non-blocking, advancing on its own timer/confirmation):
 4. **RUNNING** — run for `durationSec`. Continuously: run flow checks (§7), watch software max-runtime, surface the live countdown to the SPA (§10.1). Any fault → jump to STOP_PUMP path then FAULT.
 5. **STOP_PUMP** — open pump relay (this is what stops water — the source).
 6. **CLOSE_ZONE** — de-energize the zone FET; the cap auto-return drives it closed over `ZONE_TRAVEL_MS`. (Pump is already off, so the valve closes against no pressure.)
-7. **SETTLE** — brief dwell, push the run entry (zone, start epoch, duration, gallons, fert y/n, result) onto the `RunLog` ring (DEC-018) — the ring **head** is the "last run" the status API exposes. Diverter legs left as-is. → IDLE (or next queued run).
+7. **SETTLE** — brief dwell, push the run entry (zone, start epoch, duration, gallons, fert y/n, result) onto the `RunLog` ring (DEC-018) — the ring **head** is the "last run" the status API exposes. Diverter legs returned to plain rest when no run is queued (DEC-021); left as-is while a run is queued (the chained run sets them in its own PREP). → IDLE (or next queued run).
 
 Only one run active at a time. Queued requests run sequentially with a short inter-run gap. A stop/cancel request unwinds straight to STOP_PUMP → CLOSE_ZONE from any active step.
 

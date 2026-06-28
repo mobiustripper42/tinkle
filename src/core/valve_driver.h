@@ -94,8 +94,13 @@ public:
     // Introspection for status/display/tests.
     uint8_t zoneCount() const { return cfg_.zoneCount; }
     bool zoneBusy(uint8_t zone) const;
+    // NB (DEC-021): diverterBusy()/busy() can read true at IDLE for up to diverterTravelMs
+    // after a run ends — the SETTLE return-to-plain starts the travel timer while the run
+    // controller advances to IDLE on the shorter settleMs. The FET levels are already at
+    // rest; only the timer lingers (it serializes a next run's PREP behind the return).
+    // "busy" here means "an actuator is mid-travel," NOT "a run is active."
     bool diverterBusy() const;
-    bool busy() const;                            // any actuator mid-travel
+    bool busy() const;                            // any actuator mid-travel (see NB above)
     bool pumpIsOn()        const { return pumpOn_; }
     bool diverterFert()    const { return diverterFert_; }   // commanded leg state
 
