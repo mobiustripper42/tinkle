@@ -30,9 +30,10 @@ constexpr uint8_t PUMP_RELAY  = 22;  // relay trigger. Snubber/flyback on coil.
 // Sensing.
 constexpr uint8_t FLOW_PIN    = 27;  // hall pulse, interrupt. Level-shift 5V->3.3V upstream.
 
-// Alive / board-health LED (DEC-019). The DevKitC's onboard LED — no external part. The
+// Alive / board-health LED (DEC-019). GPIO2 — wire an external LED here (this DevKitC has no
+// software-controllable onboard LED; the always-on one is the hardwired power LED). The
 // loop blinks it at ~1 Hz so a glance confirms the firmware is still ticking; it is the
-// only on-board status indicator now that the TM1637 + button rings are gone. Purely
+// only board-health status indicator now that the TM1637 + button rings are gone. Purely
 // cosmetic — it gates nothing (status proper lives in the SPA, §10.1). NOTE: distinct
 // from HEARTBEAT_OUT (GPIO4), the ATtiny watchdog heartbeat — this LED is local health,
 // not the safety handshake.
