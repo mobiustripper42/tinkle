@@ -379,6 +379,42 @@ static void test_rc_diverter_returns_plain_at_settle() {
     TEST_ASSERT_FALSE(g.level[DIV_CLEAN]);          // bypass de-energized (open = plain)
 }
 
+// DEC-021 sequencing seam: the SETTLE return-to-plain leaves the diverter mid-travel
+// (divTimer busy ~diverterTravelMs) while the controller advances to IDLE on the shorter
+// settleMs. A run requested during that window must wait the residual return-travel out in
+// PREP — not open the zone while the legs are still relaxing.
+static void test_rc_run_waits_residual_diverter_return() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+
+    // Fert run to completion -> IDLE. SETTLE fired setDiverter(false): divTimer busy ~6 s.
+    RunRequest fert; fert.zoneIndex = 0; fert.durationSec = 1; fert.fertigate = true;
+    rc.requestRun(fert, 0);
+    uint32_t now = pump(rc, 0, 5, 12000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    TEST_ASSERT_TRUE(vd.diverterBusy());            // return-travel still in flight at IDLE
+
+    // A plain run requested now holds in PREP behind the residual return-travel. It needs
+    // no leg change (already returning to plain), so PrepDiverter's !diverterBusy() gate —
+    // not a fresh setDiverter — is what makes it wait.
+    RunRequest plain; plain.zoneIndex = 0; plain.durationSec = 1; plain.fertigate = false;
+    rc.requestRun(plain, now);
+    rc.tick(now);
+    TEST_ASSERT_EQUAL(RunState::PrepDiverter, rc.state());
+
+    // Partway through the ~5.9 s residual: still gated in PREP, zone never opened.
+    now = pump(rc, now, 5, 3000, [&]{ return rc.state() != RunState::PrepDiverter; });
+    TEST_ASSERT_EQUAL(RunState::PrepDiverter, rc.state());
+    TEST_ASSERT_FALSE(g.level[ZF0]);
+
+    // Once the return-travel clears, the run proceeds to RUNNING, legs still plain.
+    now = pump(rc, now, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL(RunState::Running, rc.state());
+    TEST_ASSERT_FALSE(vd.diverterFert());
+    (void)now;
+}
+
 // A plain run's SETTLE must not touch the diverter legs (the diverterFert() guard): the
 // diverter is already at plain rest, so there is nothing to return and no spurious ~10s
 // travel. Regression guard on the DEC-021 SETTLE return — a plain run writes the legs zero times.
@@ -2803,6 +2839,7 @@ int main() {
     RUN_TEST(test_rc_full_sequence_completes);
     RUN_TEST(test_rc_diverter_skip_when_unchanged);
     RUN_TEST(test_rc_diverter_returns_plain_at_settle);
+    RUN_TEST(test_rc_run_waits_residual_diverter_return);
     RUN_TEST(test_rc_plain_run_settle_no_diverter_travel);
     RUN_TEST(test_rc_first_plain_run_skips_diverter);
     RUN_TEST(test_rc_stop_unwinds);
