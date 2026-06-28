@@ -152,6 +152,9 @@ Wire the power supply and its protection. **Leave everything else unplugged.**
 - AC mains → Mean Well **LRS-150-24** input (through an AC switch if you have one).
 - LRS `V+` → **10A fuse** → your `24V+` rail.
 - LRS `V−` → your `GND` rail.
+- **TVS across the rail:** a transient-suppressor diode from `24V+` to `GND` (banded end to
+  `24V+`) — brownout/transient insurance for everything downstream. It clamps spikes only; in
+  normal operation it does nothing, so it won't affect the meter reading below.
 
 **Check:** meter across the rails reads **~24V**. Switch off → 0V. Confirm `+` and `−` are
 where you think they are; mark them.
