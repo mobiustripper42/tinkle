@@ -109,11 +109,11 @@ Two small bits of wiring before any output test:
 - **Alive LED on pin 2.** ESP32 **pin 2** → LED long leg; LED short leg → **330Ω** → **GND**
   (same pattern as every output LED below). This is the heartbeat indicator — there's no
   onboard one on this board.
-- **Pull-up on pin 36.** A **10kΩ resistor from pin 36 to 3.3V.** Pin 36 is the watchdog
-  "tripped" input; nothing drives it yet in Part 1, so it floats and the firmware reads a
-  false trip — you'll hit fault **E3 (watchdog)** the moment you start a run. The pull-up
-  holds it in the safe state until the real ATtiny lands in Step 8. (Step 8 expects this same
-  resistor — leave it in place.)
+- **Pull-up on pin 36.** A **10kΩ resistor from pin 36 to 3.3V**, plus a **100nF cap from
+  pin 36 to GND** (noise filter). Pin 36 is the watchdog "tripped" input; nothing drives it
+  yet in Part 1, so it floats and the firmware reads a false trip — you'll hit fault
+  **E3 (watchdog)** the moment you start a run. The pull-up holds it in the safe state until
+  the real ATtiny lands in Step 8. (Step 8 expects this same pull-up + cap — leave them.)
 
 **Check:** USB plugged in, the **pin-2 LED blinks ~once a second.** That's the firmware
 running. No E3 on the phone when you start a run in Step 2.
@@ -197,7 +197,8 @@ This is the safety: it cuts the pump's power if the firmware ever hangs. Build i
 the pump.
 - ESP32 **pin 4** → ATtiny heartbeat input.
 - ATtiny "tripped" output → ESP32 **pin 36**, with a **10k resistor from pin 36 to 3.3V**
-  (you already added this pull-up in Step 1 — leave it).
+  and a **100nF cap from pin 36 to GND** (you already added this pull-up + cap in Step 1 —
+  leave them).
 - ATtiny output → **safety relay** coil (a relay module: its `IN` pin), `VCC`/`GND` to the
   5V buck and GND. Flyback diode across the coil if it's a bare relay (a relay *module*
   already has one).
