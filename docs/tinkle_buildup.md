@@ -21,7 +21,7 @@ The ESP32 is the brain. Each job is one numbered pin on the board (silkscreen la
 
 | ESP32 pin | Drives | Type |
 |---|---|---|
-| 2  | Onboard blue "alive" LED | built-in, nothing to wire |
+| 2  | "Alive" heartbeat LED | output (external LED — see note below) |
 | 13 | Zone 1 valve | output |
 | 14 | Zone 2 valve | output |
 | 16 | Zone 3 valve (hose) | output |
@@ -34,6 +34,11 @@ The ESP32 is the brain. Each job is one numbered pin on the board (silkscreen la
 
 `GND` = ground = the common "minus." Every part's ground ties back to the **same** ground.
 The ESP32 has several pins labeled `GND`; any of them works.
+
+> **This board has no software-controllable onboard LED.** The bright LED that's always on
+> the moment USB is plugged in is the **power** LED — hardwired, the firmware can't touch it.
+> The ~1 Hz "alive" heartbeat needs an **external LED on pin 2**, wired exactly like the
+> output LEDs (long leg → pin 2, short leg → 330Ω → GND). Wire it in Step 1, below.
 
 ---
 
@@ -86,9 +91,11 @@ Part 1.
    pio device monitor -b 115200
    ```
 
-**Check:** the onboard **blue LED blinks ~once a second.** That's the firmware running.
-If the upload can't find the board, it's usually the USB cable or a missing USB driver
-(most DevKitC boards are CP2102 or CH340 — install that driver for your OS).
+**Check:** the upload completes and the serial monitor prints the boot/heartbeat log — that's
+the firmware running. (There's no onboard alive LED to watch yet; you wire one in Step 1. The
+steady LED already lit is just the power LED.) If the upload can't find the board, it's
+usually the USB cable or a missing USB driver (most DevKitC boards are CP2102 or CH340 —
+install that driver for your OS).
 
 ---
 
@@ -96,8 +103,20 @@ If the upload can't find the board, it's usually the USB cable or a missing USB 
 
 LED legs: the **long** leg is `+` (anode), the **short** leg is `−` (cathode).
 
-## Step 1 — ESP32 alive
-Already done by flashing: USB plugged in, blue LED blinking. That's it.
+## Step 1 — ESP32 alive (and one pull-up that keeps the bench quiet)
+Two small bits of wiring before any output test:
+
+- **Alive LED on pin 2.** ESP32 **pin 2** → LED long leg; LED short leg → **330Ω** → **GND**
+  (same pattern as every output LED below). This is the heartbeat indicator — there's no
+  onboard one on this board.
+- **Pull-up on pin 36.** A **10kΩ resistor from pin 36 to 3.3V**, plus a **100nF cap from
+  pin 36 to GND** (noise filter). Pin 36 is the watchdog "tripped" input; nothing drives it
+  yet in Part 1, so it floats and the firmware reads a false trip — you'll hit fault
+  **E3 (watchdog)** the moment you start a run. The pull-up holds it in the safe state until
+  the real ATtiny lands in Step 8. (Step 8 expects this same pull-up + cap — leave them.)
+
+**Check:** USB plugged in, the **pin-2 LED blinks ~once a second.** That's the firmware
+running. No E3 on the phone when you start a run in Step 2.
 
 ## Step 2 — one output drives an LED
 Pick Zone 1 (pin 13). On a breadboard:
@@ -177,7 +196,9 @@ leg closed.
 This is the safety: it cuts the pump's power if the firmware ever hangs. Build it **before**
 the pump.
 - ESP32 **pin 4** → ATtiny heartbeat input.
-- ATtiny "tripped" output → ESP32 **pin 36**, with a **10k resistor from pin 36 to 3.3V**.
+- ATtiny "tripped" output → ESP32 **pin 36**, with a **10k resistor from pin 36 to 3.3V**
+  and a **100nF cap from pin 36 to GND** (you already added this pull-up + cap in Step 1 —
+  leave them).
 - ATtiny output → **safety relay** coil (a relay module: its `IN` pin), `VCC`/`GND` to the
   5V buck and GND. Flyback diode across the coil if it's a bare relay (a relay *module*
   already has one).
@@ -212,6 +233,6 @@ changes.
 Everything wired. Confirm each of these makes the pump dead:
 - Switch off AC → pump dead.
 - Start a run, then pull the heartbeat (pin 4) → pump dead within ~2s.
-- At power-on, before you do anything → all valves closed, pump off, blue LED blinking.
+- At power-on, before you do anything → all valves closed, pump off, pin-2 alive LED blinking.
 
 That's the build. Wet test (real water) comes later.

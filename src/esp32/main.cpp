@@ -31,7 +31,7 @@
 // RunController is the sole actuator commander; the loop ticks it (which ticks the
 // ValveDriver in turn). v1.5 (DEC-019) is phone-only: there is no button panel or
 // TM1637 display — all interaction is the SPA over the web layer (§10.1), and the only
-// on-board indicator is a ~1 Hz heartbeat LED. The scheduler / flow / web / watchdog
+// local indicator is a ~1 Hz heartbeat LED (external, on GPIO2). The scheduler / flow / web / watchdog
 // modules hang off this same loop — each is one more non-blocking tick().
 
 using namespace tinkle;
@@ -207,8 +207,8 @@ void setup() {
     flowMonitor.begin(flowSensor.pulses(), millis());
     flowFault.begin(flowSensor.pulses(), millis());   // seed the idle window past boot
 
-    // Heartbeat "alive" LED (DEC-019): the only on-board indicator now that the TM1637
-    // panel and button rings are gone. Off at boot; the loop blinks it at ~1 Hz so a
+    // Heartbeat "alive" LED (DEC-019): the only local indicator now that the TM1637
+    // panel and button rings are gone — an external LED on GPIO2 (no onboard one). Off at boot; the loop blinks it at ~1 Hz so a
     // glance confirms the firmware is still ticking. It gates nothing — status proper
     // is the SPA (§10.1).
     pinMode(ALIVE_LED, OUTPUT);
