@@ -173,41 +173,35 @@ Repeat Step 6 for each, same FET wiring:
 **Check:** each opens only on its own command. At rest: zones closed, clean leg open, fert
 leg closed.
 
-### The relay module (read once)
+### The relay modules (read once)
 
-A **2-channel relay module** is one board with both relays, their driver transistors, and
-flyback diodes already on it — so there's nothing to solder. Control side: **VCC**, **GND**,
-**IN1**, **IN2** (one IN per relay). Each relay's contacts come out to a screw block:
-**COM / NO / NC**.
+Each **1-channel relay module** is a small board with the relay, its driver transistor, and
+flyback already on it — nothing to solder. Pins: **VCC**, **GND**, **IN**; the contacts come
+out to a screw block **COM / NO / NC**. You use **two** boards — one pump, one safety.
 
-Use an **active-HIGH** ("high-level trigger"), **3.3V-compatible** module. Active-HIGH
-matters: at power-on the ESP32 pins sit LOW, and you need the relays **off** then —
-off = pump dead = fail-dry.
+Two setup steps per board, before wiring the pump:
+- Set the **H/L jumper to HIGH**. Active-HIGH matters: at power-on the ESP32 pins sit LOW,
+  and you need the relays **off** then — off = pump dead = fail-dry.
+- **Bench-test the 3.3V trigger:** VCC→5V, GND→GND, tap IN to 3.3V — it should click.
 
-Wire the board once:
-- **VCC** → 5V buck. **GND** → common ground.
-- **IN1** ← ESP32 **pin 22** (pump).
-- **IN2** ← ATtiny **pin 6** (safety).
-
-A pin going HIGH closes that channel's COM–NO contacts. That's it — no transistors, no
-diodes on your end.
+Wire each board: **VCC** → 5V buck, **GND** → common ground, **IN** ← its control pin
+(Steps 8–9). A pin going HIGH closes that board's COM–NO contacts.
 
 ## Step 8 — the watchdog + safety relay
 This is the safety: it cuts the pump's power if the firmware ever hangs. Build it **before**
 the pump.
 - ESP32 **pin 4** → ATtiny heartbeat input.
 - ATtiny "tripped" output → ESP32 **pin 36**, with a **10k resistor from pin 36 to 3.3V**.
-- **IN2** ← ATtiny **pin 6** (wired above).
-- Safety-relay **contacts** (channel 2): `24V+` → **COM**; **NO** → a new rail, call it
-  **`24V-armed`**. (Pump power comes from `24V-armed`, not raw 24V.)
+- **Safety module** `IN` ← ATtiny **pin 6**; its `VCC`→5V, `GND`→common.
+- Safety-relay **contacts**: `24V+` → **COM**; **NO** → a new rail, call it **`24V-armed`**.
+  (Pump power comes from `24V-armed`, not raw 24V.)
 
 **Check:** with no run going, meter `24V-armed` = **0V** (relay open). Start a run → it reads
 ~24V (armed). Stop the run, or unplug pin 4 → it drops to 0V within ~2 seconds.
 
 ## Step 9 — the pump (last)
-- **IN1** ← ESP32 **pin 22** (wired above).
-- Pump-relay **contacts** (channel 1): **`24V-armed`** → **COM**; **NO** → pump `+`.
-  Pump `−` → GND.
+- **Pump module** `IN` ← ESP32 **pin 22**; its `VCC`→5V, `GND`→common.
+- Pump-relay **contacts**: **`24V-armed`** → **COM**; **NO** → pump `+`. Pump `−` → GND.
 
 On the bench, use an LED or the spare (cracked) pump as a stand-in — **don't run water.**
 
