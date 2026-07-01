@@ -173,46 +173,41 @@ Repeat Step 6 for each, same FET wiring:
 **Check:** each opens only on its own command. At rest: zones closed, clean leg open, fert
 leg closed.
 
-### The relay driver (read once)
+### The relay module (read once)
 
-Same idea as a valve's FET, smaller parts. The relay is an **SRD-24VDC-SL-C** — a 5-pin
-PCB relay. Its coil is 24V, and a 3.3V/5V pin can't run that, so each relay gets a tiny
-driver: a small **NPN transistor** (2N3904), a **1kΩ** resistor, and a **1N4007** diode.
+A **2-channel relay module** is one board with both relays, their driver transistors, and
+flyback diodes already on it — so there's nothing to solder. Control side: **VCC**, **GND**,
+**IN1**, **IN2** (one IN per relay). Each relay's contacts come out to a screw block:
+**COM / NO / NC**.
 
-Find the coil pins first: meter across the relay's pins — the pair that reads **~1600Ω** is
-the coil. The other three are the contacts (**COM / NO / NC**).
+Use an **active-HIGH** ("high-level trigger"), **3.3V-compatible** module. Active-HIGH
+matters: at power-on the ESP32 pins sit LOW, and you need the relays **off** then —
+off = pump dead = fail-dry.
 
-Transistor (2N3904, flat side facing you, legs down): left-to-right = **E** (emitter),
-**B** (base), **C** (collector).
+Wire the board once:
+- **VCC** → 5V buck. **GND** → common ground.
+- **IN1** ← ESP32 **pin 22** (pump).
+- **IN2** ← ATtiny **pin 6** (safety).
 
-Wiring the driver:
-- control pin → **1kΩ** → transistor **B**.
-- transistor **E** → **GND**.
-- transistor **C** → one **coil** pin.
-- other **coil** pin → **24V+**.
-- **1N4007** across the two coil pins, **banded end toward 24V+**.
-
-Pin HIGH → transistor on → coil energizes → the relay's COM–NO contacts close.
+A pin going HIGH closes that channel's COM–NO contacts. That's it — no transistors, no
+diodes on your end.
 
 ## Step 8 — the watchdog + safety relay
 This is the safety: it cuts the pump's power if the firmware ever hangs. Build it **before**
 the pump.
 - ESP32 **pin 4** → ATtiny heartbeat input.
 - ATtiny "tripped" output → ESP32 **pin 36**, with a **10k resistor from pin 36 to 3.3V**.
-- **Driver** (as above), control pin = **ATtiny pin 6**: ATtiny 6 → 1kΩ → NPN base; NPN
-  emitter → GND; NPN collector → safety-relay coil; other coil pin → 24V+; 1N4007 across the
-  coil (band to 24V+).
-- Safety-relay **contacts**: `24V+` → **COM**; **NO** → a new rail, call it **`24V-armed`**.
-  (Pump power comes from `24V-armed`, not raw 24V.)
+- **IN2** ← ATtiny **pin 6** (wired above).
+- Safety-relay **contacts** (channel 2): `24V+` → **COM**; **NO** → a new rail, call it
+  **`24V-armed`**. (Pump power comes from `24V-armed`, not raw 24V.)
 
 **Check:** with no run going, meter `24V-armed` = **0V** (relay open). Start a run → it reads
 ~24V (armed). Stop the run, or unplug pin 4 → it drops to 0V within ~2 seconds.
 
 ## Step 9 — the pump (last)
-Second SRD relay, same driver (Step 8), control pin = **ESP32 pin 22**.
-- **Driver:** ESP32 22 → 1kΩ → NPN base; NPN emitter → GND; NPN collector → pump-relay coil;
-  other coil pin → 24V+; 1N4007 across the coil (band to 24V+).
-- Pump-relay **contacts**: **`24V-armed`** → **COM**; **NO** → pump `+`. Pump `−` → GND.
+- **IN1** ← ESP32 **pin 22** (wired above).
+- Pump-relay **contacts** (channel 1): **`24V-armed`** → **COM**; **NO** → pump `+`.
+  Pump `−` → GND.
 
 On the bench, use an LED or the spare (cracked) pump as a stand-in — **don't run water.**
 
