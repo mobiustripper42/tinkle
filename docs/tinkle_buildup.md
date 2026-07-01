@@ -253,9 +253,10 @@ keeps its program. Now wire it into the circuit:
 - Also add a **10k from ATtiny pin 1 (RESET) to pin 8** — noise immunity so relay/pump
   switching can't glitch-reset the watchdog mid-run. (Internal pull-up usually covers it;
   cheap insurance next to the relays.)
-- ATtiny **pin 6** (arm) → **safety relay** coil (a relay module: its `IN` pin), `VCC`/`GND` to the
-  5V buck and GND. Flyback diode across the coil if it's a bare relay (a relay *module*
-  already has one).
+- ATtiny **pin 6** (arm) → **safety relay module** `IN`; module `VCC`/`GND` → 5V buck and GND.
+  Add a **10k from that `IN` to GND**: during ATtiny reset pin 6 goes Hi-Z, and the pulldown
+  holds the relay **off** (fail-dry). Set the module's **H/L jumper to HIGH** (active-high) so
+  boot-LOW = relay off.
 - Safety relay contacts: `24V+` → relay `COM`; relay `NO` → a new rail call it **`24V-armed`**.
   (Pump power will come from `24V-armed`, not raw 24V.)
 
@@ -263,7 +264,8 @@ keeps its program. Now wire it into the circuit:
 ~24V (armed). Stop the run, or unplug pin 4 → it drops to 0V within ~2 seconds.
 
 ## Step 9 — the pump (last)
-- ESP32 **pin 22** → pump relay module `IN`; its `VCC`/`GND` to 5V buck and GND.
+- ESP32 **pin 22** → pump relay module `IN`; its `VCC`/`GND` to 5V buck and GND. (H/L jumper
+  to **HIGH**, same as Step 8; a 10k from `IN` to GND is good insurance here too.)
 - Pump relay contacts: **`24V-armed`** → relay `COM`; relay `NO` → pump `+`. Pump `−` → GND.
 
 On the bench, use an LED or the spare (cracked) pump as a stand-in — **don't run water.**
@@ -290,3 +292,94 @@ Everything wired. Confirm each of these makes the pump dead:
 - At power-on, before you do anything → all valves closed, pump off, pin-2 alive LED blinking.
 
 That's the build. Wet test (real water) comes later.
+
+---
+
+## Connection list (every wire)
+
+The whole netlist in one place, consistent with the steps above. Build **power rails** first,
+then the **protoboard**, then the **field** wires. One common ground everywhere (`GND`).
+
+### Power rails
+| From | To |
+|---|---|
+| AC hot / neutral / ground | LRS-150-24 **L / N / ⏚** |
+| LRS **V+** | 10A fuse → **24V+** rail |
+| LRS **V−** | **GND** rail |
+| 24V+ | buck **IN+** |
+| GND | buck **IN−** |
+| buck **OUT+** | **5V** rail |
+| buck **OUT−** | GND rail |
+
+### ESP32 ↔ protoboard (the jumpers between the two boards)
+| ESP32 pin | Goes to |
+|---|---|
+| 5V / VIN | 5V rail |
+| GND | GND rail |
+| 3V3 | 3.3V node (feeds the pin-36 pull-up + level-shifter LV) |
+| 13 | Zone 1 FET gate (via 100Ω) |
+| 14 | Zone 2 FET gate (via 100Ω) |
+| 16 | Zone 3 FET gate (via 100Ω) |
+| 17 | Diverter-clean FET gate (via 100Ω) |
+| 18 | Diverter-fert FET gate (via 100Ω) |
+| 22 | Pump relay module **IN** |
+| 4 | ATtiny **pin 7** (heartbeat) |
+| 36 | ATtiny **pin 5** (trip) **+ 10k to 3V3 + 100nF to GND** |
+| 27 | Level-shifter LV-out |
+| 2 | onboard LED — **no wire** |
+
+### On the protoboard
+**ATtiny85** (DIP pins; pin 1 by the notch):
+| ATtiny pin | Goes to |
+|---|---|
+| 8 (VCC) | 5V rail |
+| 4 (GND) | GND rail |
+| 7 (heartbeat in) | ESP32 pin 4, **+ 10k pin 7 → GND** (broken-wire = "no heartbeat" = fail-dry) |
+| 6 (arm out) | Safety relay **IN**, **+ 10k IN → GND** (holds off during ATtiny reset) |
+| 5 (trip out) | ESP32 pin 36 |
+| 1 (RESET) | **10k → pin 8** (noise immunity) |
+
+**Each valve FET — IRLZ44N ×5** (Z1=13, Z2=14, Z3=16, DIV-clean=17, DIV-fert=18):
+| FET leg | Goes to |
+|---|---|
+| Gate | its ESP32 pin via **100Ω**, **+ 100k gate → GND** |
+| Source | GND rail |
+| Drain | that valve's return wire (field) |
+| Drain↔Source | **1.5KE30A TVS** across the two |
+
+**Relay modules ×2** (H/L jumper → HIGH):
+| Module pin | Goes to |
+|---|---|
+| VCC (both) | 5V rail |
+| GND (both) | GND rail |
+| Pump IN | ESP32 pin 22 |
+| Safety IN | ATtiny pin 6 (**+ 10k IN → GND**) |
+
+**Level shifter** (flow pulse 5V → 3.3V):
+| Pin | Goes to |
+|---|---|
+| HV | 5V rail |
+| LV | 3V3 |
+| GND | GND rail |
+| HV channel in | flow sensor pulse (field) |
+| LV channel out | ESP32 pin 27 |
+
+### External — box to field
+| Device | Wiring |
+|---|---|
+| Zone 1 valve | wire A → **24V+**; wire B → Z1 FET drain |
+| Zone 2 valve | A → 24V+; B → Z2 FET drain |
+| Zone 3 valve | A → 24V+; B → Z3 FET drain |
+| Diverter clean valve | A → 24V+; B → DIV-clean FET drain |
+| Diverter fert valve | A → 24V+; B → DIV-fert FET drain |
+| **Pump** | 24V+ → safety **COM**; safety **NO** → pump **COM**; pump **NO** → pump **+**; pump **−** → GND |
+| Flow sensor (Leridian) | red → 5V; black → GND; yellow → level-shifter HV-in |
+| AC mains | → LRS **L / N / ⏚** |
+
+**Two rules baked in:** valves run on **raw 24V+** (a stuck valve passes nothing with the pump
+off); only the **pump** goes through the two relays in series (armed), so it has power only
+when both close — the fail-dry gate.
+
+> Possible simplification (verify, don't assume): the Leridian is rated to run at **3.3V**.
+> Powered at 3.3V with the ESP32's internal pull-up on pin 27, its pulse would already be
+> 3.3V and the **level shifter drops out**. Confirm on the bench before removing it.
