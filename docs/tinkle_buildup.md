@@ -173,23 +173,46 @@ Repeat Step 6 for each, same FET wiring:
 **Check:** each opens only on its own command. At rest: zones closed, clean leg open, fert
 leg closed.
 
+### The relay driver (read once)
+
+Same idea as a valve's FET, smaller parts. The relay is an **SRD-24VDC-SL-C** — a 5-pin
+PCB relay. Its coil is 24V, and a 3.3V/5V pin can't run that, so each relay gets a tiny
+driver: a small **NPN transistor** (2N3904), a **1kΩ** resistor, and a **1N4007** diode.
+
+Find the coil pins first: meter across the relay's pins — the pair that reads **~1600Ω** is
+the coil. The other three are the contacts (**COM / NO / NC**).
+
+Transistor (2N3904, flat side facing you, legs down): left-to-right = **E** (emitter),
+**B** (base), **C** (collector).
+
+Wiring the driver:
+- control pin → **1kΩ** → transistor **B**.
+- transistor **E** → **GND**.
+- transistor **C** → one **coil** pin.
+- other **coil** pin → **24V+**.
+- **1N4007** across the two coil pins, **banded end toward 24V+**.
+
+Pin HIGH → transistor on → coil energizes → the relay's COM–NO contacts close.
+
 ## Step 8 — the watchdog + safety relay
 This is the safety: it cuts the pump's power if the firmware ever hangs. Build it **before**
 the pump.
 - ESP32 **pin 4** → ATtiny heartbeat input.
 - ATtiny "tripped" output → ESP32 **pin 36**, with a **10k resistor from pin 36 to 3.3V**.
-- ATtiny output → **safety relay** coil (a relay module: its `IN` pin), `VCC`/`GND` to the
-  5V buck and GND. Flyback diode across the coil if it's a bare relay (a relay *module*
-  already has one).
-- Safety relay contacts: `24V+` → relay `COM`; relay `NO` → a new rail call it **`24V-armed`**.
-  (Pump power will come from `24V-armed`, not raw 24V.)
+- **Driver** (as above), control pin = **ATtiny pin 6**: ATtiny 6 → 1kΩ → NPN base; NPN
+  emitter → GND; NPN collector → safety-relay coil; other coil pin → 24V+; 1N4007 across the
+  coil (band to 24V+).
+- Safety-relay **contacts**: `24V+` → **COM**; **NO** → a new rail, call it **`24V-armed`**.
+  (Pump power comes from `24V-armed`, not raw 24V.)
 
 **Check:** with no run going, meter `24V-armed` = **0V** (relay open). Start a run → it reads
 ~24V (armed). Stop the run, or unplug pin 4 → it drops to 0V within ~2 seconds.
 
 ## Step 9 — the pump (last)
-- ESP32 **pin 22** → pump relay module `IN`; its `VCC`/`GND` to 5V buck and GND.
-- Pump relay contacts: **`24V-armed`** → relay `COM`; relay `NO` → pump `+`. Pump `−` → GND.
+Second SRD relay, same driver (Step 8), control pin = **ESP32 pin 22**.
+- **Driver:** ESP32 22 → 1kΩ → NPN base; NPN emitter → GND; NPN collector → pump-relay coil;
+  other coil pin → 24V+; 1N4007 across the coil (band to 24V+).
+- Pump-relay **contacts**: **`24V-armed`** → **COM**; **NO** → pump `+`. Pump `−` → GND.
 
 On the bench, use an LED or the spare (cracked) pump as a stand-in — **don't run water.**
 

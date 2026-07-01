@@ -42,9 +42,9 @@ switched by a simple low-side driver.
 | ATtiny85 + programmer | 1 | watchdog MCU | Digispark / AVR-ISP | Dependency-free sketch. |
 | Low-side valve driver | 1 per valve (5 now, build ~8–16) | discrete logic-level N-FET | **IRLZ44N** | Huge margin over cap inrush → inrush spec moot (don't bench it). Gate R + gate-to-GND pulldown so valves sit off at boot. |
 | TVS clamp, drain–source per FET | 5 | **1.5KE30A (through-hole)** | 1.5KE30A | **v1.5 (DEC-020) — was SMAJ30A SMD.** Valves have an internal bridge rectifier → a freewheel diode across the valve won't clamp; clamp the **FET**, not the load. No RC snubber unless a scope shows ringing. |
-| Flyback diode | pump-relay coil | 1N4007 / Schottky | — | Relay coil only — the valves use the per-FET TVS above, not a freewheel diode. |
-| Pump relay (or MOSFET) | 1 | ~5–6 A, clean isolation | — | On the **armed** 24V (fail-dry source gate). |
-| Safety/arm relay | 1 | NO, energize-to-pass, ≥10 A | — | ATtiny-armed; gates 24V to the **pump**. |
+| Pump relay | 1 | **SRD-24VDC-SL-C** — 24V coil (1600Ω, ~15mA), SPDT, 10A contacts | Songle SRD-24VDC-SL-C | **v1.5 — was unspecified ("~5–6A relay").** Bare 5-pin PCB relay, soldered to the protoboard. Its NO contact passes the **armed** 24V to the pump (source gate). Needs a coil driver (next row). |
+| Safety/arm relay | 1 | **SRD-24VDC-SL-C** — same part | Songle SRD-24VDC-SL-C | **v1.5 — was unspecified ("≥10A, ATtiny-armed").** ATtiny-armed; its NO contact feeds the pump relay (the two are in series). Same part + driver as the pump relay. |
+| Relay coil driver | 2 (one per relay) | small NPN + **1kΩ** base R + **1N4007** flyback | 2N3904 / 2N2222 | **v1.5 — the missing driver.** A 3.3V/5V pin can't run a 24V coil. Pin → 1kΩ → base; emitter → GND; collector → one coil pin; other coil pin → 24V+; 1N4007 across the coil (band toward 24V+). Optional 10k base→GND holds it off at boot. Works from the ESP32's 3.3V (bare NPN triggers where some relay modules won't). |
 | TM1637 4-digit display | 1 | 2-wire | — | MM:SS countdown, read-only. |
 | Flow-sensor level shift | 1 | 5V→3.3V (divider/module) | — | Protect GPIO27. |
 | Enclosure | 1 | **opaque grey Boxco P-series (~170×220×100)**, IP65+, UV-stable, vertical mount, glands down, DIN rail | Boxco P-series | **v1.5 (DEC-020) — was clear-lid w/ PSU inside.** Houses controller/driver/terminals only; the PSU mounts **outside**. |
