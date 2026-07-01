@@ -39,7 +39,8 @@ switched by a simple low-side driver.
 | Item | Qty | Key spec | Candidate | Notes |
 |---|---|---|---|---|
 | ESP32 DevKitC, 38-pin | 1 | Arduino-ESP32 | — | Re-mapped pins (see draft §4). |
-| ATtiny85 + programmer | 1 | watchdog MCU | Digispark / AVR-ISP | Dependency-free sketch. |
+| ATtiny85 + programmer | 1 | watchdog MCU | Digispark / AVR-ISP | Dependency-free sketch. Runs at **3.3V**. Flash via Arduino-as-ISP (buildup Step 8.0). |
+| Watchdog support passives | per ATtiny | 2× 10k | — | **10k pin7→GND** (heartbeat pull-down — safety-critical: a broken heartbeat must read as quiet so the pump disarms); **10k RESET→3.3V** (glitch immunity). The trip-line **10k pin36→3.3V + 100nF pin36→GND** are the *same parts already listed for Step 1* — not additional. |
 | Low-side valve driver | 1 per valve (5 now, build ~8–16) | discrete logic-level N-FET | **IRLZ44N** | Huge margin over cap inrush → inrush spec moot (don't bench it). Gate R + gate-to-GND pulldown so valves sit off at boot. |
 | TVS clamp, drain–source per FET | 5 | **1.5KE30A (through-hole)** | 1.5KE30A | **v1.5 (DEC-020) — was SMAJ30A SMD.** Valves have an internal bridge rectifier → a freewheel diode across the valve won't clamp; clamp the **FET**, not the load. No RC snubber unless a scope shows ringing. |
 | Flyback diode | pump-relay coil | 1N4007 / Schottky | — | Relay coil only — the valves use the per-FET TVS above, not a freewheel diode. |

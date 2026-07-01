@@ -198,11 +198,62 @@ leg closed.
 ## Step 8 — the watchdog + safety relay
 This is the safety: it cuts the pump's power if the firmware ever hangs. Build it **before**
 the pump.
-- ESP32 **pin 4** → ATtiny heartbeat input.
-- ATtiny "tripped" output → ESP32 **pin 36**, with a **10k resistor from pin 36 to 3.3V**
+
+### Step 8.0 — flash the ATtiny first (one-time)
+The watchdog is a **second chip** (ATtiny85) with its own firmware — it ships blank, so you
+must flash it before it does anything. Unlike the ESP32, the ATtiny has **no USB port**, so
+you flash it through an **Arduino Uno acting as a programmer**. You only do this once per chip.
+
+You need: an Arduino Uno, six jumper wires, and a **10 µF electrolytic capacitor**.
+
+1. **Turn the Uno into a programmer.** Load the stock **ArduinoISP** sketch onto it (Arduino
+   IDE: *File → Examples → 11.ArduinoISP → ArduinoISP → Upload*). Headless alternative: build
+   that sketch in a throwaway PlatformIO project (`board = uno`) and `pio run -t upload` it.
+2. **Wire the Uno to the ATtiny** on a breadboard. ATtiny pin 1 is by the dot/notch; pins
+   1–4 run down one side, 5–8 up the other:
+
+   | Uno pin | → ATtiny pin |
+   |---|---|
+   | 13 | 7 |
+   | 12 | 6 |
+   | 11 | 5 |
+   | 10 | 1 (reset) |
+   | 5V | 8 (Vcc) |
+   | GND | 4 (GND) |
+
+   Then add the **10 µF cap across the Uno's RESET and GND** (short leg to GND). It stops the
+   Uno resetting itself when the flasher connects — without it you get "not in sync" errors.
+3. **Build the firmware, then burn the fuse and flash it** with avrdude through the Uno (the
+   Uno powers the ATtiny while you do). Replace `/dev/ttyACM0` with the Uno's port if different:
+   ```
+   AVRD=~/.platformio/packages/tool-avrdude/avrdude
+   CONF=~/.platformio/packages/tool-avrdude/avrdude.conf
+   pio run -e attiny85                                                          # builds the .hex
+   $AVRD -C $CONF -c stk500v1 -P /dev/ttyACM0 -b 19200 -p attiny85 -U lfuse:w:0xE2:m
+   $AVRD -C $CONF -c stk500v1 -P /dev/ttyACM0 -b 19200 -p attiny85 \
+         -U flash:w:.pio/build/attiny85/firmware.hex:i
+   ```
+   The fuse step matters: the firmware's 2-second safety timeout assumes 8 MHz. Left at the
+   factory 1 MHz, every timer runs 8× slow. (Use avrdude directly — PlatformIO's `-t fuses`/
+   `-t upload` targets don't pass the port to a stk500v1 programmer.)
+
+**Check:** the upload ends with `bytes of flash verified`. Then unplug the Uno — the ATtiny
+keeps its program. Now wire it into the circuit:
+
+- ESP32 **pin 4** → ATtiny **pin 7** (heartbeat input). Add a **10k pull-down from ATtiny
+  pin 7 to GND** — this is a safety requirement, not optional: if the heartbeat wire ever
+  falls off, the pull-down holds pin 7 low ("no heartbeat") so the watchdog disarms and the
+  pump dies. Without it a broken heartbeat floats and can read as *alive*, leaving the pump
+  armed — a fail-dangerous hole. The ESP32 still drives the line fine during runs.
+- ATtiny **pin 5** ("tripped") → ESP32 **pin 36**, with a **10k resistor from pin 36 to 3.3V**
   and a **100nF cap from pin 36 to GND** (you already added this pull-up + cap in Step 1 —
-  leave them).
-- ATtiny output → **safety relay** coil (a relay module: its `IN` pin), `VCC`/`GND` to the
+  leave them). (You can equally reference these to the ATtiny end: `pin 5 → 10k → pin 8`,
+  `pin 5 → 100nF → GND` — pin 5 and pin 36 are the same net. Keep the ATtiny on **3.3V** if
+  you tie the pull-up to pin 8.)
+- Also add a **10k from ATtiny pin 1 (RESET) to pin 8** — noise immunity so relay/pump
+  switching can't glitch-reset the watchdog mid-run. (Internal pull-up usually covers it;
+  cheap insurance next to the relays.)
+- ATtiny **pin 6** (arm) → **safety relay** coil (a relay module: its `IN` pin), `VCC`/`GND` to the
   5V buck and GND. Flyback diode across the coil if it's a bare relay (a relay *module*
   already has one).
 - Safety relay contacts: `24V+` → relay `COM`; relay `NO` → a new rail call it **`24V-armed`**.
