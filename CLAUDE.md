@@ -93,7 +93,7 @@ Default to the cheapest model that does the job. **Opus 4.8 is the standing mode
 
 | Tier | Model | Use for |
 |------|-------|---------|
-| Cheap | `claude-sonnet-4-6` | Trivial/scoped agents and reviews — fast, low-cost. |
+| Cheap | `claude-sonnet-5` | Trivial/scoped agents and reviews — fast, low-cost. |
 | Default | `claude-opus-4-8` | The standing model for development and architecture. Most work runs here. |
 
 - **Reach for `effort` before reaching for a bigger model.** `effort` (`low`/`medium`/`high`/`xhigh`/`max`, via `output_config`) buys quality more cheaply than a model jump on a task the current model can already do. `xhigh` is the floor for coding/agentic work, `high` for intelligence-sensitive work, `max` only when correctness must beat cost.
@@ -184,6 +184,15 @@ Doing PR reviews from your phone is tolerable if you structure for it:
 - **Bug reports:** create a GitHub issue, label `bug`, add to current or next phase.
 
 Project-specific debugging gotchas (dev-server checks, stale-process traps, auth-redirect quirks) live in `.claude/CLAUDE-context.md` under `## Workflow Notes (project)`.
+
+## Memory
+
+Two actions, both automatic — never wait for the user to ask, and never defer to session end:
+
+1. **Save on the spot.** The moment the user states a durable fact (a preference, a correction, a project constraint), do two things in that same turn: (a) write the memory file, (b) add its one-line pointer to `MEMORY.md`. Saying "noted" or "I'll remember" is not saving — if no file was written, nothing was remembered.
+2. **Reconcile at session start.** When you load memory, list the memory directory and diff it against `MEMORY.md`. For any file missing a pointer line, add one. Only `MEMORY.md` loads at startup, so an unindexed file never recalls — this self-check catches drift without the user ever having to notice it broke.
+
+A memory is "working" only when both its file exists **and** it has a line in `MEMORY.md`. One without the other is invisible.
 
 ## Approval Before Action (all tasks)
 

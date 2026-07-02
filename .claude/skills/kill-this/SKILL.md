@@ -38,7 +38,7 @@ Stage all uncommitted code changes on the **task branch** (the current `$BRANCH`
 git add -A
 git commit -m "<phase/task summary>
 
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 ```
 
 If there is nothing to commit, surface that and stop here — no PR for no code.
