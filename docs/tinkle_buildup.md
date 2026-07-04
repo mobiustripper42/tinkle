@@ -152,9 +152,10 @@ Wire the power supply and its protection. **Leave everything else unplugged.**
 - AC mains → Mean Well **LRS-150-24** input (through an AC switch if you have one).
 - LRS `V+` → **10A fuse** → your `24V+` rail.
 - LRS `V−` → your `GND` rail.
-- **TVS across the rail:** a transient-suppressor diode from `24V+` to `GND` (banded end to
-  `24V+`) — brownout/transient insurance for everything downstream. It clamps spikes only; in
-  normal operation it does nothing, so it won't affect the meter reading below.
+- **TVS across the rail:** a **1.5KE30CA** transient-suppressor diode from `24V+` to `GND` —
+  brownout/transient insurance for everything downstream. The CA part is bidirectional: no
+  band, either orientation works. It clamps spikes only; in normal operation it does nothing,
+  so it won't affect the meter reading below.
 
 **Check:** meter across the rails reads **~24V**. Switch off → 0V. Confirm `+` and `−` are
 where you think they are; mark them.
@@ -174,7 +175,7 @@ Build a single Zone 1 channel (pin 13). Wire the FET as in "What a FET is":
 - FET **Source** → **GND**.
 - FET **Drain** → one valve wire.
 - Other valve wire → **24V+**.
-- **1.5KE30A TVS** across FET **Drain and Source** (banded end to Drain).
+- **1.5KE30CA TVS** across FET **Drain and Source** (bidirectional — either orientation).
 
 Keep the ESP32 on USB for now (its GND and the 24V GND must be the **same** ground — tie
 the rails together).
@@ -345,7 +346,7 @@ then the **protoboard**, then the **field** wires. One common ground everywhere 
 | Gate | its ESP32 pin via **100Ω**, **+ 100k gate → GND** |
 | Source | GND rail |
 | Drain | that valve's return wire (field) |
-| Drain↔Source | **1.5KE30A TVS** across the two |
+| Drain↔Source | **1.5KE30CA TVS** across the two |
 
 **Relay modules ×2** (H/L jumper → HIGH):
 | Module pin | Goes to |

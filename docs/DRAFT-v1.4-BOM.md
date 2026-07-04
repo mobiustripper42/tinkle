@@ -2,7 +2,7 @@
 
 > **⚠ Superseded in part by DEC-019 (v1.5, phone-only).** Any line items for the **TM1637 display, the 3 momentary buttons, the 3 LED rings**, and their 24 V ring rail / driver are **cut** — V1 has no on-box panel, only a single onboard alive LED (GPIO2). An **AC master switch** on the Mean Well input is the optional service disconnect. Treat the panel rows below as historical.
 >
-> **⚠ Also reconciled by DEC-020 (v1.5 hardware).** Rows updated inline (look for the *v1.5 (DEC-020)* tag): pump **51→55**, flow sensor **→ Leridian**, TVS **SMAJ30A→1.5KE30A through-hole**, **24→3.3V buck removed** (single 5V buck; ESP32 self-makes 3.3V), **PSU mounts outside**, enclosure **→ opaque Boxco P-series**, hybrid protoboard build.
+> **⚠ Also reconciled by DEC-020 (v1.5 hardware).** Rows updated inline (look for the *v1.5 (DEC-020)* tag): pump **51→55**, flow sensor **→ Leridian**, TVS **SMAJ30A→1.5KE30A through-hole** (as-built: the bidirectional **1.5KE30CA** — see row notes), **24→3.3V buck removed** (single 5V buck; ESP32 self-makes 3.3V), **PSU mounts outside**, enclosure **→ opaque Boxco P-series**, hybrid protoboard build.
 
 **For:** Red Tunnel build, on a chassis sized for three tunnels. Pairs with
 `DRAFT-v1.4-valve-rearchitecture.md`. **Not yet propagated to the canonical docs.**
@@ -42,7 +42,7 @@ switched by a simple low-side driver.
 | ATtiny85 + programmer | 1 | watchdog MCU | Digispark / AVR-ISP | Dependency-free sketch. Runs at **3.3V**. Flash via Arduino-as-ISP (buildup Step 8.0). |
 | Watchdog support passives | per ATtiny | 2× 10k | — | **10k pin7→GND** (heartbeat pull-down — safety-critical: a broken heartbeat must read as quiet so the pump disarms); **10k RESET→3.3V** (glitch immunity). The trip-line **10k pin36→3.3V + 100nF pin36→GND** are the *same parts already listed for Step 1* — not additional. |
 | Low-side valve driver | 1 per valve (5 now, build ~8–16) | discrete logic-level N-FET | **IRLZ44N** | Huge margin over cap inrush → inrush spec moot (don't bench it). Gate R + gate-to-GND pulldown so valves sit off at boot. |
-| TVS clamp, drain–source per FET | 5 | **1.5KE30A (through-hole)** | 1.5KE30A | **v1.5 (DEC-020) — was SMAJ30A SMD.** Valves have an internal bridge rectifier → a freewheel diode across the valve won't clamp; clamp the **FET**, not the load. No RC snubber unless a scope shows ringing. |
+| TVS clamp, drain–source per FET | 5 | **1.5KE30CA (through-hole, bidirectional)** | 1.5KE30CA | **v1.5 (DEC-020) — was SMAJ30A SMD.** As-built: the **CA** (bidirectional) part is what's installed — ordered in place of the spec'd 1.5KE30A; equivalent here (positive clamp identical; the FET body diode already covers the negative direction the A would have). No band — either orientation. Valves have an internal bridge rectifier → a freewheel diode across the valve won't clamp; clamp the **FET**, not the load. No RC snubber unless a scope shows ringing. |
 | Relay module, 1-channel opto | 2 (sold as a 4-pack; 2 spare) | 5V VCC, opto-isolated, **H/L jumper set HIGH**, triggers at 3.3V, relay = SRD-05VDC-SL-C, 10A contacts | Amazon — "1 channel 5V relay module optocoupler high/low trigger" | **v1.5 — the pump-switching relays (were unspecified placeholders).** Two **independent** boards (pump + safety) — better than a shared 2-channel board for the two-key chain. Each: `VCC`→5V, `GND`→common, `IN`←control pin, contacts `COM`/`NO` in series on the pump feed. Safety `IN`←ATtiny pin 6 (**+ 10k IN→GND**, holds it off during ATtiny reset), pump `IN`←ESP32 pin 22. **Set the jumper HIGH** (boot-LOW = off = fail-dry) and **bench-confirm the 3.3V trigger** before wiring the pump. Module has its own coil driver + flyback — no discretes. |
 | TM1637 4-digit display | 1 | 2-wire | — | MM:SS countdown, read-only. |
 | Flow-sensor level shift | 1 | 5V→3.3V (divider/module) | — | Protect GPIO27. |
@@ -58,7 +58,7 @@ switched by a simple low-side driver.
 | 24V PSU | 1 | 24V, ≥6 A / 150 W, open-frame | Mean Well **LRS-150-24** | **v1.5 (DEC-020):** IP20 → mounts **outside** the enclosure on its own bracket (shaded/vented). LPV-150-24 if a sealed standalone is wanted. |
 | Buck 24→5V | 1 | feeds flow sensor **and ESP32** (5V/VIN → onboard 3.3V; 3V3 pin = logic rail) | — | **v1.5 (DEC-020):** the only buck. 24→3.3V buck **removed**; 12V buck already dropped — valves run on 24V. |
 | Inline fuse + holder | 1 | ~10 A on 24V out | — | |
-| TVS across 24V | 1 | — | — | Brownout/transient insurance. |
+| TVS across 24V | 1 | **1.5KE30CA (through-hole, bidirectional)** | 1.5KE30CA | Brownout/transient insurance. Same part as the FET clamps (25.6V standoff clears the 24V rail); no band, either orientation. |
 | Reverse-polarity protection | 1 | diode or P-FET | — | |
 
 ---
@@ -85,7 +85,7 @@ switched by a simple low-side driver.
 
 **Resolved (sourcing pass):**
 1. ✅ Driver = **IRLZ44N FET per valve** — margin makes the cap-inrush question moot.
-2. ✅ Clamp = **1.5KE30A (through-hole) TVS drain–source per FET** (internal-rectifier valves; no RC). *(v1.5 / DEC-020 — was SMAJ30A SMD.)*
+2. ✅ Clamp = **1.5KE30CA (through-hole) TVS drain–source per FET** (internal-rectifier valves; no RC). *(v1.5 / DEC-020 — was SMAJ30A SMD; as-built the bidirectional CA replaced the spec'd A — equivalent in this circuit.)*
 3. ✅ LED rings = **24V**, one low-side switch per ring off the 24V bus (no 12V, no ULN2803).
 4. ✅ Check valve = **existing GASHER**, Dosatron outlet between injector and rejoin tee
    (200 psi, single check sufficient — rainwater, no cross-connection).

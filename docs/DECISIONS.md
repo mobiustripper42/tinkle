@@ -521,7 +521,9 @@ sourcing/packaging reconcile, not a redesign.
    separately** — but field calibration (DEC-015 path) is unchanged and authoritative regardless.
 4. **Per-FET clamp → 1.5KE30A (through-hole)**, not the SMD SMAJ30A. Same job (drain-to-source TVS;
    the internal-rectifier valves can't be clamped by a freewheel diode across the load), through-hole
-   to suit the protoboard build.
+   to suit the protoboard build. *(As-built 2026-07-04: the **bidirectional 1.5KE30CA** was ordered
+   in place of the A and kept — positive clamp identical, and the FET body diode already covers the
+   negative direction the A's forward junction would have. No band; either orientation.)*
 5. **PSU mounts outside the enclosure** on its own bracket (shaded/vented), not crammed inside the
    sealed box. The open-frame LRS is IP20, so the bracket gives it air; the enclosure then only
    houses the controller/driver/terminals.
