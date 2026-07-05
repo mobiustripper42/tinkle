@@ -20,6 +20,14 @@ git status --porcelain
 ```
 If non-empty, STOP. Tell the user: "Uncommitted changes — commit, stash, or discard before promoting." Wait.
 
+## Step 0.5 — Confirm the release was QA'd
+
+If the project deploys the trunk (`main`) to a shared staging or preview environment before production, confirm it was actually QA'd against **this** release before promoting. The environment and what to check are project-specific — they live in `.claude/CLAUDE-context.md` (`## Migration Protocol (project)`) or `docs/DEPLOYMENT.md`. Ask the user:
+
+**"Has the staging/preview environment been QA'd against this release since the last merge? (yes/no)"**
+
+If no, STOP and tell them to QA first. Do not proceed on an unconfirmed answer. If the project deploys straight to production with no separate staging surface, skip this step.
+
 ## Step 1 — Sync local refs
 
 ```

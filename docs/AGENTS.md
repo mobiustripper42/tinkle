@@ -115,6 +115,20 @@ Several agents and slash-command skills support the development workflow. All ru
 
 ---
 
+### 8. @ideas
+
+**Purpose:** Idea curator. Captures new ideas as rows in `docs/FUTURE_IDEAS.md`, dedupes against what's already parked, cross-references SPEC/DECISIONS/PROJECT_PLAN/open issues, and keeps the prioritized index in sync.
+
+**When to invoke:**
+- To park a new idea without derailing the build
+- To re-rank the index or audit the parking lot for staleness
+
+**Spec:** `.claude/agents/ideas.md`
+
+**Output:** A one-report curation summary (captured / dedup + cross-reference / flags). Edits only `docs/FUTURE_IDEAS.md`.
+
+---
+
 ## Session Skills
 
 Slash commands manage session lifecycle. Time tracking is automatic.
@@ -224,6 +238,7 @@ Slash commands manage session lifecycle. Time tracking is automatic.
 | @doc-consistency | Sonnet | Via `/doc-consistency-check`, ad-hoc when docs feel drifted | Cross-reference facts across docs; flag mismatches + placeholders. Report-only |
 | @tape-reader | Sonnet | Via `/read-the-tape` | Audit JSONL transcripts for anti-patterns, propose skill improvements |
 | @sync-config | Sonnet | Via `/push-seeds` / `/pull-seeds`, nightly Routine | Classify template diffs, propose backports/forward-ports |
+| @ideas | Sonnet | Park an idea, re-rank, or audit the parking lot | Curate `docs/FUTURE_IDEAS.md`; edits only that file |
 | /its-alive | — | Session start | Open session file + timestamp + briefing |
 | /pause-this | — | Mid-session break | Safe pause with commit |
 | /restart-this | — | Resume from pause | Reload context |

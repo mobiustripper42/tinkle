@@ -84,6 +84,7 @@ Project coding conventions — typing, component structure, data fetching, auth/
 | @sync-config | Sonnet | `/push-seeds` and `/pull-seeds` | Classifies template-vs-project diffs, gates structural backports |
 | @tape-reader | Sonnet | `/read-the-tape` | Audits session JSONL for workflow anti-patterns |
 | @doc-consistency | Sonnet | Via `/doc-consistency-check` skill, or ad-hoc | Cross-reference factual claims across project docs; flag mismatches + unfilled placeholders. Report-only |
+| @ideas | Sonnet | Park an idea, re-rank, or audit the parking lot | Curate `docs/FUTURE_IDEAS.md` — capture, dedupe, cross-ref, keep the index. Edits only that file |
 
 ## Model Selection
 
