@@ -20,13 +20,13 @@ git status --porcelain
 ```
 If non-empty, STOP. Tell the user: "Uncommitted changes — commit, stash, or discard before promoting." Wait.
 
-## Step 0.5 — Confirm the release was QA'd
+## Step 0.5 — Run the project's pre-promote checks
 
-If the project deploys the trunk (`main`) to a shared staging or preview environment before production, confirm it was actually QA'd against **this** release before promoting. The environment and what to check are project-specific — they live in `.claude/CLAUDE-context.md` (`## Migration Protocol (project)`) or `docs/DEPLOYMENT.md`. Ask the user:
+Projects define their own pre-promote gates — a staging/preview QA confirmation, a "no unapplied migrations on prod" check, whatever must be true before shipping. These are project-specific, so they live project-side: read `.claude/CLAUDE-context.md` (`## Migration Protocol (project)`, plus any `## Pre-promote checks` section) and `docs/DEPLOYMENT.md`, then run or confirm every gate listed there before continuing.
 
-**"Has the staging/preview environment been QA'd against this release since the last merge? (yes/no)"**
+The common gate — **QA confirmation:** if the project deploys the trunk to a shared staging/preview environment, confirm it was actually QA'd against **this** release since the last merge. Ask the user: **"Has the staging/preview environment been QA'd against this release? (yes/no)"**
 
-If no, STOP and tell them to QA first. Do not proceed on an unconfirmed answer. If the project deploys straight to production with no separate staging surface, skip this step.
+For any gate that fails or is unconfirmed (no QA, unapplied migrations, etc.), STOP — do not proceed. If the project documents no pre-promote checks, skip this step.
 
 ## Step 1 — Sync local refs
 
