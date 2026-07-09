@@ -604,4 +604,7 @@ relay already de-armed before the first byte is written. The reboot just extends
 state into the new image's boot. §17 gains the acceptance line: an OTA in progress refuses any run
 request until reboot.
 **Status:** Decided. Implemented with #126 (core inhibit + host tests, web route, SPA control, build
-scripts, spec §10/§17).
+scripts, spec §10/§17). **Coverage honesty:** the native tests exercise only the core policy gate
+(`postOtaBegin` / the `requestRun` inhibit); the chunk-streaming route in `web_server.h` and its SPA
+multipart pairing are ESP32-only and untestable on the host — the first flash of the wet-run window
+is the end-to-end verification (§17 item).

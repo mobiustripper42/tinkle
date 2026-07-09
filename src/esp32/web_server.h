@@ -93,8 +93,12 @@ public:
     // loop (outside its lock) calls ESP.restart() once this reads true. The delay
     // lets the TCP stack flush the response before the connection dies. Restarting
     // from the loop, not the async_tcp task, keeps teardown off the network core.
+    // ONE 32-bit word (0 = not pending), not a flag + timestamp pair: a single
+    // aligned load/store is atomic on Xtensa, and one word can't be observed
+    // half-updated across cores the way two separately-written members could.
     bool restartDue(uint32_t nowMs) const {
-        return restartPending_ && (int32_t)(nowMs - restartAtMs_) >= 0;
+        const uint32_t deadline = restartDeadlineMs_;
+        return deadline != 0 && (int32_t)(nowMs - deadline) >= 0;
     }
 
 private:
@@ -180,14 +184,32 @@ private:
     }
 
     // --- OTA upload (#126) ---------------------------------------------------
-    // Runs on the async_tcp task. Per-upload state lives in members: the SPA is a
-    // single-operator surface, and postOtaBegin 409s a second concurrent begin
-    // anyway (the inhibit is already set), so one in-flight upload is structural.
+    // Runs on the async_tcp task — a single task, so otaChunk/otaFinish calls are
+    // serialized even across interleaved requests. The upload state is shared
+    // members OWNED by one request at a time (otaOwner_): a second request that
+    // starts while one is mid-stream never touches the shared state — it drains
+    // silently and otaFinish answers it 409 by pointer identity. Without the
+    // ownership check, its index-0 reset would clobber the first upload's state
+    // and leak the run inhibit until power cycle.
 
     void otaChunk(AsyncWebServerRequest* r, size_t index, uint8_t* data, size_t len) {
         if (index == 0) {
+            if (otaOwner_ && otaOwner_ != r) return;   // busy — judged in otaFinish
+            otaOwner_      = r;
             otaRejectCode_ = 0;
             otaBegun_      = false;
+            // Registered at claim time (not begin time) so a rejected request that
+            // disconnects before its finish handler still releases ownership — and
+            // a dropped mid-flash upload lifts the run inhibit.
+            r->onDisconnect([this, r]() {
+                if (otaOwner_ != r) return;
+                if (otaBegun_) {
+                    Update.abort();
+                    otaLiftInhibit();
+                    otaBegun_ = false;
+                }
+                otaOwner_ = nullptr;
+            });
 #ifdef OTA_SECRET
             // Build-time shared secret (untracked ota_secret.ini) — anyone on the
             // LAN can reach this route, and it swaps the firmware. DEC-019 keeps
@@ -213,17 +235,8 @@ private:
                 return;
             }
             otaBegun_ = true;
-            // A dropped connection mid-upload never reaches otaFinish — without
-            // this, the run inhibit would stay latched until a power cycle.
-            r->onDisconnect([this]() {
-                if (otaBegun_) {
-                    Update.abort();
-                    otaLiftInhibit();
-                    otaBegun_ = false;
-                }
-            });
         }
-        if (otaRejectCode_ || !otaBegun_) return;   // rejected: drain the stream silently
+        if (r != otaOwner_ || otaRejectCode_ || !otaBegun_) return;   // drain silently
         if (Update.write(data, len) != len) {
             Update.abort();
             otaLiftInhibit();
@@ -233,6 +246,11 @@ private:
     }
 
     void otaFinish(AsyncWebServerRequest* r) {
+        if (r != otaOwner_) {   // lost the claim race — shared state untouched
+            r->send(409, "application/json", "{\"error\":\"OTA already in progress\"}");
+            return;
+        }
+        otaOwner_ = nullptr;    // this request's verdict is final either way
         if (otaRejectCode_) {
             const char* msg = otaRejectCode_ == 401 ? "bad OTA key"
                             : otaRejectCode_ == 409 ? "run active or queued — OTA refused"
@@ -252,9 +270,12 @@ private:
         // old slot keeps booting. That, not bootloader rollback (absent from the
         // stock arduino-esp32 bootloader), is the recoverability story.
         if (Update.end(true)) {
-            otaBegun_       = false;
-            restartAtMs_    = millis() + RESTART_DELAY_MS;
-            restartPending_ = true;   // inhibit stays set — nothing may run pre-reboot
+            otaBegun_ = false;
+            // Inhibit stays set — nothing may run pre-reboot. 0 means "no deadline",
+            // so a wrap landing exactly on 0 nudges to 1.
+            uint32_t deadline = millis() + RESTART_DELAY_MS;
+            if (deadline == 0) deadline = 1;
+            restartDeadlineMs_ = deadline;
             r->send(200, "application/json", "{\"flashed\":true,\"rebooting\":true}");
         } else {
             otaLiftInhibit();
@@ -304,11 +325,13 @@ private:
     WifiManager&      wifi_;
     SemaphoreHandle_t mutex_ = nullptr;
 
-    // OTA state (#126) — written on async_tcp, read by the loop (restartDue).
-    volatile bool     restartPending_ = false;
-    volatile uint32_t restartAtMs_    = 0;
-    volatile uint16_t otaRejectCode_  = 0;      // non-zero = this upload was refused
-    volatile bool     otaBegun_       = false;  // Update.begin() succeeded
+    // OTA state (#126). restartDeadlineMs_ crosses tasks (written on async_tcp,
+    // read by the loop); the rest is touched only on the async_tcp task, guarded
+    // by otaOwner_ identity.
+    volatile uint32_t        restartDeadlineMs_ = 0;   // 0 = no reboot pending
+    AsyncWebServerRequest*   otaOwner_          = nullptr;
+    uint16_t                 otaRejectCode_     = 0;   // non-zero = upload refused
+    bool                     otaBegun_          = false;
 };
 
 } // namespace tinkle

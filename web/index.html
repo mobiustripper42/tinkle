@@ -656,6 +656,11 @@ $('#ota-go').addEventListener('click', () => {
   const f = $('#ota-file').files[0];
   if (!f) { flash('#ota-msg', 'Pick a .bin first.', false); return; }
   if (!confirm('Flash "' + f.name + '"? The controller reboots after a good flash.')) return;
+  if (MOCK) {   // UI-dev path — no device, canned success
+    $('#ota-msg').textContent = 'Uploading… 100%';
+    setTimeout(() => flash('#ota-msg', 'Flashed — rebooting. Reconnecting…', true), 400);
+    return;
+  }
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/ota');
   const key = $('#ota-key').value;
@@ -674,7 +679,12 @@ $('#ota-go').addEventListener('click', () => {
     }
   };
   xhr.onerror = () => flash('#ota-msg', 'Upload failed — connection lost. The old firmware keeps running.', false);
-  xhr.send(f);
+  // multipart, NOT the raw blob: ESPAsyncWebServer routes upload data to the
+  // server's onUpload handler only for multipart/form-data bodies — a raw binary
+  // POST would be silently discarded (no onBody handler on that route).
+  const fd = new FormData();
+  fd.append('firmware', f);
+  xhr.send(fd);
 });
 async function otaAwaitReboot() {
   const prev = S && S.build;
