@@ -2450,6 +2450,7 @@ static void test_api_flow_override_dec015() {
 static void test_flow_detector_mute() {
     FlowFaultDetector::Config c;
     c.graceMs = 1000; c.minRunningGPM = 0.1f; c.idleFaultPulses = 5; c.idleWindowMs = 1000;
+    c.drainQuietMs = 500; c.drainQuietPulses = 2; c.drainCapMs = 3000;   // #124 gate, test-short
 
     FlowFaultDetector unmuted(c);
     unmuted.begin(0, 0);
@@ -2462,12 +2463,16 @@ static void test_flow_detector_mute() {
     muted.update(RunState::Running, 0.0f, 0, 100);
     TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Running, 0.0f, 0, 1200));
 
-    // Idle: 50 pulses land while muted -> no verdict, but the window re-baselines;
-    // un-mute -> the next quiet window is judged fresh, not the muted backlog.
-    muted.update(RunState::Idle, 0.0f, 100, 1300);         // IDLE edge: baseline = 100
-    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 2400));
+    // Idle: 50 pulses land while muted -> no verdict, but tracking continues (the
+    // #124 drain gate + the window keep sliding); un-mute -> the next window is
+    // judged fresh, not the muted backlog — and the check is genuinely live.
+    muted.update(RunState::Idle, 0.0f, 100, 1300);         // IDLE edge: drain gate opens
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 2400));   // muted burst
     muted.setMuted(false);
-    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 3500));
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 3500));   // quiet -> armed
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 152, 4500));   // fresh window, clean
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow,
+                      muted.update(RunState::Idle, 0.0f, 200, 5500));                // live post-unmute
 }
 
 // Calibration endpoints: lifecycle mapping (409 not-calibrating / busy), the happy
