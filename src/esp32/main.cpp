@@ -397,6 +397,17 @@ void loop() {
     // needs no tick; WiFi is watched at the top of the pass.
     webServer.unlock();
 
+    // OTA reboot (#126): the new image is written and validated, the 200 has had
+    // RESTART_DELAY_MS to flush. Fail-dry holds with zero special-casing — we're
+    // IDLE/FAULT-gated so the heartbeat is already parked and the ATtiny relay
+    // already de-armed before the first byte was written; the reboot just extends
+    // that pump-unpowered state into the new image's boot.
+    if (webServer.restartDue(now)) {
+        Serial.println("[tinkle] OTA flashed — rebooting into the new image");
+        Serial.flush();
+        ESP.restart();
+    }
+
     // micros() subtraction wraps cleanly across the ~71 min rollover.
     if (loopMon.record(micros() - t0))
         Serial.printf("[tinkle] tick overrun: %lu us > %lu us budget\n",

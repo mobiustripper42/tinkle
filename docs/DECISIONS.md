@@ -565,3 +565,43 @@ only inside a queue. §6 policy and §15 travel timing are untouched; firmware s
 from "Diverter legs left as-is" to the queue-aware return. **Surfaced at bench validation (task 6.1a):**
 the fert diverter LEDs stayed lit after a run ended.
 **Status:** Decided. Implemented in the same PR (core + host tests + spec correction).
+
+## DEC-022: OTA firmware update over Wi-Fi — IDLE/FAULT-gated, run-inhibited, already dual-slot
+**Decision:** Add `POST /api/ota` (#126): a firmware `.bin` streams from the phone straight to
+`Update.write()` on the existing ESPAsyncWebServer — no external OTA lib. Three guardrails:
+(1) **begin-gate** — accepted only from IDLE **or** FAULT with an empty queue (`Api::postOtaBegin`,
+core policy, host-tested); (2) **run inhibit** — the accept sets `RunController::setOtaActive(true)`
+and `requestRun()` refuses while it's set, so a scheduled run coming due during the 10–30 s upload
+can never energize the pump mid-flash (every run funnels through the `IRunSink` seam — scheduler and
+API covered in one place); a failed or dropped upload lifts the inhibit, a good one ends in reboot;
+(3) **optional shared secret** — `X-OTA-Key` header checked against a build-flag from an untracked
+`ota_secret.ini` (the repo is public; a committed secret is not a secret). `/api/status` gains
+`build` (git short-sha via `tools/fw_build_id.py`) so a flash is observable from the phone.
+
+**Why OTA-from-FAULT is allowed:** a latched fault is pump-off and queue-unwound — the safest state
+the system has — and reflash is a legitimate recovery path. The latch is RAM-only and re-derives
+from live conditions after reboot, so OTA cannot launder a fault past the resolved-condition gate.
+
+**No repartition (the fact worth recording):** the device already runs the arduino-esp32 default
+4 MB table — `app0`/`app1` at 1280 KB each + `otadata`. It was dual-slot all along; the issue's
+assumption that OTA required a partition switch (and one final USB flash for it) was wrong, verified
+by reading the flashed `partitions.bin`. Current image ≈ 904 KB = 69% of a slot;
+`tools/fw_build_id.py` hard-gates the build against slot overflow so growth fails loudly at build
+time, not at flash time. The 1408 KB `spiffs` region stays as dead space — reclaiming it isn't worth
+a repartition (DEC-002 keeps the SPA in PROGMEM).
+
+**No bootloader rollback (scope honesty):** `esp_ota` mark-valid/rollback is a no-op on the stock
+prebuilt arduino-esp32 bootloader (no `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`). What protects the
+device instead: `Update.end(true)` validates magic + checksum **before** `otadata` flips, so a
+truncated/corrupt upload never becomes the boot target — the old slot keeps booting. A
+valid-but-broken image is recovered over USB, which remains the recovery path of record; OTA is a
+convenience on top, not a replacement. Amends DEC-002's "a UI change requires a reflash" — the
+reflash is now wireless.
+
+**Fail-dry through a flash:** nothing new needed. The heartbeat is emitted only in
+START_PUMP/RUNNING (§9); OTA is IDLE/FAULT-gated, so the heartbeat is already parked and the ATtiny
+relay already de-armed before the first byte is written. The reboot just extends that pump-unpowered
+state into the new image's boot. §17 gains the acceptance line: an OTA in progress refuses any run
+request until reboot.
+**Status:** Decided. Implemented with #126 (core inhibit + host tests, web route, SPA control, build
+scripts, spec §10/§17).

@@ -61,6 +61,7 @@ uint32_t RunController::effectiveDurationMs() const {
 
 bool RunController::requestRun(const RunRequest& req, uint32_t nowMs) {
     if (state_ == RunState::Fault) return false;
+    if (otaActive_) return false;   // #126: never start (or queue) a run mid-flash
     if (req.zoneIndex >= valve_.zoneCount() || req.durationSec == 0) return false;
 
     if (state_ == RunState::Idle) {

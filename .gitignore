@@ -19,3 +19,6 @@ src/esp32/spa_gz.h
 
 # Wokwi sim screenshots (runtime artifacts, #62)
 test/sim/screenshots/
+
+# OTA shared secret (#126) — never commit; ota_secret.ini.example is the template
+ota_secret.ini

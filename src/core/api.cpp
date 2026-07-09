@@ -387,4 +387,21 @@ int Api::postFaultClear(JsonDocument& out, uint32_t nowMs) {
     return 409;
 }
 
+int Api::postOtaBegin(JsonDocument& out, uint32_t nowMs) {
+    (void)nowMs;
+    if (d_.run.otaActive()) return err(out, 409, "OTA already in progress");
+    // IDLE or FAULT only — every transitional state may have the pump or a valve
+    // energized. queueDepth() is belt-and-braces: chained runs skip IDLE, but a
+    // future state-machine change must not silently open this gate.
+    const bool safe = (d_.run.isIdle() || d_.run.isFaulted()) && d_.run.queueDepth() == 0;
+    if (!safe) return err(out, 409, "run active or queued — OTA refused");
+    d_.run.setOtaActive(true);
+    out["otaReady"] = true;
+    return 200;
+}
+
+void Api::otaAbort() {
+    d_.run.setOtaActive(false);
+}
+
 } // namespace tinkle

@@ -2475,6 +2475,54 @@ static void test_flow_detector_mute() {
                       muted.update(RunState::Idle, 0.0f, 200, 5500));                // live post-unmute
 }
 
+// OTA gate (#126): begin only from IDLE or FAULT; while active, NOTHING may start
+// a run — the API's postRun and the raw IRunSink seam the scheduler uses both
+// refuse (the request-time gate alone can't stop a scheduled run coming due
+// mid-flash; the inhibit in requestRun is the safety core). A failed upload
+// lifts the inhibit via otaAbort().
+static void test_api_ota_gate_and_run_inhibit() {
+    ApiRig r;
+    JsonDocument out;
+
+    // Idle -> accepted; inhibit set.
+    TEST_ASSERT_EQUAL_INT(200, r.api.postOtaBegin(out, 0));
+    TEST_ASSERT_TRUE(r.rc.otaActive());
+
+    // Second begin while one is in flight -> 409.
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(409, r.api.postOtaBegin(out, 10));
+
+    // Manual run (API) and the scheduler's IRunSink path both refused mid-flash.
+    out.clear();
+    JsonDocument body = parseJson("{\"zoneIndex\":0,\"durationSec\":60}");
+    TEST_ASSERT_EQUAL_INT(409, r.api.postRun(body.as<JsonVariantConst>(), out, 20));
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 60;
+    TEST_ASSERT_FALSE(r.rc.requestRun(req, 30));
+    TEST_ASSERT_TRUE(r.rc.isIdle());                     // nothing moved
+
+    // Failed/aborted upload -> otaAbort lifts the inhibit; runs flow again.
+    r.api.otaAbort();
+    TEST_ASSERT_FALSE(r.rc.otaActive());
+    TEST_ASSERT_TRUE(r.rc.requestRun(req, 40));
+
+    // And with that run now active, a begin is refused — no reflash mid-run.
+    out.clear();
+    TEST_ASSERT_EQUAL_INT(409, r.api.postOtaBegin(out, 50));
+    TEST_ASSERT_FALSE(r.rc.otaActive());
+}
+
+// OTA from FAULT is allowed — a latched fault is pump-off and queue-unwound (the
+// safest possible time to reflash), and OTA-while-faulted is a legitimate recovery
+// path: the latch is RAM-only and re-derives from live conditions after reboot.
+static void test_api_ota_allowed_while_faulted() {
+    ApiRig r;
+    r.rc.raiseFault(Fault::NoFlow, 0);
+    TEST_ASSERT_TRUE(r.rc.isFaulted());
+    JsonDocument out;
+    TEST_ASSERT_EQUAL_INT(200, r.api.postOtaBegin(out, 10));
+    TEST_ASSERT_TRUE(r.rc.otaActive());
+}
+
 // Calibration endpoints: lifecycle mapping (409 not-calibrating / busy), the happy
 // path computing K over a driven run, and Rejected -> 422 + FAULT_CAL_RANGE.
 static void test_api_cal_endpoints() {
@@ -3042,6 +3090,8 @@ int main() {
     RUN_TEST(test_api_settings_get_post);
     RUN_TEST(test_api_flow_override_dec015);
     RUN_TEST(test_flow_detector_mute);
+    RUN_TEST(test_api_ota_gate_and_run_inhibit);
+    RUN_TEST(test_api_ota_allowed_while_faulted);
     RUN_TEST(test_api_cal_endpoints);
     RUN_TEST(test_api_stop_voids_calibration);
     RUN_TEST(test_sched_pack_unpack_roundtrip);
