@@ -6,7 +6,7 @@ branch: task/tvs-ca-doc-fix
 started: 2026-07-09T17:27:25Z
 ended:
 points:
-pr_numbers: [127]
+pr_numbers: [127, 128]
 status: open
 transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83fd-d081424d8b36.jsonl
 ---
@@ -29,6 +29,22 @@ transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83f
 **PR:** [#127](https://github.com/mobiustripper42/tinkle/pull/127)
 **Points:** 3
 **Branch:** task/124-drain-grace
+**Opened at:** 2026-07-09T17:27:25Z
+
+## Task 2: #126 — OTA firmware update over Wi-Fi (DEC-022)
+
+**Completed:**
+- Core: `RunController` OTA inhibit in the `IRunSink` seam (`requestRun` refuses mid-flash — covers scheduler + API); `Api::postOtaBegin`/`otaAbort` policy (IDLE **or** FAULT + empty queue)
+- ESP32: streaming `/api/ota` in `src/esp32/web_server.h` (multipart→`Update.write()`, per-request ownership, optional `X-OTA-Key`), loop-side reboot, `build` sha in `/api/status`
+- Tooling: `tools/fw_build_id.py` (git-sha inject + 1280 KB slot guard — image is 69%), `ota_secret.ini.example`
+- SPA: Settings→Firmware upload control with progress + reboot/reconnect poll
+- Docs: DEC-022 (incl. "already dual-slot, no repartition" + no-bootloader-rollback honesty), spec §10 + §17
+- @architect pre-review reshaped the design (killed the repartition + rollback assumptions; added the mid-upload run-inhibit as the safety core)
+
+**Code review:** 3 real bugs fixed pre-PR — raw-blob vs multipart wire mismatch (feature was DOA without it), overlapping-upload state clobber leaking the inhibit, cross-core restart-flag visibility
+**PR:** [#128](https://github.com/mobiustripper42/tinkle/pull/128) — **stacked on #127**, base `task/124-drain-grace`
+**Points:** 5
+**Branch:** task/126-ota
 **Opened at:** 2026-07-09T17:27:25Z
 
 **Next Steps:**
