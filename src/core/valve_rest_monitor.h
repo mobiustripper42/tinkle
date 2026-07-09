@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "run_controller.h"   // RunState — the shared vocabulary
 #include "valve_driver.h"     // ValveConfig::MAX_ZONES
+#include "drain_gate.h"       // #124 post-run drain-quiesce gate
 
 // ValveRestMonitor — the DEC-014 auto-return self-test (#52). Verifies a zone
 // valve actually RESTS CLOSED after de-energize: the auto-return is
@@ -13,9 +14,13 @@
 //
 // MECHANISM: after a run's CLOSE_ZONE travel completes, the system enters SETTLE
 // with the pump long off — residual manifold pressure is all that's left, and a
-// healthy close means the flow meter goes quiet. Watch the cumulative pulse count
-// from SETTLE entry through IDLE for windowMs: more than maxRestPulses in that
-// window means the just-closed zone is still passing water -> flag it. A clean
+// healthy close means the flow meter goes quiet. First wait out the trailing
+// draindown (#124, DrainGate): the meter keeps ticking for a while on real
+// hydraulics, so the window opens only once flow quiesces (capped — flow that
+// never quiets flags the zone directly, that being the very failure sought).
+// Then watch the cumulative pulse count through SETTLE/IDLE for windowMs: more
+// than maxRestPulses in that window means the just-closed zone is still passing
+// water -> flag it. A clean
 // full window UN-flags the zone (self-healing — a re-seated valve clears its own
 // flag on the next run). A queued run chaining SETTLE -> next aborts the check
 // silently (the window would be the next run's flow, not rest flow) — the LAST
@@ -45,9 +50,27 @@ public:
         uint32_t windowMs = 10000;    // REST_WINDOW_MS
 #endif
         uint32_t maxRestPulses = 5;   // REST_MAX_PULSES: above this in one window -> flag
+
+        // #124 drain grace: the rest verdict waits for trailing draindown to quiesce
+        // (≤ drainQuietPulses over drainQuietMs) before the window opens, so a
+        // healthy-but-slow-seating valve isn't flagged on the tail of its own run.
+        // If flow NEVER quiets by drainCapMs, that IS the failure DEC-014 hunts —
+        // water still passing long past any draindown — and the zone is flagged
+        // directly. §15 seeds — bench-confirm.
+#ifdef TINKLE_SIM
+        uint32_t drainQuietMs     = 1000;
+        uint32_t drainQuietPulses = 2;
+        uint32_t drainCapMs       = 5000;
+#else
+        uint32_t drainQuietMs     = 3000;  // DRAIN_QUIET_MS
+        uint32_t drainQuietPulses = 2;     // DRAIN_QUIET_PULSES
+        uint32_t drainCapMs       = 60000; // DRAIN_CAP_MS
+#endif
     };
 
-    explicit ValveRestMonitor(const Config& cfg) : cfg_(cfg) {}
+    explicit ValveRestMonitor(const Config& cfg)
+        : cfg_(cfg),
+          drain_({cfg.drainQuietMs, cfg.drainQuietPulses, cfg.drainCapMs}) {}
 
     // Call every loop tick with the post-tick run state, the zone of the most
     // recently logged run (RunController::lastRun().zoneIndex — pushed on SETTLE
@@ -68,10 +91,11 @@ public:
     }
 
 private:
-    enum class Phase : uint8_t { Idle, Watching };
+    enum class Phase : uint8_t { Idle, Draining, Watching };
 
-    Config   cfg_;
-    Phase    phase_     = Phase::Idle;
+    Config    cfg_;
+    DrainGate drain_;                // #124: gates the rest window on draindown quiescing
+    Phase     phase_     = Phase::Idle;
     RunState prevState_ = RunState::Idle;
     uint8_t  zone_      = 0;        // zone under observation
     uint32_t baseline_  = 0;        // pulse count at SETTLE entry

@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "run_controller.h"   // RunState + Fault — the shared vocabulary
+#include "drain_gate.h"       // #124 post-run drain-quiesce gate
 
 // FlowFaultDetector — the §7/§14 flow faults (#35). Decides WHEN flow is wrong;
 // never actuates. Platform-independent (src/core): host-tested with injected pulse
@@ -16,7 +17,10 @@
 // IDLE *explicitly*, not to the per-run tally edge. Every transition state
 // (PrepDiverter, OpenZone, StartPump, StopPump, CloseZone, Settle) is excluded —
 // flow legitimately ramps up after the pump starts and trails off during the close
-// sequence, so faulting there would be a false positive.
+// sequence, so faulting there would be a false positive. The trailing-off doesn't
+// stop at the IDLE edge either (#124): each IDLE entry passes through a DrainGate
+// that holds the idle check unarmed until the draindown quiesces (capped), so a
+// wet run's tail can't latch a nuisance UnexpectedFlow.
 
 namespace tinkle {
 
@@ -37,9 +41,26 @@ public:
         uint32_t idleFaultPulses = 50;     // IDLE_FLOW_FAULT_PULSES ("tune", §15): pulses over
                                            // one idle window above which flow is "unexpected".
         uint32_t idleWindowMs   = 5000;    // tumbling window for the idle-flow accumulation.
+
+        // #124 drain grace: on each IDLE entry the idle check waits for flow to
+        // quiesce (≤ drainQuietPulses over drainQuietMs) before arming, capped at
+        // drainCapMs so a genuine burst/stuck-open still faults — worst-case
+        // detection latency is drainCapMs + idleWindowMs, with the pump off and the
+        // safety relay dropped the whole time. §15 seeds — bench-confirm.
+#ifdef TINKLE_SIM
+        uint32_t drainQuietMs     = 1000;
+        uint32_t drainQuietPulses = 2;
+        uint32_t drainCapMs       = 5000;
+#else
+        uint32_t drainQuietMs     = 3000;  // DRAIN_QUIET_MS
+        uint32_t drainQuietPulses = 2;     // DRAIN_QUIET_PULSES (~0.02 GPM at K≈1670)
+        uint32_t drainCapMs       = 60000; // DRAIN_CAP_MS
+#endif
     };
 
-    explicit FlowFaultDetector(const Config& cfg) : cfg_(cfg) {}
+    explicit FlowFaultDetector(const Config& cfg)
+        : cfg_(cfg),
+          drain_({cfg.drainQuietMs, cfg.drainQuietPulses, cfg.drainCapMs}) {}
 
     // Seed the window origins at boot (call from setup(), like FlowMonitor::begin()).
     // prevState_ starts at Idle, so the first Idle tick is NOT an edge and never
@@ -50,6 +71,7 @@ public:
         idleBaseline_      = pulses;
         idleWindowStartMs_ = nowMs;
         runStartMs_        = nowMs;
+        draining_          = false;   // boot idle arms directly — nothing ran, nothing drains
     }
 
     // Call every loop tick. `pulses` is FlowMonitor's monotonic cumulative count (for the
@@ -66,12 +88,14 @@ public:
     bool muted() const        { return muted_; }
 
 private:
-    Config   cfg_;
-    bool     muted_ = false;       // DEC-015: default = checks ON
-    RunState prevState_         = RunState::Idle;
-    uint32_t runStartMs_        = 0;   // when RUNNING was (re)entered — grace clock origin
-    uint32_t idleBaseline_      = 0;   // pulse count at the start of the current idle window
-    uint32_t idleWindowStartMs_ = 0;
+    Config    cfg_;
+    bool      muted_ = false;      // DEC-015: default = checks ON
+    RunState  prevState_         = RunState::Idle;
+    uint32_t  runStartMs_        = 0;  // when RUNNING was (re)entered — grace clock origin
+    uint32_t  idleBaseline_      = 0;  // pulse count at the start of the current idle window
+    uint32_t  idleWindowStartMs_ = 0;
+    DrainGate drain_;                  // #124: gates idle-check arming on each IDLE entry
+    bool      draining_ = false;       // waiting on drain_ before the idle window arms
 };
 
 } // namespace tinkle

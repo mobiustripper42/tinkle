@@ -7,8 +7,12 @@ Fault FlowFaultDetector::update(RunState state, float rateGPM, uint32_t pulses, 
     if (state == RunState::Running && prevState_ != RunState::Running)
         runStartMs_ = nowMs;                         // restart the grace clock each run
     if (state == RunState::Idle && prevState_ != RunState::Idle) {
-        idleBaseline_      = pulses;                 // baseline the idle-flow window
-        idleWindowStartMs_ = nowMs;
+        // #124: an IDLE entry follows a run's close sequence (or a stop/fault-clear),
+        // and real hydraulics are still trailing — draindown pulses would land in the
+        // first idle window and latch a nuisance UnexpectedFlow. Wait for the flow to
+        // quiesce (capped) before arming; the window is baselined when the gate opens.
+        draining_ = true;
+        drain_.open(pulses, nowMs);
     }
     prevState_ = state;
 
@@ -24,6 +28,13 @@ Fault FlowFaultDetector::update(RunState state, float rateGPM, uint32_t pulses, 
     // The window keeps sliding while muted (DEC-015 mutes verdicts, not tracking), so
     // un-muting starts from a fresh window instead of judging the whole muted span.
     if (state == RunState::Idle) {
+        if (draining_) {
+            if (!drain_.drained(pulses, nowMs)) return Fault::None;
+            draining_          = false;   // drained (or capped): arm from a fresh baseline.
+            idleBaseline_      = pulses;  // On a cap, flow that never decays now has one
+            idleWindowStartMs_ = nowMs;   // full idleWindowMs to trip the check — a genuine
+            return Fault::None;           // stuck-open/burst still latches.
+        }
         if ((uint32_t)(nowMs - idleWindowStartMs_) >= cfg_.idleWindowMs) {
             const uint32_t delta = pulses - idleBaseline_;   // monotonic count; unsigned-safe
             idleBaseline_      = pulses;                      // slide the window either way, so a
