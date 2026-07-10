@@ -6,7 +6,7 @@ branch: task/tvs-ca-doc-fix
 started: 2026-07-09T17:27:25Z
 ended:
 points:
-pr_numbers: [127, 128, 129]
+pr_numbers: [127, 128, 129, 130]
 status: open
 transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83fd-d081424d8b36.jsonl
 ---
@@ -60,6 +60,20 @@ transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83f
 **PR:** [#129](https://github.com/mobiustripper42/tinkle/pull/129) — stacked on #128 (order: 127 → 128 → 129)
 **Points:** 5
 **Branch:** task/watchdog-nonblocking
+**Opened at:** 2026-07-10T14:30:00Z
+
+## Task 4: Zone 3 plain naming + ATtiny as-built fuse record
+
+**Completed:**
+- `web/index.html` — "Zone 3 — hose" → "Zone 3"; cal blurb "(hose outlet)" dropped
+- `docs/tinkle_buildup.md` Step 8.0 — read-fuses-first + lfuse 0xE2 + **hfuse 0xDD (BOD 2.7V)** + as-built record: all 3 chips verified E2/DD/FF (2026-07-07), interchangeable
+- `platformio.ini` — stale `board_fuses.hfuse = 0xDF` corrected to 0xDD; comments updated
+- #121 was closed yesterday citing docs that hadn't landed — corrected on the issue; this PR is the real content
+
+**Code review:** Docs/UI-string only, verified against Session 19 bench log
+**PR:** [#130](https://github.com/mobiustripper42/tinkle/pull/130) — stacked on #129 (order: 127 → 128 → 129 → 130)
+**Points:** 1
+**Branch:** task/zone3-fuse-docs
 **Opened at:** 2026-07-10T14:30:00Z
 
 **Next Steps:**
