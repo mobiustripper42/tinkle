@@ -4,10 +4,10 @@ dev: eric
 slug: tvs-ca-doc-fix
 branch: task/tvs-ca-doc-fix
 started: 2026-07-09T17:27:25Z
-ended:
-points:
-pr_numbers: [127, 128, 129, 130, 134]
-status: open
+ended: 2026-07-10T02:50:28Z
+points: 16
+pr_numbers: [127, 128, 129, 130, 134, 135]
+status: closed
 transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83fd-d081424d8b36.jsonl
 ---
 
@@ -94,4 +94,26 @@ transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83f
 - Watch History for `Faulted watchdog` entries — DEC-023 keeps trips visible but non-blocking.
 - Parked, user-approved: #131 armed-rail sense (needs 2 divider R + series R + clamp), #132 volume dosing, #133 flow-signature health (+ future poop-deck reporting).
 
+## Task 6: OTA operator runbook
+
+**Completed:**
+- `docs/OTA.md` — build anywhere, per-device address table (`http://tinkle` = router DNS for Android; `tinkle.local` = mDNS for bee-grace — NOT interchangeable), curl (`-F` multipart required) + SPA upload paths, sha verification, guardrail-refusal meanings, USB recovery
+- `.claude/CLAUDE-context.md` — Additional Docs row
+- Written from today's successful first OTA (bee-grace curl → `tinkle.local`)
+
+**Code review:** docs only, commands verified against the live procedure
+**PR:** [#135](https://github.com/mobiustripper42/tinkle/pull/135)
+**Points:** 1
+**Branch:** task/ota-runbook
+**Opened at:** 2026-07-10T02:40:00Z
+
+**Next Steps (session-wide):**
+- **Watch tomorrow's scheduled runs** — the real acceptance for this session's firmware: DEC-015 flow override is now OFF (Eric unchecked "Disable flow checks" post-flash). Expect: all zones complete, clean end-of-run (no UnexpectedFlow / valve-rest flags — #124 DrainGate), and no watchdog latch can block the day (DEC-023). If anything faults, History tells the story (Faulted entries + build sha).
+- Merge #135 (OTA runbook) if still open.
+- Parked, approved backlog: #131 armed-rail sense (needs resistors), #132 volume dosing, #133 flow-signature health (+ poop-deck reporting fast-follow).
+
 **Context:**
+- Firmware on device: USB-flashed from main (post 127–130 merge), then #134 delivered via the FIRST OTA (bee-grace curl → tinkle.local). The cable is now optional; docs/OTA.md is the runbook.
+- Address quirk (also memorized): `http://tinkle` = router DNS (Android/Windows); `tinkle.local` = mDNS (bee-grace/Windows). Neither works everywhere.
+- Wall clock spans an evening gap (opened 17:27Z 7-09, resumed 7-10) — retro's break inference handles it.
+- #121 was closed a day early on a wrong claim (docs hadn't landed) — corrected via PR #130 + issue comment. Lesson: verify "done" against the tree before closing an issue.
