@@ -97,6 +97,8 @@ void RunController::stop(uint32_t nowMs) {
     if (state_ == RunState::Idle || state_ == RunState::Fault) return;
     qHead_ = qCount_ = 0;
     stopping_ = true;
+    pendingRunFault_ = Fault::None;   // DEC-023: an explicit operator stop wins over an
+                                      // in-flight abort — log Stopped, not Faulted
     enter(RunState::StopPump, nowMs);
 }
 
@@ -113,7 +115,9 @@ void RunController::raiseFault(Fault code, uint32_t nowMs) {
     valve_.safeState(nowMs);                        // pump off -> zones de-energized -> diverter plain
     fault_ = code;
     qHead_ = qCount_ = 0;
-    logRun(RunResult::Faulted, fault_);             // faulted runs land in the ring too (DEC-018)
+    // Faulted runs land in the ring too (DEC-018) — unless the run was ALREADY
+    // logged at Settle entry (a fault in the dwell would double-log it).
+    if (state_ != RunState::Settle) logRun(RunResult::Faulted, fault_);
     state_ = RunState::Fault;
     stateStartMs_ = nowMs;
 }
@@ -127,6 +131,12 @@ bool RunController::abortRun(Fault code, uint32_t nowMs) {
     if (state_ == RunState::Idle || state_ == RunState::Fault) return false;
     if (state_ == RunState::Settle) return false;   // already logged at Settle entry;
                                                     // water stopped — nothing to abort
+    if (state_ == RunState::PrepDiverter) return false;   // nothing energized — the §4
+                                                          // pre-open HOLD owns this state
+                                                          // (wait-not-kill; skip only past
+                                                          // wdWaitMs). Aborting here would
+                                                          // revert the gate to kill-on-
+                                                          // first-confirm.
     if (pendingRunFault_ != Fault::None) return false;   // this run's abort is in flight
     pendingRunFault_ = code;
     // From the shutdown tail (StopPump/CloseZone), stay on the unwind already in

@@ -641,6 +641,71 @@ static void test_rc_watchdog_abort_preserves_queue_never_latches() {
     TEST_ASSERT_FALSE(rc.isFaulted());
 }
 
+// The REAL call path, wired the way main.cpp wires it: Watchdog::tick() produces
+// the verdict, tripConfirmed() feeds the gate, the verdict routes to abortRun().
+// A run parked in PrepDiverter with a CONFIRMED trip must HOLD (abortRun refuses
+// there — the wait-gate owns that state), then proceed on release. Locks the
+// review finding where the verdict preempted the hold.
+static void test_rc_watchdog_verdict_wiring_holds_in_prep() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    tinkle::Watchdog wd(g, 21, tinkle::Watchdog::Config{});   // pin 21 = the synthetic
+    wd.begin(0);                                  // HB pin; tripConfirmMs = 100 default
+
+    // The field sequence: the line confirms while IDLE (no verdict there), THEN a
+    // run starts — it must park at the gate, not die.
+    uint32_t now = 0;
+    for (; now < 500; now += 50) {
+        rc.tick(now);
+        wd.tick(rc.state(), true, now);
+        rc.setWatchdogTripped(wd.tripConfirmed());
+    }
+    TEST_ASSERT_TRUE(wd.tripConfirmed());
+
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 5;
+    TEST_ASSERT_TRUE(rc.requestRun(req, now));    // enters PrepDiverter
+
+    // 2 s of ticks with the trip line still held — main.cpp's exact sequence.
+    // PrepDiverter is an active state, so the verdict fires every tick; abortRun
+    // must refuse it and leave the hold in charge.
+    for (uint32_t end = now + 2000; now < end; now += 50) {
+        rc.tick(now);
+        const Fault v = wd.tick(rc.state(), true, now);
+        rc.setWatchdogTripped(wd.tripConfirmed());
+        if (v != Fault::None) rc.abortRun(v, now);
+    }
+    TEST_ASSERT_EQUAL(RunState::PrepDiverter, rc.state());   // held, not skipped
+    TEST_ASSERT_FALSE(rc.isFaulted());
+    TEST_ASSERT_EQUAL_UINT8(0, (uint8_t)rc.runLog().count());// nothing logged Faulted
+
+    // Line releases — the run proceeds to water.
+    for (; now < 10000 && rc.state() != RunState::Running; now += 50) {
+        rc.tick(now);
+        const Fault v = wd.tick(rc.state(), false, now);
+        rc.setWatchdogTripped(wd.tripConfirmed());
+        if (v != Fault::None) rc.abortRun(v, now);
+    }
+    TEST_ASSERT_EQUAL(RunState::Running, rc.state());
+    TEST_ASSERT_TRUE(vd.pumpIsOn());
+}
+
+// An operator stop landing during an in-flight watchdog abort wins the log entry:
+// the run records Stopped, not Faulted (review finding — DEC-023).
+static void test_rc_stop_wins_over_abort_log() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 5;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_TRUE(rc.abortRun(Fault::Watchdog, now));
+    rc.stop(now);                                            // operator stop mid-unwind
+    now = pump(rc, now, 5, 8000, [&]{ return rc.isIdle(); });
+    TEST_ASSERT_EQUAL(RunResult::Stopped, rc.lastRun().result);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::None, rc.lastRun().faultCode);
+}
+
 // A fault landing while the diverter is mid-travel (before the zone ever energizes)
 // still slams the safe state and never starts the pump.
 static void test_rc_fault_during_prep() {
@@ -3085,6 +3150,8 @@ int main() {
     RUN_TEST(test_rc_watchdog_pre_open_gate_holds_then_proceeds);
     RUN_TEST(test_rc_watchdog_stuck_line_skips_run_keeps_queue);
     RUN_TEST(test_rc_watchdog_abort_preserves_queue_never_latches);
+    RUN_TEST(test_rc_watchdog_verdict_wiring_holds_in_prep);
+    RUN_TEST(test_rc_stop_wins_over_abort_log);
     RUN_TEST(test_rc_fault_during_prep);
     RUN_TEST(test_rc_stop_during_prep);
     RUN_TEST(test_rc_queue_full_rejected);
