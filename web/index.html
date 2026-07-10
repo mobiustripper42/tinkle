@@ -195,8 +195,8 @@ nav .ico{display:block; font-size:1.3rem}
 <section id="scr-cal" class="screen">
   <h1>Calibrate flow</h1>
   <div class="card muted">
-    Run any zone into a measured container (5-gal bucket). <b>Zone 3 (hose outlet)
-    is easiest once plumbed.</b> The flow meter sits on the common line, so one
+    Run any zone into a measured container (5-gal bucket). <b>Zone 3 is easiest
+    once plumbed.</b> The flow meter sits on the common line, so one
     calibration sets K for every zone. The run stops by itself (~2 min); measure
     what you collected and enter it below.
   </div>
@@ -267,7 +267,7 @@ nav .ico{display:block; font-size:1.3rem}
 <script>
 'use strict';
 const $ = s => document.querySelector(s);
-const ZONE_NAMES = ['Zone 1', 'Zone 2', 'Zone 3 — hose'];
+const ZONE_NAMES = ['Zone 1', 'Zone 2', 'Zone 3'];
 const FAULT_TEXT = {
   none:'No fault.', noFlow:'E1 — No flow during a run (clog, dead pump, valve never opened).',
   unexpectedFlow:'E2 — Water moving while idle (stuck valve or leak).',
