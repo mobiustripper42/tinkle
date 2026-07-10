@@ -175,6 +175,20 @@ nav .ico{display:block; font-size:1.3rem}
     <button class="small shrink" id="set-discard">Discard</button>
   </div>
   <div id="set-msg" class="muted" role="status"></div>
+
+  <div id="ota-block">
+    <h2>Firmware</h2>
+    <div class="kv"><span>Running build</span><span id="ota-build">—</span></div>
+    <label for="ota-file">New firmware (.bin)</label>
+    <input id="ota-file" type="file" accept=".bin">
+    <label for="ota-key">Update key (if the build requires one)</label>
+    <input id="ota-key" type="password" autocomplete="off">
+    <button class="danger" id="ota-go">UPLOAD &amp; FLASH</button>
+    <p class="muted">Refused unless the controller is idle or faulted — never
+    mid-run. The controller reboots itself after a good flash (&sim;30 s); a bad or
+    interrupted upload is discarded and the current firmware keeps running.</p>
+    <div id="ota-msg" class="muted" role="status"></div>
+  </div>
 </section>
 
 <!-- 5 · Calibration -->
@@ -376,7 +390,10 @@ function renderCal() {
   }
 }
 
-function renderAll() { renderBanners(); renderHome(); renderFaults(); renderCal(); }
+function renderAll() {
+  renderBanners(); renderHome(); renderFaults(); renderCal();
+  if (S && S.build) $('#ota-build').textContent = S.build;   // #126
+}
 
 /* ---- history (DEC-018; lazy-fetched on open + Refresh, never polled) ---- */
 // Device LOCAL epoch (the firmware hands Clock local time), so format with getUTC* to show the
@@ -605,7 +622,11 @@ async function loadSettings() {
 }
 // Revert in place from the cached SET — offline-safe, mirrors discardSched (#82).
 function discardSettings() { if (SET) { populateSettings(); setSetDirty(false); } }
-$('#scr-set').addEventListener('input', () => setSetDirty(true));
+// The OTA block is inside this screen but outside SAVE SETTINGS — touching it
+// must not raise the unsaved-changes guard (#82).
+$('#scr-set').addEventListener('input', e => {
+  if (!e.target.closest('#ota-block')) setSetDirty(true);
+});
 $('#set-discard').addEventListener('click', discardSettings);
 $('#set-save').addEventListener('click', async () => {
   const mins = Array.prototype.map.call(
@@ -626,6 +647,58 @@ $('#set-save').addEventListener('click', async () => {
   flash('#set-msg', r.ok ? 'Saved.' + (r.wifiNote ? ' WiFi applies at next boot.' : '')
                          : 'Refused: ' + (r.error || r.code), r.ok);
 });
+
+/* ---- firmware OTA (#126) ---- */
+// XHR, not fetch: upload.onprogress is the only way to show flash progress on a
+// ~900 KB image over farm WiFi. The key header is only enforced by builds made
+// with ota_secret.ini; sending it to a key-less build is harmless.
+$('#ota-go').addEventListener('click', () => {
+  const f = $('#ota-file').files[0];
+  if (!f) { flash('#ota-msg', 'Pick a .bin first.', false); return; }
+  if (!confirm('Flash "' + f.name + '"? The controller reboots after a good flash.')) return;
+  if (MOCK) {   // UI-dev path — no device, canned success
+    $('#ota-msg').textContent = 'Uploading… 100%';
+    setTimeout(() => flash('#ota-msg', 'Flashed — rebooting. Reconnecting…', true), 400);
+    return;
+  }
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/ota');
+  const key = $('#ota-key').value;
+  if (key) xhr.setRequestHeader('X-OTA-Key', key);
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable)
+      $('#ota-msg').textContent = 'Uploading… ' + Math.round(100 * e.loaded / e.total) + '%';
+  };
+  xhr.onload = () => {
+    let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 200) {
+      flash('#ota-msg', 'Flashed — rebooting. Reconnecting…', true);
+      setTimeout(otaAwaitReboot, 5000);
+    } else {
+      flash('#ota-msg', 'Refused: ' + (j.error || xhr.status), false);
+    }
+  };
+  xhr.onerror = () => flash('#ota-msg', 'Upload failed — connection lost. The old firmware keeps running.', false);
+  // multipart, NOT the raw blob: ESPAsyncWebServer routes upload data to the
+  // server's onUpload handler only for multipart/form-data bodies — a raw binary
+  // POST would be silently discarded (no onBody handler on that route).
+  const fd = new FormData();
+  fd.append('firmware', f);
+  xhr.send(fd);
+});
+async function otaAwaitReboot() {
+  const prev = S && S.build;
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    const s = await api('/api/status');
+    if (s.ok) {
+      flash('#ota-msg', 'Back up on build ' + (s.build || '?') +
+        (prev && s.build === prev ? ' — same build as before?' : ''), true);
+      return;
+    }
+  }
+  flash('#ota-msg', 'Still unreachable after 60 s — check the controller.', false);
+}
 
 /* ---- calibration ---- */
 $('#cal-start').addEventListener('click', async () => {

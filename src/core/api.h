@@ -78,6 +78,18 @@ public:
     int postCalFinish(JsonVariantConst in, JsonDocument& out, uint32_t pulses, uint32_t nowMs);
     int postFaultClear(JsonDocument& out, uint32_t nowMs);
 
+    // OTA gate (#126). The upload mechanics (Update.h, chunk streaming, the secret
+    // header) are ESP32 glue; the DECISION of when a reflash may begin is policy
+    // and lives here. 200 = accepted, RunController's OTA inhibit is now set (no
+    // run — scheduled or manual — can start until reboot or otaAbort()). 409 =
+    // wrong state. Allowed from IDLE *or* FAULT: a latched fault is pump-off and
+    // queue-unwound — the safest time to reflash, and OTA-while-faulted is a
+    // legitimate recovery path (the latch is RAM-only and re-derives from live
+    // conditions after reboot, so nothing is laundered past the clear gate).
+    int  postOtaBegin(JsonDocument& out, uint32_t nowMs);
+    // Failed/aborted upload: lift the inhibit (a successful flash ends in reboot).
+    void otaAbort();
+
     // Wire-name helpers (status strings; also used by tests).
     static const char* stateName(RunState s);
     static const char* faultName(Fault f);

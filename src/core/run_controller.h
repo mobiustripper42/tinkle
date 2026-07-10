@@ -100,6 +100,16 @@ public:
     // check, so it also shortens an in-flight run. 0 = no software cap (§15 note).
     void setSwMaxRuntimeSec(uint32_t sec) { cfg_.swMaxRuntimeSec = sec; }
 
+    // OTA inhibit (#126): while a firmware image is streaming to flash, no run may
+    // START — scheduled or manual. The upload runs on the async_tcp task for tens
+    // of seconds, and the request-time IDLE gate alone can't stop a scheduled run
+    // coming due mid-flash; every run funnels through requestRun (the IRunSink
+    // seam), so refusing here covers the scheduler and the API in one place. Set
+    // by the OTA route on Update.begin() success, cleared on a failed/aborted
+    // upload (a successful one ends in reboot). Deliberately RAM-only.
+    void setOtaActive(bool active) { otaActive_ = active; }
+    bool otaActive() const         { return otaActive_; }
+
     // Latest ATtiny trip-line state, pushed in by the Watchdog module (§9). Used
     // as the §4 step-2 pre-open gate: if asserted when OPEN_ZONE is reached, the
     // run aborts to FAULT(Watchdog) instead of energizing the path. (A trip that
@@ -160,6 +170,8 @@ private:
     uint32_t   runStartMs_   = 0;
     bool       stopping_     = false;     // this run was cancelled, not completed
     bool       watchdogTripped_ = false;  // §4 step-2 pre-open gate
+    // #126: written from the async_tcp task (under the web mutex), read by the loop.
+    volatile bool otaActive_ = false;
 
     RunRequest queue_[RunConfig::MAX_QUEUE] = {};
     uint8_t    qHead_  = 0;
