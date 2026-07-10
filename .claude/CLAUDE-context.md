@@ -53,6 +53,7 @@ Project-specific docs beyond the baseline `## Key Docs` table in the `CLAUDE.md`
 | `docs/tinkle_v1_spec.md` | **Hardware spec** — water path, components, power, failure modes (source of truth for hardware) |
 | `docs/tinkle_firmware_spec.md` | **Firmware spec** — modules, run state machine, API, constants (source of truth for behavior; §17 = the fail-dry acceptance checklist) |
 | `docs/tinkle_wiring.html` | **Wiring + pin map** — source of truth for pins; if `pins.h` disagrees, the wiring doc wins |
+| `docs/OTA.md` | **OTA runbook** — build, address-per-device, upload (curl/SPA), verify, guardrails, USB recovery |
 | `docs/DRAFT-v1.4-BOM.md` | Draft v1.4 bill of materials |
 | `docs/DRAFT-v1.4-valve-rearchitecture.md` | Draft v1.4 valve re-architecture proposal |
 
