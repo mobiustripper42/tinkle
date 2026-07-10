@@ -1220,6 +1220,9 @@ FlowFaultDetector::Config ffCfg() {
     c.minRunningGPM  = 0.1f;
     c.idleFaultPulses = 50;
     c.idleWindowMs   = 1000;
+    c.drainQuietMs     = 500;    // #124 drain gate, shortened to match
+    c.drainQuietPulses = 2;
+    c.drainCapMs       = 3000;
     return c;
 }
 } // namespace
@@ -1286,14 +1289,57 @@ void test_ff_begin_seeds_boot_window() {
 }
 
 // Pulses accrued through the close sequence (trailing flow in StopPump/Settle) are excluded
-// from the first idle window by the Idle-edge re-baseline — no false UnexpectedFlow after a run.
+// from the first idle window: the Idle edge opens the #124 drain gate, and the window only
+// baselines once the meter has quiesced — no false UnexpectedFlow after a run.
 void test_ff_post_run_idle_rebaseline() {
     FlowFaultDetector d(ffCfg());
     d.update(RunState::Running,  5.0f, 1000, 0);
     d.update(RunState::StopPump, 1.0f, 1200, 5000);                                 // flow trailing off
     d.update(RunState::Settle,   0.2f, 1300, 5500);                                 // +300 since run > threshold
-    d.update(RunState::Idle,     0.0f, 1300, 6000);                                 // edge: re-baseline at 1300
-    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 1300, 7000));     // full window, flat -> clean
+    d.update(RunState::Idle,     0.0f, 1300, 6000);                                 // edge: drain gate opens
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 1300, 6500));     // quiet 500 ms -> armed
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 1300, 7500));     // full window, flat -> clean
+}
+
+// The #124 repro: a wet run's draindown keeps the meter ticking well into IDLE —
+// far past the idle threshold — then decays. The drain gate must absorb the tail,
+// and the idle check must still be LIVE afterward (a later real flow trips it).
+void test_ff_trailing_draindown_no_fault_then_still_armed() {
+    FlowFaultDetector d(ffCfg());
+    d.update(RunState::Running,  5.0f, 1000, 0);
+    d.update(RunState::StopPump, 1.0f, 1500, 3000);
+    d.update(RunState::Settle,   0.5f, 1600, 3500);
+    // IDLE entry with the draindown still running: +150 pulses over the first
+    // second — triple the 50-pulse idle threshold; the old code latched here.
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.3f, 1700, 4000));   // edge
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.3f, 1760, 4250));
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.2f, 1810, 4500));
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.1f, 1840, 4750));   // decaying
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 1850, 5000));
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 1851, 5500));   // quiet 500 ms -> armed
+    TEST_ASSERT_EQUAL(Fault::None, d.update(RunState::Idle, 0.0f, 1851, 6500));   // clean window slides
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow,
+                      d.update(RunState::Idle, 1.0f, 1960, 7500));                // real flow still trips
+}
+
+// The other half of #124's acceptance: flow that NEVER decays (stuck-open valve,
+// burst) must still latch. The gate caps at drainCapMs, arms from a fresh baseline,
+// and the sustained flow trips the check within one idle window.
+void test_ff_never_decaying_flow_still_faults() {
+    FlowFaultDetector d(ffCfg());
+    d.update(RunState::Running, 5.0f, 1000, 0);
+    d.update(RunState::Settle,  2.0f, 1500, 3500);
+    Fault f = Fault::None;
+    uint32_t pulses = 1600;
+    uint32_t trippedAt = 0;
+    for (uint32_t now = 4000; now <= 9000 && f == Fault::None; now += 250) {
+        pulses += 20;                                             // 80 pulses/s, forever
+        f = d.update(RunState::Idle, 2.0f, pulses, now);
+        trippedAt = now;
+    }
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow, f);
+    // Latency is bounded: cap (3000) + one idle window (1000) past the IDLE edge.
+    TEST_ASSERT_TRUE(trippedAt <= 4000 + 3000 + 1000);
 }
 
 // End-to-end: a no-flow verdict routed to RunController slams the safe state and latches (§14).
@@ -1936,6 +1982,9 @@ ValveRestMonitor::Config makeRestCfg() {
     ValveRestMonitor::Config c;
     c.windowMs      = 2000;     // short for tests; real seed 10 s (§15)
     c.maxRestPulses = 5;
+    c.drainQuietMs     = 500;   // #124 drain gate, shortened to match
+    c.drainQuietPulses = 2;
+    c.drainCapMs       = 3000;
     return c;
 }
 
@@ -2053,18 +2102,55 @@ static void test_rest_chained_run_aborts_check() {
 }
 
 // Threshold boundary, synthetic states: exactly maxRestPulses is rest-quiet
-// (no flag, window completes clean); one more flags.
+// (no flag, window completes clean); one more flags. The #124 drain gate sits in
+// front of the window, so each SETTLE entry pays a quiet drainQuietMs first.
 static void test_rest_threshold_boundary() {
     ValveRestMonitor vr(makeRestCfg());
-    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 2, 100, 0));      // window opens
-    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 2, 105, 500));    // == threshold
-    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   2, 105, 1999));
-    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   2, 105, 2000));   // closes clean
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 2, 100, 0));      // drain wait opens
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 2, 100, 500));    // quiet -> window opens
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   2, 105, 1000));   // == threshold
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   2, 105, 2499));
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   2, 105, 2500));   // closes clean
     TEST_ASSERT_FALSE(vr.zoneFlagged(2));
 
     TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Running, 2, 200, 3000));  // next run
-    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle,  2, 200, 4000));  // new window
-    TEST_ASSERT_EQUAL_INT( 2, vr.tick(RunState::Idle,    2, 206, 4500));  // threshold + 1
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle,  2, 200, 4000));  // drain wait
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle,  2, 200, 4500));  // quiet -> window opens
+    TEST_ASSERT_EQUAL_INT( 2, vr.tick(RunState::Idle,    2, 206, 5000));  // threshold + 1
+    TEST_ASSERT_TRUE(vr.zoneFlagged(2));
+}
+
+// The #124 repro for DEC-014: heavy trailing draindown right after close travel —
+// pulses that would have blown REST_MAX_PULSES land during the drain wait, then the
+// meter quiets and the real window runs clean. No flag: a healthy-but-slow-seating
+// valve is not a stuck valve.
+static void test_rest_draindown_then_quiet_no_flag() {
+    ValveRestMonitor vr(makeRestCfg());
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 1, 100, 0));      // drain wait opens
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 1, 120, 250));    // +20 trailing (old code: flag)
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   1, 135, 500));    // decaying
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   1, 140, 750));
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   1, 141, 1250));   // quiet 500 ms -> window opens
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Idle,   1, 142, 3250));   // window closes clean
+    TEST_ASSERT_FALSE(vr.zoneFlagged(1));
+    TEST_ASSERT_EQUAL_UINT8(0, vr.flaggedMask());
+}
+
+// Flow that never quiets after close travel is the DEC-014 failure itself: the
+// drain gate caps out and flags the zone directly — still exactly once.
+static void test_rest_never_quiet_flags_via_cap() {
+    ValveRestMonitor vr(makeRestCfg());
+    TEST_ASSERT_EQUAL_INT(-1, vr.tick(RunState::Settle, 2, 100, 0));
+    int flagged = -1;
+    int verdicts = 0;
+    uint32_t pulses = 100;
+    for (uint32_t now = 250; now <= 4000; now += 250) {
+        pulses += 10;                                                     // never decays
+        const int v = vr.tick(RunState::Idle, 2, pulses, now);
+        if (v >= 0) { flagged = v; ++verdicts; }
+    }
+    TEST_ASSERT_EQUAL_INT(2, flagged);
+    TEST_ASSERT_EQUAL_INT(1, verdicts);
     TEST_ASSERT_TRUE(vr.zoneFlagged(2));
 }
 
@@ -2364,6 +2450,7 @@ static void test_api_flow_override_dec015() {
 static void test_flow_detector_mute() {
     FlowFaultDetector::Config c;
     c.graceMs = 1000; c.minRunningGPM = 0.1f; c.idleFaultPulses = 5; c.idleWindowMs = 1000;
+    c.drainQuietMs = 500; c.drainQuietPulses = 2; c.drainCapMs = 3000;   // #124 gate, test-short
 
     FlowFaultDetector unmuted(c);
     unmuted.begin(0, 0);
@@ -2376,12 +2463,16 @@ static void test_flow_detector_mute() {
     muted.update(RunState::Running, 0.0f, 0, 100);
     TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Running, 0.0f, 0, 1200));
 
-    // Idle: 50 pulses land while muted -> no verdict, but the window re-baselines;
-    // un-mute -> the next quiet window is judged fresh, not the muted backlog.
-    muted.update(RunState::Idle, 0.0f, 100, 1300);         // IDLE edge: baseline = 100
-    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 2400));
+    // Idle: 50 pulses land while muted -> no verdict, but tracking continues (the
+    // #124 drain gate + the window keep sliding); un-mute -> the next window is
+    // judged fresh, not the muted backlog — and the check is genuinely live.
+    muted.update(RunState::Idle, 0.0f, 100, 1300);         // IDLE edge: drain gate opens
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 2400));   // muted burst
     muted.setMuted(false);
-    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 3500));
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 150, 3500));   // quiet -> armed
+    TEST_ASSERT_EQUAL(Fault::None, muted.update(RunState::Idle, 0.0f, 152, 4500));   // fresh window, clean
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow,
+                      muted.update(RunState::Idle, 0.0f, 200, 5500));                // live post-unmute
 }
 
 // Calibration endpoints: lifecycle mapping (409 not-calibrating / busy), the happy
@@ -2901,6 +2992,8 @@ int main() {
     RUN_TEST(test_ff_grace_resets_per_run);
     RUN_TEST(test_ff_begin_seeds_boot_window);
     RUN_TEST(test_ff_post_run_idle_rebaseline);
+    RUN_TEST(test_ff_trailing_draindown_no_fault_then_still_armed);
+    RUN_TEST(test_ff_never_decaying_flow_still_faults);
     RUN_TEST(test_ff_integration_no_flow_faults_rc);
 
     RUN_TEST(test_cal_start_bounded_plain_run);
@@ -2937,6 +3030,8 @@ int main() {
     RUN_TEST(test_rest_flag_self_heals_on_clean_close);
     RUN_TEST(test_rest_chained_run_aborts_check);
     RUN_TEST(test_rest_threshold_boundary);
+    RUN_TEST(test_rest_draindown_then_quiet_no_flag);
+    RUN_TEST(test_rest_never_quiet_flags_via_cap);
     RUN_TEST(test_rest_fault_aborts_window_and_valverest_cannot_latch);
     RUN_TEST(test_fm_note_is_nonlatching);
 
