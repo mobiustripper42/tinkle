@@ -33,8 +33,18 @@ Fault Watchdog::tick(RunState state, bool tripAsserted, uint32_t nowMs) {
         g_.write(pin_, false);
     }
 
+    // Trip qualification (DEC-023): a raw assertion must hold continuously for
+    // tripConfirmMs before it counts. Any released read restarts the clock.
+    if (tripAsserted) {
+        if (!tripSeen_) { tripSeen_ = true; tripStartMs_ = nowMs; }
+        tripConfirmed_ = (uint32_t)(nowMs - tripStartMs_) >= cfg_.tripConfirmMs;
+    } else {
+        tripSeen_      = false;
+        tripConfirmed_ = false;
+    }
+
     const bool active = (state != RunState::Idle && state != RunState::Fault);
-    return (tripAsserted && active) ? Fault::Watchdog : Fault::None;
+    return (tripConfirmed_ && active) ? Fault::Watchdog : Fault::None;
 }
 
 } // namespace tinkle

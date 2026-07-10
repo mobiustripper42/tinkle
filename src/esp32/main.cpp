@@ -346,21 +346,31 @@ void loop() {
 #else
     const bool wdTrip = digitalRead(WD_TRIPPED_IN) == LOW;
 #endif
-    runController.setWatchdogTripped(wdTrip);             // §4 pre-open gate
     // Re-read the state: a flow fault above may have latched THIS pass, and the
-    // heartbeat must not outlive the pump command by even one tick.
+    // heartbeat must not outlive the pump command by even one tick. The RAW read
+    // feeds the qualifier; only the CONFIRMED level (held >= TRIP_CONFIRM_MS,
+    // DEC-023) reaches the pre-open gate or produces a verdict — the 2026-07-09
+    // field event was a single glitched sample latching away a whole day.
     const Fault wdVerdict = watchdog.tick(runController.state(), wdTrip, now);
-    if (wdVerdict != Fault::None) runController.raiseFault(wdVerdict, now);
+    runController.setWatchdogTripped(watchdog.tripConfirmed());   // §4 pre-open hold
+    // DEC-023: the verdict ABORTS the current run and preserves the queue — never
+    // latches. abortRun is true once per run, so the note fires once, not per tick.
+    if (wdVerdict != Fault::None && runController.abortRun(wdVerdict, now)) {
+        faultManager.note(Fault::Watchdog, wallClock.epoch(now), wallClock.valid());
+        Serial.println("[tinkle] watchdog trip confirmed: run aborted, queue preserved"
+                       " (DEC-023) — relay had already cut the pump");
+    }
 
     // Fault surface (§14 / #5.3): push each detector's CURRENT condition truth,
     // then let the manager log any newly latched fault. Watchdog resolved = trip
-    // line released. Unexpected-flow resolved = the rolling rate decayed to 0 —
-    // deliberately UNQUALIFIED by run state: the condition is only consulted while
-    // that fault is latched (safe state, nothing should flow), and qualifying it
-    // with isIdle() would read "resolved" the moment the fault latched (state =
-    // Fault, not Idle), letting a clear through while water still moves.
-    // NoFlow/CalRange are one-shot events with no live condition — they clear freely.
-    faultManager.setConditionActive(Fault::Watchdog, wdTrip);
+    // line released (kept for the log surface even though Watchdog no longer
+    // latches, DEC-023). Unexpected-flow resolved = the rolling rate decayed to
+    // 0 — deliberately UNQUALIFIED by run state: the condition is only consulted
+    // while that fault is latched (safe state, nothing should flow), and
+    // qualifying it with isIdle() would read "resolved" the moment the fault
+    // latched (state = Fault, not Idle), letting a clear through while water
+    // still moves. NoFlow/CalRange are one-shot events — they clear freely.
+    faultManager.setConditionActive(Fault::Watchdog, watchdog.tripConfirmed());
     // With the DEC-015 override on, the operator has declared the sensor untrust-
     // worthy — its pulses no longer block a clear (the API's clear-on-enable relies
     // on this staying false while overridden).
