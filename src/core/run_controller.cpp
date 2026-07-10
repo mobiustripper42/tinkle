@@ -30,6 +30,7 @@ void RunController::resetRunMetrics() {
     pendingStartEpoch_   = 0;
     pendingClockValid_   = false;
     pendingCentigallons_ = 0;
+    pendingRunFault_     = Fault::None;   // DEC-023: an abort never leaks across runs
 }
 
 void RunController::noteRunStart(uint32_t startEpoch, bool clockValid) {
@@ -104,6 +105,9 @@ void RunController::raiseFault(Fault code, uint32_t nowMs) {
     if (code == Fault::ValveRest) return;           // DEC-014 is log-only (FaultManager::note)
                                                     // — a maintenance flag must never halt
                                                     // irrigation. Structural, not convention.
+    if (code == Fault::Watchdog) return;            // DEC-023: non-latching — route through
+                                                    // abortRun(). The relay already cut the
+                                                    // pump; a latch here only costs watering.
     if (code >= Fault::Count) return;               // sentinel/garbage is a caller bug
     if (state_ == RunState::Fault) return;          // first fault wins
     valve_.safeState(nowMs);                        // pump off -> zones de-energized -> diverter plain
@@ -112,6 +116,24 @@ void RunController::raiseFault(Fault code, uint32_t nowMs) {
     logRun(RunResult::Faulted, fault_);             // faulted runs land in the ring too (DEC-018)
     state_ = RunState::Fault;
     stateStartMs_ = nowMs;
+}
+
+bool RunController::abortRun(Fault code, uint32_t nowMs) {
+    // DEC-023: end the CURRENT run for a non-latching fault (Watchdog) — unwind
+    // through the normal StopPump→CloseZone→Settle path, log it Faulted, and
+    // PRESERVE the queue. The hardware backstop already de-powered the pump; the
+    // rest of the schedule must not pay for one run's trip.
+    if (code == Fault::None || code >= Fault::Count) return false;
+    if (state_ == RunState::Idle || state_ == RunState::Fault) return false;
+    if (state_ == RunState::Settle) return false;   // already logged at Settle entry;
+                                                    // water stopped — nothing to abort
+    if (pendingRunFault_ != Fault::None) return false;   // this run's abort is in flight
+    pendingRunFault_ = code;
+    // From the shutdown tail (StopPump/CloseZone), stay on the unwind already in
+    // progress — re-entering StopPump would restart the close travel.
+    if (state_ != RunState::StopPump && state_ != RunState::CloseZone)
+        enter(RunState::StopPump, nowMs);
+    return true;
 }
 
 bool RunController::clearFault() {
@@ -133,9 +155,9 @@ void RunController::enter(RunState s, uint32_t nowMs) {
                 valve_.setDiverter(current_.fertigate, nowMs);
             break;
         case RunState::OpenZone:
-            // §4 step 2: never energize the path if the hardware backstop reports
-            // tripped — abort before the zone opens and the pump (the source) starts.
-            if (watchdogTripped_) { raiseFault(Fault::Watchdog, nowMs); return; }
+            // §4 step 2 moved to the PrepDiverter→OpenZone transition (DEC-023):
+            // the gate now HOLDS the run until the trip line releases instead of
+            // killing it here — by the time this entry runs, the line is clear.
             valve_.openZone(current_.zoneIndex, nowMs);
             break;
         case RunState::StartPump:   valve_.pumpOn();                            break;
@@ -143,8 +165,15 @@ void RunController::enter(RunState s, uint32_t nowMs) {
         case RunState::StopPump:    valve_.pumpOff();                           break;
         case RunState::CloseZone:   valve_.closeZone(current_.zoneIndex, nowMs);break;
         case RunState::Settle:
-            // Push the run onto the history ring (§4 step 7 / DEC-018).
-            logRun(stopping_ ? RunResult::Stopped : RunResult::Completed, Fault::None);
+            // Push the run onto the history ring (§4 step 7 / DEC-018). A DEC-023
+            // abort (non-latching Watchdog) unwound through the normal path and
+            // logs Faulted here — one log site for every outcome.
+            if (pendingRunFault_ != Fault::None) {
+                logRun(RunResult::Faulted, pendingRunFault_);
+                pendingRunFault_ = Fault::None;
+            } else {
+                logRun(stopping_ ? RunResult::Stopped : RunResult::Completed, Fault::None);
+            }
             // Return the diverter to plain rest (§5/§14, DEC-011/013/021) — only when the
             // queue is empty; a chained run sets its legs in PrepDiverter, so returning
             // between queued runs is wasted travel and risks overlapping leg commands. The
@@ -164,13 +193,27 @@ void RunController::tick(uint32_t nowMs) {
             return;                                  // nothing advances on its own
 
         case RunState::PrepDiverter:
-            if (!valve_.diverterBusy()) enter(RunState::OpenZone, nowMs);
+            if (valve_.diverterBusy()) return;
+            // §4 step 2 (DEC-023): while the backstop reports tripped, HOLD here —
+            // nothing is energized yet, and the lockout self-releases ≤ 2 s after
+            // the previous run's heartbeat quiets. Wait-not-kill: the old abort
+            // turned a stale trip read into a dead schedule. A line stuck asserted
+            // past wdWaitMs skips THIS run only (logged Faulted via the normal
+            // unwind) and lets the queue advance.
+            if (watchdogTripped_) {
+                if ((uint32_t)(nowMs - stateStartMs_) >= cfg_.wdWaitMs) {
+                    pendingRunFault_ = Fault::Watchdog;
+                    enter(RunState::StopPump, nowMs);   // unwind a never-opened path
+                }
+                return;
+            }
+            enter(RunState::OpenZone, nowMs);
             return;
 
         case RunState::OpenZone:
             // Wait out the zone valve's travel so the pump never loads against a
-            // closed/mid-travel valve (§4 step 2). (The watchdog pre-open gate fired
-            // on OpenZone entry; a trip mid-travel still arrives via raiseFault().)
+            // closed/mid-travel valve (§4 step 2). (The pre-open gate held in
+            // PrepDiverter; a trip from here on arrives via abortRun(), DEC-023.)
             if (!valve_.zoneBusy(current_.zoneIndex)) enter(RunState::StartPump, nowMs);
             return;
 

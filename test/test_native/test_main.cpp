@@ -560,21 +560,85 @@ static void test_rc_sw_max_runtime_clamps() {
     TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
 }
 
-// §4 step 2: a watchdog trip asserted before OPEN_ZONE aborts to FAULT — the zone is
-// NEVER energized and the pump (the source) never starts.
-static void test_rc_watchdog_pre_open_gate() {
+// §4 step 2 (DEC-023, wait-not-kill): a trip asserted at run start HOLDS the run in
+// PrepDiverter — nothing energizes — and the run proceeds once the line releases.
+static void test_rc_watchdog_pre_open_gate_holds_then_proceeds() {
     ValveDriver vd(g, cfg);
     RunController rc(vd, makeRunCfg());
     rc.begin(0);
     rc.setWatchdogTripped(true);
     RunRequest req; req.zoneIndex = 0; req.durationSec = 5; req.fertigate = false;
     rc.requestRun(req, 0);
-    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.isFaulted(); });
-    TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
-    TEST_ASSERT_EQUAL(Fault::Watchdog, rc.activeFault());
+    uint32_t now = pump(rc, 0, 5, 2000, [&]{ return false; });   // 2 s of held ticks
+    TEST_ASSERT_EQUAL(RunState::PrepDiverter, rc.state());       // holding, not dead
+    TEST_ASSERT_FALSE(rc.isFaulted());
     TEST_ASSERT_FALSE(g.level[ZF0]);             // zone valve never energized
     TEST_ASSERT_FALSE(vd.pumpIsOn());            // pump never started
-    (void)now;
+    rc.setWatchdogTripped(false);                // lockout self-released
+    now = pump(rc, now, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL(RunState::Running, rc.state());            // the run happened
+    TEST_ASSERT_TRUE(vd.pumpIsOn());
+}
+
+// DEC-023: a line stuck asserted past wdWaitMs skips THAT run only — logged Faulted,
+// nothing energized — and the next queued run gets its own chance at the gate.
+static void test_rc_watchdog_stuck_line_skips_run_keeps_queue() {
+    ValveDriver vd(g, cfg);
+    RunConfig rcfg = makeRunCfg();
+    rcfg.wdWaitMs = 500;                          // short for tests; real seed 60 s (§15)
+    RunController rc(vd, rcfg);
+    rc.begin(0);
+    rc.setWatchdogTripped(true);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 5;
+    RunRequest req2; req2.zoneIndex = 1; req2.durationSec = 5;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
+    TEST_ASSERT_TRUE(rc.requestRun(req2, 0));    // queued behind the held run
+    uint32_t now = pump(rc, 0, 5, 4000,
+                        [&]{ return rc.lastRun().result == RunResult::Faulted; });
+    TEST_ASSERT_EQUAL(RunResult::Faulted, rc.lastRun().result);   // run 1 skipped + logged
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::Watchdog, rc.lastRun().faultCode);
+    TEST_ASSERT_FALSE(rc.isFaulted());                            // never latched
+    TEST_ASSERT_FALSE(g.level[ZF0]);                              // zone 0 never opened
+    // Run 2 is now holding at its own gate; release the line and it waters.
+    rc.setWatchdogTripped(false);
+    now = pump(rc, now, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL(RunState::Running, rc.state());
+    TEST_ASSERT_EQUAL_INT(1, rc.activeZone());
+}
+
+// DEC-023: a confirmed trip mid-run ABORTS that run (normal unwind, logged Faulted)
+// and PRESERVES the queue — one trip must never cost the rest of the schedule.
+// raiseFault(Watchdog) is structurally refused, like ValveRest.
+static void test_rc_watchdog_abort_preserves_queue_never_latches() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 5;
+    RunRequest req2; req2.zoneIndex = 1; req2.durationSec = 5;
+    TEST_ASSERT_TRUE(rc.requestRun(req, 0));
+    TEST_ASSERT_TRUE(rc.requestRun(req2, 0));
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+
+    TEST_ASSERT_TRUE(rc.abortRun(Fault::Watchdog, now));       // trip confirmed mid-run
+    TEST_ASSERT_FALSE(rc.abortRun(Fault::Watchdog, now));      // once per run
+    TEST_ASSERT_FALSE(rc.isFaulted());
+    TEST_ASSERT_EQUAL_UINT8(1, rc.queueDepth());               // queue intact
+    TEST_ASSERT_FALSE(vd.pumpIsOn());                          // unwinding
+
+    // The abort unwinds through Settle (logged Faulted) and run 2 starts.
+    now = pump(rc, now, 5, 30000, [&]{ return rc.state() == RunState::Running; });
+    TEST_ASSERT_EQUAL(RunState::Running, rc.state());
+    TEST_ASSERT_EQUAL_INT(1, rc.activeZone());
+    // The ring holds run 1's Faulted entry beneath run 2's in-flight state.
+    bool sawFaulted = false;
+    for (uint8_t i = 0; i < rc.runLog().count(); ++i)
+        if (rc.runLog().at(i).result == RunResult::Faulted &&
+            rc.runLog().at(i).faultCode == (uint8_t)Fault::Watchdog) sawFaulted = true;
+    TEST_ASSERT_TRUE(sawFaulted);
+
+    // Structural refusal: the old latching path is gone.
+    rc.raiseFault(Fault::Watchdog, now);
+    TEST_ASSERT_FALSE(rc.isFaulted());
 }
 
 // A fault landing while the diverter is mid-travel (before the zone ever energizes)
@@ -1793,11 +1857,13 @@ static void test_watchdog_toggle_cadence_and_park() {
     TEST_ASSERT_EQUAL_INT(baseline + 6, g.writesTo(HB_PIN));
 }
 
-// Trip verdicts: asserted during ANY active state is FAULT_WATCHDOG (water staged
-// or moving); asserted while IDLE or already FAULTed is not a fault — the §4
-// pre-open gate covers new runs and the line self-releases.
+// Trip verdicts: a CONFIRMED assertion during ANY active state is FAULT_WATCHDOG
+// (water staged or moving); asserted while IDLE or already FAULTed is not a fault —
+// the §4 pre-open gate covers new runs and the line self-releases. tripConfirmMs=0
+// here isolates the state matrix; qualification has its own test below.
 static void test_watchdog_trip_verdicts() {
-    Watchdog wd(g, HB_PIN, Watchdog::Config{});
+    Watchdog::Config c; c.tripConfirmMs = 0;
+    Watchdog wd(g, HB_PIN, c);
     wd.begin(0);
     TEST_ASSERT_EQUAL(Fault::Watchdog, wd.tick(RunState::Running,      true, 100));
     TEST_ASSERT_EQUAL(Fault::Watchdog, wd.tick(RunState::OpenZone,     true, 200));
@@ -1805,6 +1871,33 @@ static void test_watchdog_trip_verdicts() {
     TEST_ASSERT_EQUAL(Fault::None,     wd.tick(RunState::Idle,         true, 400));
     TEST_ASSERT_EQUAL(Fault::None,     wd.tick(RunState::Fault,        true, 500));
     TEST_ASSERT_EQUAL(Fault::None,     wd.tick(RunState::Running,      false, 600));
+}
+
+// Trip qualification (DEC-023, the 2026-07-09 field false positive): a single
+// glitched sample — or any assertion shorter than tripConfirmMs — produces no
+// verdict and never reaches tripConfirmed(); a held assertion confirms and stays
+// confirmed; a released read resets the clock so bursts can't accumulate.
+static void test_watchdog_trip_qualification_filters_glitches() {
+    Watchdog wd(g, HB_PIN, Watchdog::Config{});   // tripConfirmMs = 100
+    wd.begin(0);
+    // One glitched sample mid-run (the field event): no verdict, no confirm.
+    TEST_ASSERT_EQUAL(Fault::None, wd.tick(RunState::Running, true,  1000));
+    TEST_ASSERT_FALSE(wd.tripConfirmed());
+    TEST_ASSERT_EQUAL(Fault::None, wd.tick(RunState::Running, false, 1010));
+    // A 90 ms burst: still under the bar.
+    TEST_ASSERT_EQUAL(Fault::None, wd.tick(RunState::Running, true,  2000));
+    TEST_ASSERT_EQUAL(Fault::None, wd.tick(RunState::Running, true,  2090));
+    TEST_ASSERT_FALSE(wd.tripConfirmed());
+    TEST_ASSERT_EQUAL(Fault::None, wd.tick(RunState::Running, false, 2100));   // resets
+    TEST_ASSERT_EQUAL(Fault::None, wd.tick(RunState::Running, true,  2110));   // fresh clock
+    TEST_ASSERT_EQUAL(Fault::None, wd.tick(RunState::Running, true,  2200));   // 90 ms again
+    // A genuine lockout holds the line: confirms at the 100 ms bar and stays.
+    TEST_ASSERT_EQUAL(Fault::Watchdog, wd.tick(RunState::Running, true, 2210));
+    TEST_ASSERT_TRUE(wd.tripConfirmed());
+    TEST_ASSERT_EQUAL(Fault::Watchdog, wd.tick(RunState::Running, true, 3000));
+    // Idle: confirmed but not a verdict — the pre-open gate consumes tripConfirmed().
+    TEST_ASSERT_EQUAL(Fault::None, wd.tick(RunState::Idle, true, 3100));
+    TEST_ASSERT_TRUE(wd.tripConfirmed());
 }
 
 // End-to-end DEC-003 lock: drive a real run through RunController with the
@@ -1853,14 +1946,15 @@ static void test_fm_clear_blocked_until_condition_resolves() {
     rc.begin(0);
     FaultManager fm(rc);
 
-    rc.raiseFault(Fault::Watchdog, 100);
+    // (UnexpectedFlow stands in — Watchdog no longer latches at all, DEC-023.)
+    rc.raiseFault(Fault::UnexpectedFlow, 100);
     fm.tick(1750000000u, true);
-    fm.setConditionActive(Fault::Watchdog, true);    // trip line still asserted
+    fm.setConditionActive(Fault::UnexpectedFlow, true);    // water still pulsing
     TEST_ASSERT_FALSE(fm.clearAllowed());
     TEST_ASSERT_FALSE(fm.requestClear());
     TEST_ASSERT_TRUE(rc.isFaulted());                // visible no-op, still latched
 
-    fm.setConditionActive(Fault::Watchdog, false);   // line released
+    fm.setConditionActive(Fault::UnexpectedFlow, false);   // flow decayed
     TEST_ASSERT_TRUE(fm.clearAllowed());
     TEST_ASSERT_TRUE(fm.requestClear());
     TEST_ASSERT_FALSE(rc.isFaulted());
@@ -2294,9 +2388,10 @@ static void test_api_run_validation_and_start() {
 static void test_api_fault_gate_and_exemptions() {
     ApiRig r;
     JsonDocument out;
-    r.rc.raiseFault(Fault::Watchdog, 100);
+    // (UnexpectedFlow stands in — Watchdog no longer latches at all, DEC-023.)
+    r.rc.raiseFault(Fault::UnexpectedFlow, 100);
     r.fm.tick(1750000000u, true);
-    r.fm.setConditionActive(Fault::Watchdog, true);        // trip line still asserted
+    r.fm.setConditionActive(Fault::UnexpectedFlow, true);  // water still pulsing
 
     JsonDocument body = parseJson("{\"zoneIndex\":0}");
     TEST_ASSERT_EQUAL_INT(409, r.api.postRun(body.as<JsonVariantConst>(), out, 200));
@@ -2315,11 +2410,11 @@ static void test_api_fault_gate_and_exemptions() {
     TEST_ASSERT_FALSE(out["cleared"].as<bool>());
     TEST_ASSERT_TRUE(r.rc.isFaulted());
 
-    r.fm.setConditionActive(Fault::Watchdog, false);       // trip line released
+    r.fm.setConditionActive(Fault::UnexpectedFlow, false); // flow decayed
     out.clear();
     TEST_ASSERT_EQUAL_INT(200, r.api.postFaultClear(out, 400));
     TEST_ASSERT_TRUE(out["cleared"].as<bool>());
-    TEST_ASSERT_EQUAL_STRING("watchdog", out["was"]);
+    TEST_ASSERT_EQUAL_STRING("unexpectedFlow", out["was"]);
     TEST_ASSERT_TRUE(r.rc.isIdle());
 }
 
@@ -2434,15 +2529,15 @@ static void test_api_flow_override_dec015() {
     TEST_ASSERT_TRUE(r.store.flowOverride());              // persisted
     TEST_ASSERT_TRUE(r.flowFault.muted());                 // detector muted
 
-    // A NON-flow fault is untouched by the override path: the watchdog keeps its gate.
-    r.rc.raiseFault(Fault::Watchdog, 300);
+    // A NON-flow fault is untouched by the override path (CalRange stands in —
+    // Watchdog no longer latches at all, DEC-023).
+    r.rc.raiseFault(Fault::CalRange, 300);
     r.fm.tick(1750000300u, true);
-    r.fm.setConditionActive(Fault::Watchdog, true);
     out.clear();
     body = parseJson("{\"flowOverride\":true}");           // re-post, already on
     TEST_ASSERT_EQUAL_INT(200, r.api.postSettings(body.as<JsonVariantConst>(), out, 350));
-    TEST_ASSERT_TRUE(r.rc.isFaulted());                    // watchdog fault survives
-    TEST_ASSERT_EQUAL(Fault::Watchdog, r.rc.activeFault());
+    TEST_ASSERT_TRUE(r.rc.isFaulted());                    // non-flow fault survives
+    TEST_ASSERT_EQUAL(Fault::CalRange, r.rc.activeFault());
 }
 
 // The detector-side mute (DEC-015): verdicts go quiet, tracking does not — the
@@ -2987,7 +3082,9 @@ int main() {
     RUN_TEST(test_rc_queue_runs_sequentially);
     RUN_TEST(test_rc_rejects_bad_requests);
     RUN_TEST(test_rc_sw_max_runtime_clamps);
-    RUN_TEST(test_rc_watchdog_pre_open_gate);
+    RUN_TEST(test_rc_watchdog_pre_open_gate_holds_then_proceeds);
+    RUN_TEST(test_rc_watchdog_stuck_line_skips_run_keeps_queue);
+    RUN_TEST(test_rc_watchdog_abort_preserves_queue_never_latches);
     RUN_TEST(test_rc_fault_during_prep);
     RUN_TEST(test_rc_stop_during_prep);
     RUN_TEST(test_rc_queue_full_rejected);
@@ -3066,6 +3163,7 @@ int main() {
     RUN_TEST(test_watchdog_emits_only_in_pump_window);
     RUN_TEST(test_watchdog_toggle_cadence_and_park);
     RUN_TEST(test_watchdog_trip_verdicts);
+    RUN_TEST(test_watchdog_trip_qualification_filters_glitches);
     RUN_TEST(test_watchdog_full_run_heartbeat_within_pump);
 
     RUN_TEST(test_fm_clear_blocked_until_condition_resolves);

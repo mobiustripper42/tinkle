@@ -65,6 +65,9 @@ struct RunConfig {
     static constexpr uint8_t MAX_QUEUE = 4;
     uint16_t settleMs        = 1000;   // SETTLE dwell; also the inter-run gap (§4)
     uint32_t swMaxRuntimeSec = 1200;   // §15 software ceiling; caps any single run
+    uint32_t wdWaitMs        = 60000;  // §15 WD_WAIT_MS (DEC-023): how long the §4
+                                       // pre-open gate holds for a trip-line release
+                                       // (spec'd ≤ 2 s) before skipping the run
 };
 
 class RunController : public IRunSink {
@@ -86,8 +89,17 @@ public:
     void stop(uint32_t nowMs);
 
     // Emergency fault entry (§14): immediately command the safe state and latch
-    // the code. Called by FlowMonitor / Watchdog / etc. First fault wins.
+    // the code. Called by the flow detectors etc. First fault wins. Watchdog is
+    // structurally refused here (DEC-023, like ValveRest) — route it via abortRun.
     void raiseFault(Fault code, uint32_t nowMs);
+
+    // DEC-023: non-latching abort for the watchdog verdict. Ends the CURRENT run
+    // (normal unwind, logged Faulted at Settle) and PRESERVES the queue — the
+    // ATtiny relay already de-powered the pump, and each queued run re-arms fresh
+    // under its own 30-min hardware ceiling, so blocking the schedule buys no
+    // safety. Returns true if a run was newly aborted (callers key the fault-log
+    // note off this so it fires once, not every tick the verdict holds).
+    bool abortRun(Fault code, uint32_t nowMs);
 
     // Clear a latched fault and return to IDLE. Only valid in FAULT; the caller
     // is responsible for confirming the underlying condition is resolved (§14).
@@ -110,10 +122,11 @@ public:
     void setOtaActive(bool active) { otaActive_ = active; }
     bool otaActive() const         { return otaActive_; }
 
-    // Latest ATtiny trip-line state, pushed in by the Watchdog module (§9). Used
-    // as the §4 step-2 pre-open gate: if asserted when OPEN_ZONE is reached, the
-    // run aborts to FAULT(Watchdog) instead of energizing the path. (A trip that
-    // arrives mid-run still comes in via raiseFault().)
+    // Latest QUALIFIED ATtiny trip-line state (Watchdog::tripConfirmed, DEC-023),
+    // pushed in by main each tick. The §4 step-2 pre-open gate HOLDS in
+    // PrepDiverter while this is set (wait-not-kill — the lockout self-releases
+    // ≤ 2 s after quiet), skipping the run only past wdWaitMs. A trip that
+    // arrives mid-run comes in via abortRun().
     void setWatchdogTripped(bool tripped) { watchdogTripped_ = tripped; }
 
     // RunLog seams (DEC-018). main feeds the two external data the run entry needs:
@@ -185,6 +198,9 @@ private:
     uint32_t pendingStartEpoch_   = 0;
     bool     pendingClockValid_   = false;
     uint16_t pendingCentigallons_ = 0;
+    // DEC-023: set when the current run is aborting for a non-latching fault;
+    // consumed by the Settle-entry log, cleared at each run start.
+    Fault    pendingRunFault_     = Fault::None;
 };
 
 } // namespace tinkle

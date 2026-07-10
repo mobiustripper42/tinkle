@@ -608,3 +608,42 @@ scripts, spec §10/§17). **Coverage honesty:** the native tests exercise only t
 (`postOtaBegin` / the `requestRun` inhibit); the chunk-streaming route in `web_server.h` and its SPA
 multipart pairing are ESP32-only and untestable on the host — the first flash of the wet-run window
 is the end-to-end verification (§17 item).
+
+## DEC-023: Watchdog fault is non-latching — the schedule must survive a trip
+**Decision:** `FAULT_WATCHDOG` no longer latches the system. Three coordinated changes:
+1. **Trip-line qualification (`TRIP_CONFIRM_MS`, 100 ms):** the trip input (GPIO36, 10k pull-up,
+   sampled once per ~10 ms tick) must read asserted CONTINUOUSLY for 100 ms before it counts —
+   raw single-sample reads produce nothing. A genuine LOCKOUT holds the line ≥ `HB_TIMEOUT_MS`
+   (2 s) by construction, so qualification delays a real verdict by 100 ms and erases glitches.
+2. **Confirmed trip mid-run → `RunController::abortRun`:** the current run unwinds through the
+   normal StopPump→CloseZone→Settle path and logs `Faulted(Watchdog)`; the QUEUE IS PRESERVED
+   and nothing latches. `raiseFault(Watchdog)` is structurally refused, like DEC-014's ValveRest.
+3. **Pre-open gate waits instead of killing (`WD_WAIT_MS`, 60 s):** a run reaching the
+   PREP_DIVERTER→OPEN_ZONE transition with the line asserted HOLDS (nothing energized) until the
+   lockout self-releases (spec'd ≤ 2 s of heartbeat quiet); stuck past 60 s, THAT run alone is
+   skipped (logged Faulted) and the queue advances.
+
+**Why (field event, 2026-07-09):** a spurious `FAULT_WATCHDOG` latched at the end of the first of
+three noon runs. The old path dropped the queue and blocked every later scheduled run behind a
+manual clear — one glitched GPIO read cost a full day of watering. The trip can't have been real:
+the ATtiny asserts TRIPPED only on the 30-minute `HARD_MAX_RUNTIME` lockout, and the run was
+minutes long. The likely source is switching transients at pump-relay opening landing in the
+~21 s run-end tail (~2,000 unqualified samples per run end), any one of which latched.
+
+**Why this loses no safety:** the ATtiny + safety relay are the backstop, and they are untouched —
+the relay cuts pump power on its own clock, per run, whatever the ESP32 believes (DEC-003/012).
+By the time the ESP32 even reads the trip line, the pump is already de-powered; the ESP32-side
+latch was bookkeeping that punished the schedule. Every subsequent run re-arms fresh under its own
+30-minute hardware ceiling, so runaway remains bounded with no latch at all. The failure direction
+matters: this system's charter is fail dry, but a detector that regularly fails toward
+NOT-watering is a worse outcome than the hazard it guards (same reasoning as DEC-014/DEC-015 —
+a safety-adjacent detector must not block irrigation on a false positive). Wet-side faults
+(`FAULT_UNEXPECTED_FLOW`, `FAULT_NO_FLOW`) keep their latch: they indicate water moving where it
+shouldn't, the direction that must still fail stopped.
+
+**Visibility:** every trip still lands in the fault-log ring (`FaultManager::note`) + serial, and
+the aborted/skipped run logs `Faulted(Watchdog)` in the run history — a chronic line problem shows
+up as a pattern in History, not as silence.
+**Status:** Decided (field-driven). Amends §4 step 2, §9, §14, §15, §17. Supersedes the latch
+behavior of #48/#49; the DEC-016 host-test discipline carries over (new tests for qualification,
+abort-preserves-queue, hold-then-proceed, stuck-line skip).
