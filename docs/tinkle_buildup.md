@@ -224,19 +224,35 @@ You need: an Arduino Uno, six jumper wires, and a **10 µF electrolytic capacito
 
    Then add the **10 µF cap across the Uno's RESET and GND** (short leg to GND). It stops the
    Uno resetting itself when the flasher connects — without it you get "not in sync" errors.
-3. **Build the firmware, then burn the fuse and flash it** with avrdude through the Uno (the
+3. **Read the fuses first, then burn both fuses and flash** with avrdude through the Uno (the
    Uno powers the ATtiny while you do). Replace `/dev/ttyACM0` with the Uno's port if different:
    ```
    AVRD=~/.platformio/packages/tool-avrdude/avrdude
    CONF=~/.platformio/packages/tool-avrdude/avrdude.conf
    pio run -e attiny85                                                          # builds the .hex
+   # Read first — know what you're starting from (factory: lfuse 0x62, hfuse 0xDF):
+   $AVRD -C $CONF -c stk500v1 -P /dev/ttyACM0 -b 19200 -p attiny85 \
+         -U lfuse:r:-:h -U hfuse:r:-:h -U efuse:r:-:h
    $AVRD -C $CONF -c stk500v1 -P /dev/ttyACM0 -b 19200 -p attiny85 -U lfuse:w:0xE2:m
+   $AVRD -C $CONF -c stk500v1 -P /dev/ttyACM0 -b 19200 -p attiny85 -U hfuse:w:0xDD:m
    $AVRD -C $CONF -c stk500v1 -P /dev/ttyACM0 -b 19200 -p attiny85 \
          -U flash:w:.pio/build/attiny85/firmware.hex:i
    ```
-   The fuse step matters: the firmware's 2-second safety timeout assumes 8 MHz. Left at the
-   factory 1 MHz, every timer runs 8× slow. (Use avrdude directly — PlatformIO's `-t fuses`/
-   `-t upload` targets don't pass the port to a stk500v1 programmer.)
+   Both fuse steps matter:
+   - **`lfuse 0xE2` (8 MHz):** the firmware's 2-second safety timeout assumes 8 MHz. Left at
+     the factory 1 MHz, every timer runs 8× slow.
+   - **`hfuse 0xDD` (brown-out detection at 2.7 V):** the factory `0xDF` leaves BOD **off**,
+     and a quick repower lets the rail sag through the corruption zone without a clean
+     reset — the chip wakes wedged with the trip line held (diagnosed Sessions 18–19). BOD
+     forces a clean reset instead.
+
+   (Use avrdude directly — PlatformIO's `-t fuses`/`-t upload` targets don't pass the port to
+   a stk500v1 programmer.)
+
+   **As-built record (2026-07-07):** all three project ATtiny85s carry `lfuse 0xE2` /
+   `hfuse 0xDD` / `efuse 0xFF`, read back and verified after burning — the chips are
+   interchangeable; it does not matter which one is in the socket. Any NEW chip must get the
+   full sequence above before it joins the spares pool.
 
 **Check:** the upload ends with `bytes of flash verified`. Then unplug the Uno — the ATtiny
 keeps its program. Now wire it into the circuit:
