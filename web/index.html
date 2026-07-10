@@ -113,6 +113,7 @@ nav .ico{display:block; font-size:1.3rem}
     <div class="kv"><span>Clock</span><span id="st-clock">—</span></div>
     <div class="kv"><span>WiFi</span><span id="st-wifi">—</span></div>
     <div class="kv"><span>Up</span><span id="st-up">—</span></div>
+    <div class="kv"><span>Firmware</span><span id="st-build">—</span></div>
   </div>
 </section>
 
@@ -361,6 +362,9 @@ function renderHome() {
   $('#st-wifi').textContent  = S.wifi ? S.wifi.mode + ' ' + (S.wifi.ip || '') : '—';
   $('#st-up').textContent    = S.uptimeMs ? Math.floor(S.uptimeMs/3600000)+'h '+
                                Math.floor(S.uptimeMs/60000)%60+'m' : '—';
+  // Build sha (#126): the running image's identity, front and center — one glance
+  // after an OTA answers "did the flash take". Also shown in Settings → Firmware.
+  $('#st-build').textContent = S.build || '—';
 }
 
 function renderFaults() {
@@ -761,7 +765,7 @@ function mock(path, body) {
     fault:{ active:M.fault, clearAllowed:M.fault !== 'none', log:M.log },
     valveRestFlags:0, clock:{ valid:true, hour:12, minute:34, weekday:3 },
     cal:M.cal, uptimeMs: now % 86400000,
-    wifi:{ mode:'mock', ip:'0.0.0.0', rssi:-50 } };
+    wifi:{ mode:'mock', ip:'0.0.0.0', rssi:-50 }, build:'mock0000' };
   // The mock REJECTS what the real api.cpp rejects (10-7200 s runs, 60-1800 s
   // swMax, gallon bounds) — dev mode must surface the empty-input paths a phone
   // keyboard produces, not paper over them.
