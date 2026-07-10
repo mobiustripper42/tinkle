@@ -6,7 +6,7 @@ branch: task/tvs-ca-doc-fix
 started: 2026-07-09T17:27:25Z
 ended:
 points:
-pr_numbers: [127, 128, 129, 130]
+pr_numbers: [127, 128, 129, 130, 134]
 status: open
 transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83fd-d081424d8b36.jsonl
 ---
@@ -76,6 +76,22 @@ transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83f
 **Branch:** task/zone3-fuse-docs
 **Opened at:** 2026-07-10T14:30:00Z
 
+## Task 5: SPA — firmware build sha on the Home device card
+
+**Completed:**
+- `web/index.html` — "Firmware" row on the Device card reading `S.build` (+ mock `build:'mock0000'`); Settings → Firmware keeps its copy
+- Also this window: Tiller proposal PRs converted to issues — #114→#131 (armed-rail sense, ~DEC-024), #80→#132 (volume dosing, ~DEC-025, corrections for shipped DEC-018 + #124 interplay), #65→#133 (flow-signature health, ~DEC-026, overlap-with-#132 + poop-deck reporting note); all with stale-numbering fixes
+
+**Code review:** trivial UI row, build green
+**PR:** [#134](https://github.com/mobiustripper42/tinkle/pull/134) — base main (127–130 merged by Eric)
+**Points:** 1
+**Branch:** task/spa-build-footer
+**Opened at:** 2026-07-10T15:30:00Z
+
 **Next Steps:**
+- Flash from bee-grace off main (after #134 merges, or before — Settings shows the sha either way): `pio run -e esp32 -t upload --upload-port /dev/ttyUSB0`. Last cable flash — OTA onboard after.
+- Post-flash: DEC-015 flow override OFF; wet run a zone; expect clean end-of-run (no UnexpectedFlow / valve-rest flag) — #124 acceptance.
+- Watch History for `Faulted watchdog` entries — DEC-023 keeps trips visible but non-blocking.
+- Parked, user-approved: #131 armed-rail sense (needs 2 divider R + series R + clamp), #132 volume dosing, #133 flow-signature health (+ future poop-deck reporting).
 
 **Context:**
