@@ -6,7 +6,7 @@ branch: task/tvs-ca-doc-fix
 started: 2026-07-09T17:27:25Z
 ended:
 points:
-pr_numbers: [127, 128]
+pr_numbers: [127, 128, 129]
 status: open
 transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83fd-d081424d8b36.jsonl
 ---
@@ -46,6 +46,21 @@ transcript: /home/eric/.claude/projects/-home-eric-tinkle/87d56e88-51f6-4ce0-83f
 **Points:** 5
 **Branch:** task/126-ota
 **Opened at:** 2026-07-09T17:27:25Z
+
+## Task 3: DEC-023 — watchdog never blocks the schedule (field false positive 2026-07-09)
+
+**Completed:**
+- Field event: spurious `FAULT_WATCHDOG` at end of run 1/3 at noon → queue dropped, day blocked. Trip can't be real (ATtiny trips only on 30-min ceiling); cause = unqualified single-sample GPIO36 read during the run-end tail (pump-relay switching transients)
+- `src/core/watchdog.{h,cpp}` — `TRIP_CONFIRM_MS` (100 ms continuous) qualification + `tripConfirmed()`
+- `src/core/run_controller.{h,cpp}` — `abortRun()`: confirmed trip aborts current run, logs Faulted, **preserves queue**, never latches; `raiseFault(Watchdog)` structurally refused; pre-open gate holds in PrepDiverter (wait-not-kill), skips one run past `WD_WAIT_MS` (60 s)
+- `src/esp32/main.cpp` rewiring; spec §4/§9/§14/§15/§17; DEC-023 (relay is the safety, unchanged; wet-side faults keep their latch)
+- Tests: 5 new + 3 rewritten, 135/135 green
+
+**Code review:** 3 findings fixed — verdict preempted the PrepDiverter hold (would have reverted the gate to kill-on-first-confirm), stop-vs-abort log priority, Settle double-log
+**PR:** [#129](https://github.com/mobiustripper42/tinkle/pull/129) — stacked on #128 (order: 127 → 128 → 129)
+**Points:** 5
+**Branch:** task/watchdog-nonblocking
+**Opened at:** 2026-07-10T14:30:00Z
 
 **Next Steps:**
 
