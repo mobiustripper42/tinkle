@@ -126,14 +126,14 @@ Then repoint the host's production branch from `main` to `production` (e.g. Verc
 
 ## Versioning
 
-Every dev project carries a SemVer version in `package.json`, mirrored to a git tag (`vX.Y.Z`) on `main`. `/retro` is the sole place version bumps happen (DEC-S013 moved patch bumps out of `/its-dead`).
+Every dev project carries a SemVer version in `package.json`, mirrored to a git tag (`vX.Y.Z`) on `main`.
 
-**Three triggers (all run at `/retro` per DEC-S013):**
-- **Patch:** `/retro` Step 8.2 — one bump + CHANGELOG entry per PR merged in the phase window. Title pulled from GitHub.
-- **Minor:** `/retro` Step 8.3 — at phase close after all patches. CHANGELOG entry summarizes the phase.
+**Three triggers:**
+- **Patch:** on projects with a `production` branch, `/promote-production` bumps + tags on each ship — one release = one patch (a `main` HEAD that's already a fresh tag ships as-is). On projects that deploy straight off `main` (no `production` branch), `/retro` Step 8.2 patch-bumps per merged PR instead.
+- **Minor:** `/retro` Step 8.3 — at phase close, after any patches (Y+1, X=0). CHANGELOG entry summarizes the phase.
 - **Major:** `/bump-major` manual. User supplies the breaking-change rationale.
 
-**Tag rule:** tags are applied on the active trunk (`main`) at bump time (DEC-S022). A `production` deploy branch, if present, receives the already-tagged commit via `/promote-production` ff-merge — promotion does not tag.
+**Tag rule:** all tags are applied on the active trunk (`main`) at bump time (DEC-S022) — by `/promote-production` (patch, on ship), `/retro` (minor), or `/bump-major` (major). `production` only ever receives an already-tagged `main` commit via ff-merge.
 
 **Detection:** these skills check `package.json` exists at the repo root before bumping. If it doesn't (template/markdown-only project), they no-op silently.
 
