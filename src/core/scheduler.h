@@ -72,6 +72,9 @@ constexpr uint16_t DIST_RUN_FLOOR_MIN    = 7;    // hard minimum run length (agr
 constexpr uint8_t  DIST_MAX_RUNS         = 6;    // max cycles/runs per zone per day
 constexpr uint16_t DIST_RUN_OVERHEAD_SEC = 25;   // per-run valve/pump/settle overhead estimate
                                                  // for the fit check (pending #98 travel confirm)
+constexpr uint16_t DIST_MAX_PERZONE_MIN  = 1440; // per-zone daily cap (a day of minutes) — sanity
+                                                 // bound that also blocks a u16 runLen overflow
+                                                 // from a corrupt/torn NVS record
 
 // The derived plan: what the controller will actually do for a given config. `valid` is
 // false when the config can't be scheduled (window too short, below the floor, or the
@@ -109,6 +112,11 @@ public:
     // --- Distributed Watering (DEC-024) — mutually exclusive with the entry schedule ---
     void                     setDistributed(const DistributedConfig& c) { dist_ = c; }
     const DistributedConfig& distributed() const { return dist_; }
+    // True only when Distributed Watering is enabled AND its config is actually schedulable.
+    // An enabled-but-invalid config (corrupt blob / bad edit) is NOT active — evaluate()
+    // then governs by the fixed schedule rather than watering nothing. The SPA (M2) blocks
+    // saving an invalid enabled config up front; this is the firmware backstop.
+    bool distributedActive() const { return computeDistributedPlan(dist_, zoneCount_).valid; }
 
     // Call every loop tick. Evaluates the schedule on each new local minute (no-op until
     // the clock is valid, and at most once per minute — see IDEMPOTENCY above).
@@ -125,8 +133,10 @@ private:
     void evaluate(uint32_t nowMs);
     // Distributed-mode evaluation (DEC-024): fire whichever cycle(s) start this minute,
     // once per day-cycle. Keyed on cycle index (not the wall minute), so an evalNow()
-    // re-entry within the same minute cannot double-emit a cycle.
-    void evaluateDistributed(uint8_t hour, uint8_t minute, uint32_t dayOrdinal, uint32_t nowMs);
+    // re-entry within the same minute cannot double-emit a cycle. Caller passes the already-
+    // validated plan (evaluate() only routes here when the plan is valid).
+    void evaluateDistributed(const DistributedPlan& p, uint8_t hour, uint8_t minute,
+                             uint32_t dayOrdinal, uint32_t nowMs);
     // Resolve the fertigate flag for a due entry, consuming the daily auto-fert slot only
     // when the run actually enqueues (caller passes the slot decision back on success).
     bool resolveFert(const ScheduleEntry& e, uint32_t dayOrdinal, bool& consumesAutoSlot) const;

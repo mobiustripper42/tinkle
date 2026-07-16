@@ -1340,6 +1340,37 @@ void test_dist_dropped_counts() {
     TEST_ASSERT_EQUAL_UINT32(3, s.dropped());
 }
 
+// Enabled but INVALID (over-subscribed): distributed is not active, and the controller
+// must NOT water nothing — the fixed schedule governs instead. (#142 review: no silent dry day.)
+void test_dist_invalid_enabled_falls_back_to_schedule() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.add(mkEntry(1, 9, 0, DAILY, 300));                 // fixed entry due at 09:00
+    s.setDistributed(mkDist(540, 570, 42, 0));           // enabled but over-subscribed -> invalid
+    TEST_ASSERT_FALSE(s.distributedActive());
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(1, (int)sink.reqs.size());     // the fixed entry ran, not distributed
+    TEST_ASSERT_EQUAL_UINT8(1, sink.reqs[0].zoneIndex);
+    TEST_ASSERT_EQUAL_UINT32(300, sink.reqs[0].durationSec);
+}
+
+// The fired-cycle bitmask resets at the day boundary: cycle 0 re-fires the next day.
+void test_dist_day_boundary_resets_mask() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);   // Mon 09:00
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.setDistributed(mkDist(540, 930, 32, 0));
+    s.tick(0);                                            // Mon cycle 0 -> 3 runs
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());
+    s.tick(86400u * 1000u);                               // Tue 09:00 -> mask reset, cycle 0 again
+    TEST_ASSERT_EQUAL_INT(6, (int)sink.reqs.size());
+}
+
 // Packed `dist` record survives a roundtrip.
 void test_dist_config_pack_roundtrip() {
     DistributedConfig c = mkDist(540, 930, 32, 2);
@@ -3356,6 +3387,8 @@ int main() {
     RUN_TEST(test_dist_idempotent_across_evalnow);
     RUN_TEST(test_dist_either_or_entry_dormant);
     RUN_TEST(test_dist_dropped_counts);
+    RUN_TEST(test_dist_invalid_enabled_falls_back_to_schedule);
+    RUN_TEST(test_dist_day_boundary_resets_mask);
     RUN_TEST(test_dist_config_pack_roundtrip);
 
     RUN_TEST(test_sched_rc_fert_routing);

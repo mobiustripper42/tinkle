@@ -186,9 +186,17 @@ void setup() {
         // (either/or); disabled by default, so this is a no-op on a controller that never set it.
         const DistributedConfig dc = persistence.distributed();
         scheduler.setDistributed(dc);
-        if (dc.enabled)
-            Serial.printf("[tinkle] distributed watering: %u–%u min window, %u min/zone, fert %u\n",
-                          dc.windowStartMin, dc.windowEndMin, dc.perZoneMin, dc.fertCount);
+        if (dc.enabled) {
+            if (scheduler.distributedActive())
+                Serial.printf("[tinkle] distributed watering: %u–%u min window, %u min/zone, fert %u\n",
+                              dc.windowStartMin, dc.windowEndMin, dc.perZoneMin, dc.fertCount);
+            else
+                // Enabled but not schedulable — the fixed schedule governs instead of a silent
+                // dry day. Loud so a corrupt/bad config is visible on the serial console.
+                Serial.printf("[tinkle] distributed watering ENABLED but INVALID "
+                              "(window %u–%u, %u min/zone) — NOT running; fixed schedule governs\n",
+                              dc.windowStartMin, dc.windowEndMin, dc.perZoneMin);
+        }
     }
 
     // Rehydrate the run-history ring from its NVS blob (DEC-018) before the loop can push a

@@ -60,10 +60,16 @@ void Scheduler::evaluate(uint32_t nowMs) {
     const uint32_t day  = clock_.epoch(nowMs) / 86400u;  // local calendar-day ordinal
 
     // DEC-024: Distributed Watering replaces the entry schedule entirely (either/or). When
-    // it's on, the fixed-time entries are dormant — never both in the same minute.
+    // it's on AND schedulable, the fixed-time entries are dormant — never both in the same
+    // minute. An enabled-but-INVALID config (corrupt blob / bad edit) is NOT schedulable, so
+    // it must not silently water nothing: fall through to the fixed schedule (the "distributed
+    // off" state). main.cpp logs the invalid config loudly at boot; the SPA blocks the save.
     if (dist_.enabled) {
-        evaluateDistributed(w.hour, w.minute, day, nowMs);
-        return;
+        const DistributedPlan p = computeDistributedPlan(dist_, zoneCount_);
+        if (p.valid) {
+            evaluateDistributed(p, w.hour, w.minute, day, nowMs);
+            return;
+        }
     }
 
     const uint8_t  dayBit = static_cast<uint8_t>(1u << w.weekday);
@@ -93,8 +99,10 @@ void Scheduler::evaluate(uint32_t nowMs) {
 DistributedPlan computeDistributedPlan(const DistributedConfig& cfg, uint8_t zoneCount) {
     DistributedPlan p;                                   // valid=false, cycles=0
     if (!cfg.enabled || zoneCount == 0)                  return p;
+    if (cfg.windowStartMin >= 1440 || cfg.windowEndMin > 1440) return p;   // minute-of-day bounds
     if (cfg.windowEndMin <= cfg.windowStartMin)          return p;
     if (cfg.perZoneMin < DIST_RUN_FLOOR_MIN)             return p;
+    if (cfg.perZoneMin > DIST_MAX_PERZONE_MIN)           return p;   // sanity + u16 overflow guard
 
     const uint16_t winMin = (uint16_t)(cfg.windowEndMin - cfg.windowStartMin);
 
@@ -128,9 +136,13 @@ DistributedPlan computeDistributedPlan(const DistributedConfig& cfg, uint8_t zon
     return p;
 }
 
-void Scheduler::evaluateDistributed(uint8_t hour, uint8_t minute, uint32_t day, uint32_t nowMs) {
-    const DistributedPlan p = computeDistributedPlan(dist_, zoneCount_);
-    if (!p.valid) return;
+void Scheduler::evaluateDistributed(const DistributedPlan& p, uint8_t hour, uint8_t minute,
+                                    uint32_t day, uint32_t nowMs) {
+    // A cycle index must fit the u8 fired-mask; DIST_MAX_RUNS caps it well under 8.
+    static_assert(DIST_MAX_RUNS <= 8, "distFiredMask_ (u8) holds one bit per cycle");
+    // Each cycle fires one run per zone in a back-to-back burst; they must all fit the queue.
+    static_assert(ValveConfig::MAX_ZONES <= RunConfig::MAX_QUEUE,
+                  "a distributed cycle enqueues one run per zone at once");
 
     if (distFiredDay_ != day) { distFiredDay_ = day; distFiredMask_ = 0; }   // new day resets
 
