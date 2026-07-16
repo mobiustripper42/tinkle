@@ -363,6 +363,9 @@ struct ScheduleEntry {
 | `DRAIN_QUIET_PULSES` | 2 (seed, tune) | #124: max pulses tolerated in one quiet sub-window (~0.02 GPM at K≈1670) |
 | `DRAIN_CAP_MS` | 60000 (seed; `TINKLE_SIM`: 5000) | #124: bound on the drain wait — the idle check arms regardless (burst still latches); `ValveRestMonitor` flags the zone directly (still flowing = the DEC-014 failure) |
 | `RUNLOG_DEPTH` | 32 | run-history ring entries (DEC-018); 11 B/entry packed `runlog` NVS blob (~356 B); bumpable to 64 (wear, not space, is the ceiling) |
+| `DIST_RUN_FLOOR_MIN` | 7 | DEC-024 Distributed Watering: hard minimum run length; the day's per-zone budget splits into runs no shorter than this |
+| `DIST_MAX_RUNS` | 6 | DEC-024: max cycles/runs per zone per day (the fired-cycle bitmask is per-day) |
+| `DIST_RUN_OVERHEAD_SEC` | 25 | DEC-024: per-run valve/pump/settle overhead used in the cycle-fit check (estimate pending `ZONE_TRAVEL_MS` confirm, #98) |
 
 Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
 

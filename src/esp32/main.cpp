@@ -181,6 +181,14 @@ void setup() {
         const uint8_t n = persistence.loadScheduleEntries(stored, Scheduler::MAX_ENTRIES);
         for (uint8_t i = 0; i < n; ++i) scheduler.add(stored[i]);
         if (n) Serial.printf("[tinkle] schedule: %u entries loaded\n", n);
+
+        // DEC-024: Distributed Watering config. When enabled it replaces the entry schedule
+        // (either/or); disabled by default, so this is a no-op on a controller that never set it.
+        const DistributedConfig dc = persistence.distributed();
+        scheduler.setDistributed(dc);
+        if (dc.enabled)
+            Serial.printf("[tinkle] distributed watering: %u–%u min window, %u min/zone, fert %u\n",
+                          dc.windowStartMin, dc.windowEndMin, dc.perZoneMin, dc.fertCount);
     }
 
     // Rehydrate the run-history ring from its NVS blob (DEC-018) before the loop can push a

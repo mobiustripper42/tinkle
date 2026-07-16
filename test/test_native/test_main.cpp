@@ -1082,6 +1082,13 @@ struct FakeRunSink : tinkle::IRunSink {
 using tinkle::Scheduler;
 using tinkle::ScheduleEntry;
 using tinkle::FertOverride;
+using tinkle::DistributedConfig;
+using tinkle::DistributedPlan;
+using tinkle::computeDistributedPlan;
+using tinkle::packDistributedConfig;
+using tinkle::unpackDistributedConfig;
+using tinkle::DIST_CONFIG_BYTES;
+using tinkle::DIST_MAX_RUNS;
 using tinkle::epochFromCivil;
 
 // A clock pinned to a given local epoch (anchored at ms=0, so epoch advances with nowMs).
@@ -1225,6 +1232,125 @@ void test_sched_add_capacity() {
     TEST_ASSERT_EQUAL_UINT8(Scheduler::MAX_ENTRIES, s.count());
     s.clear();
     TEST_ASSERT_EQUAL_UINT8(0, s.count());
+}
+
+// --- Distributed Watering (DEC-024) ------------------------------------------------
+namespace {
+DistributedConfig mkDist(uint16_t startMin, uint16_t endMin, uint16_t perZoneMin,
+                         uint8_t fertCount, bool enabled = true) {
+    DistributedConfig c;
+    c.enabled = enabled; c.windowStartMin = startMin; c.windowEndMin = endMin;
+    c.perZoneMin = perZoneMin; c.fertCount = fertCount;
+    return c;
+}
+} // namespace
+
+// Plan: 32 min/zone over 09:00–15:30 (540–930) with 3 zones -> 4 runs x 8 min, bookended.
+void test_dist_plan_basic() {
+    DistributedPlan p = computeDistributedPlan(mkDist(540, 930, 32, 1), 3);
+    TEST_ASSERT_TRUE(p.valid);
+    TEST_ASSERT_EQUAL_UINT8(4, p.cycles);
+    TEST_ASSERT_EQUAL_UINT16(480, p.runLenSec);          // 32*60/4
+    TEST_ASSERT_EQUAL_UINT16(540, p.cycleStartMin[0]);   // first at window start
+    TEST_ASSERT_EQUAL_UINT16(903, p.cycleStartMin[3]);   // last cycle ends by the window end
+}
+
+// Floor + cap: below the 7-min floor is invalid; a big budget caps at DIST_MAX_RUNS.
+void test_dist_plan_floor_and_cap() {
+    TEST_ASSERT_FALSE(computeDistributedPlan(mkDist(540, 930, 6, 0), 3).valid);   // < floor
+
+    DistributedPlan one = computeDistributedPlan(mkDist(540, 930, 7, 0), 3);
+    TEST_ASSERT_TRUE(one.valid);
+    TEST_ASSERT_EQUAL_UINT8(1, one.cycles);
+    TEST_ASSERT_EQUAL_UINT16(420, one.runLenSec);
+    TEST_ASSERT_EQUAL_UINT16(540, one.cycleStartMin[0]);
+
+    DistributedPlan cap = computeDistributedPlan(mkDist(540, 930, 60, 0), 3);   // 60/7=8 -> cap 6
+    TEST_ASSERT_TRUE(cap.valid);
+    TEST_ASSERT_EQUAL_UINT8(DIST_MAX_RUNS, cap.cycles);
+    TEST_ASSERT_EQUAL_UINT16(600, cap.runLenSec);        // 60*60/6
+}
+
+// Over-subscription: 6 runs of 7 min can't fit a 30-min window -> invalid, emits nothing.
+void test_dist_plan_oversubscribed_invalid() {
+    TEST_ASSERT_FALSE(computeDistributedPlan(mkDist(540, 570, 42, 0), 3).valid);
+}
+
+// A cycle fires one run per live zone, back-to-back; fert rides the first fertCount cycles.
+void test_dist_emits_cycle_all_zones_fert_first() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);   // Monday 09:00 = cycle 0
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.setDistributed(mkDist(540, 930, 32, 1));            // fert the first cycle only
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());
+    TEST_ASSERT_EQUAL_UINT8(0, sink.reqs[0].zoneIndex);
+    TEST_ASSERT_EQUAL_UINT8(1, sink.reqs[1].zoneIndex);
+    TEST_ASSERT_EQUAL_UINT8(2, sink.reqs[2].zoneIndex);
+    TEST_ASSERT_EQUAL_UINT32(480, sink.reqs[0].durationSec);
+    TEST_ASSERT_TRUE(sink.reqs[0].fertigate);            // cycle 0 < fertCount 1
+    TEST_ASSERT_TRUE(sink.reqs[2].fertigate);
+
+    s.tick(121u * 60u * 1000u);                          // advance to cycle 1 (11:01)
+    TEST_ASSERT_EQUAL_INT(6, (int)sink.reqs.size());
+    TEST_ASSERT_FALSE(sink.reqs[3].fertigate);           // cycle 1 >= fertCount -> plain
+}
+
+// evalNow() re-entry within the same minute must NOT re-fire a cycle (cycle-index keyed).
+void test_dist_idempotent_across_evalnow() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.setDistributed(mkDist(540, 930, 32, 0));
+    s.tick(0);                                           // cycle 0 -> 3 runs
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());
+    s.evalNow(0);                                        // same minute re-eval (config edit)
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());     // NOT 6
+}
+
+// Either/or: when Distributed is enabled, entry-schedule entries are dormant.
+void test_dist_either_or_entry_dormant() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.add(mkEntry(2, 9, 0, DAILY, 999));                 // due at 09:00, distinct duration
+    s.setDistributed(mkDist(540, 930, 32, 0));           // enabled -> replaces the schedule
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());     // only the distributed runs
+    for (size_t i = 0; i < sink.reqs.size(); ++i)
+        TEST_ASSERT_EQUAL_UINT32(480, sink.reqs[i].durationSec);   // none is the 999-s entry
+}
+
+// A refused cycle counts every dropped zone run (§13 drop + count).
+void test_dist_dropped_counts() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink; sink.accept = false;
+    Scheduler s(sink, c, 3);
+    s.setDistributed(mkDist(540, 930, 32, 0));
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(0, (int)sink.reqs.size());
+    TEST_ASSERT_EQUAL_UINT32(3, s.dropped());
+}
+
+// Packed `dist` record survives a roundtrip.
+void test_dist_config_pack_roundtrip() {
+    DistributedConfig c = mkDist(540, 930, 32, 2);
+    uint8_t blob[DIST_CONFIG_BYTES];
+    packDistributedConfig(c, blob);
+    DistributedConfig r = unpackDistributedConfig(blob);
+    TEST_ASSERT_TRUE(r.enabled);
+    TEST_ASSERT_EQUAL_UINT16(540, r.windowStartMin);
+    TEST_ASSERT_EQUAL_UINT16(930, r.windowEndMin);
+    TEST_ASSERT_EQUAL_UINT16(32, r.perZoneMin);
+    TEST_ASSERT_EQUAL_UINT8(2, r.fertCount);
 }
 
 // --- Fertigation end-to-end (firmware spec §6 / #28) -----------------------------
@@ -3223,6 +3349,14 @@ int main() {
     RUN_TEST(test_sched_dropped_on_full_queue);
     RUN_TEST(test_sched_eval_now_on_edit);
     RUN_TEST(test_sched_add_capacity);
+    RUN_TEST(test_dist_plan_basic);
+    RUN_TEST(test_dist_plan_floor_and_cap);
+    RUN_TEST(test_dist_plan_oversubscribed_invalid);
+    RUN_TEST(test_dist_emits_cycle_all_zones_fert_first);
+    RUN_TEST(test_dist_idempotent_across_evalnow);
+    RUN_TEST(test_dist_either_or_entry_dormant);
+    RUN_TEST(test_dist_dropped_counts);
+    RUN_TEST(test_dist_config_pack_roundtrip);
 
     RUN_TEST(test_sched_rc_fert_routing);
 

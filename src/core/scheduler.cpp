@@ -2,7 +2,8 @@
 
 namespace tinkle {
 
-Scheduler::Scheduler(IRunSink& sink, Clock& clock) : sink_(sink), clock_(clock) {}
+Scheduler::Scheduler(IRunSink& sink, Clock& clock, uint8_t zoneCount)
+    : sink_(sink), clock_(clock), zoneCount_(zoneCount) {}
 
 bool Scheduler::add(const ScheduleEntry& e) {
     if (count_ >= MAX_ENTRIES) return false;
@@ -57,6 +58,14 @@ bool Scheduler::resolveFert(const ScheduleEntry& e, uint32_t dayOrdinal, bool& c
 void Scheduler::evaluate(uint32_t nowMs) {
     const WallTime w    = clock_.wall(nowMs);
     const uint32_t day  = clock_.epoch(nowMs) / 86400u;  // local calendar-day ordinal
+
+    // DEC-024: Distributed Watering replaces the entry schedule entirely (either/or). When
+    // it's on, the fixed-time entries are dormant — never both in the same minute.
+    if (dist_.enabled) {
+        evaluateDistributed(w.hour, w.minute, day, nowMs);
+        return;
+    }
+
     const uint8_t  dayBit = static_cast<uint8_t>(1u << w.weekday);
 
     for (uint8_t i = 0; i < count_; ++i) {
@@ -77,6 +86,95 @@ void Scheduler::evaluate(uint32_t nowMs) {
             ++dropped_;                       // queue full / faulted -> drop + count (§13)
         }
     }
+}
+
+// Derive the plan (DEC-024). Pure + host-tested; the Scheduler and the SPA both call this
+// so the preview never lies about what will actually fire. Invalid => nothing schedulable.
+DistributedPlan computeDistributedPlan(const DistributedConfig& cfg, uint8_t zoneCount) {
+    DistributedPlan p;                                   // valid=false, cycles=0
+    if (!cfg.enabled || zoneCount == 0)                  return p;
+    if (cfg.windowEndMin <= cfg.windowStartMin)          return p;
+    if (cfg.perZoneMin < DIST_RUN_FLOOR_MIN)             return p;
+
+    const uint16_t winMin = (uint16_t)(cfg.windowEndMin - cfg.windowStartMin);
+
+    // As many runs as fit above the floor, capped. Integer floor ⇒ every run ≥ the floor.
+    uint16_t runs = (uint16_t)(cfg.perZoneMin / DIST_RUN_FLOOR_MIN);   // ≥1 (perZoneMin ≥ floor)
+    if (runs > DIST_MAX_RUNS) runs = DIST_MAX_RUNS;
+
+    const uint16_t runLenSec = (uint16_t)((uint32_t)cfg.perZoneMin * 60u / runs);
+
+    // One cycle = all zones back-to-back + per-run overhead, rounded up to a whole minute
+    // (the firing grid is per-minute).
+    const uint32_t cycleSpanSec = (uint32_t)zoneCount * (runLenSec + DIST_RUN_OVERHEAD_SEC);
+    const uint16_t cycleSpanMin = (uint16_t)((cycleSpanSec + 59u) / 60u);
+
+    // Fit (bookended): all cycle spans must sit inside the window. Over-subscribed ⇒ invalid,
+    // and the Scheduler emits nothing (the SPA blocks the save before it ever gets here).
+    if ((uint32_t)runs * cycleSpanMin > winMin)          return p;
+
+    p.runLenSec = runLenSec;
+    p.cycles    = (uint8_t)runs;
+    if (runs == 1) {
+        p.cycleStartMin[0] = cfg.windowStartMin;
+    } else {
+        // Bookend: first cycle at the window start, last cycle ends at the window end. Even
+        // gap between starts; the fit check guarantees gap ≥ cycleSpanMin (no overlap).
+        const uint16_t gap = (uint16_t)((winMin - cycleSpanMin) / (runs - 1));
+        for (uint8_t i = 0; i < runs; ++i)
+            p.cycleStartMin[i] = (uint16_t)(cfg.windowStartMin + (uint32_t)i * gap);
+    }
+    p.valid = true;
+    return p;
+}
+
+void Scheduler::evaluateDistributed(uint8_t hour, uint8_t minute, uint32_t day, uint32_t nowMs) {
+    const DistributedPlan p = computeDistributedPlan(dist_, zoneCount_);
+    if (!p.valid) return;
+
+    if (distFiredDay_ != day) { distFiredDay_ = day; distFiredMask_ = 0; }   // new day resets
+
+    const uint16_t curMin = (uint16_t)(hour * 60 + minute);
+    for (uint8_t i = 0; i < p.cycles; ++i) {
+        if (p.cycleStartMin[i] != curMin)      continue;
+        if (distFiredMask_ & (1u << i))         continue;   // fired today already (evalNow-safe)
+
+        // Fire the whole cycle: one run per live zone, back-to-back. Fert rides the first
+        // fertCount cycles (whole-cycle — every zone in those cycles fertigates, so no
+        // per-zone imbalance). RunController queues them (depth = zoneCount, under MAX_QUEUE).
+        const bool fert = (i < dist_.fertCount);
+        for (uint8_t z = 0; z < zoneCount_; ++z) {
+            RunRequest req;
+            req.zoneIndex   = z;
+            req.durationSec = p.runLenSec;
+            req.fertigate   = fert;
+            if (!sink_.requestRun(req, nowMs)) ++dropped_;   // full/faulted -> drop + count (§13)
+        }
+        distFiredMask_ |= (uint8_t)(1u << i);   // mark on attempt: fire-once + evalNow-safe
+    }
+}
+
+void packDistributedConfig(const DistributedConfig& c, uint8_t out[DIST_CONFIG_BYTES]) {
+    out[0] = c.enabled ? 1 : 0;
+    out[1] = (uint8_t)(c.windowStartMin & 0xFF);       // u16 little-endian
+    out[2] = (uint8_t)(c.windowStartMin >> 8);
+    out[3] = (uint8_t)(c.windowEndMin & 0xFF);
+    out[4] = (uint8_t)(c.windowEndMin >> 8);
+    out[5] = (uint8_t)(c.perZoneMin & 0xFF);
+    out[6] = (uint8_t)(c.perZoneMin >> 8);
+    out[7] = c.fertCount;
+    out[8] = 0;                                        // reserved
+    out[9] = 0;
+}
+
+DistributedConfig unpackDistributedConfig(const uint8_t in[DIST_CONFIG_BYTES]) {
+    DistributedConfig c;
+    c.enabled        = in[0] != 0;
+    c.windowStartMin = (uint16_t)(in[1] | ((uint16_t)in[2] << 8));
+    c.windowEndMin   = (uint16_t)(in[3] | ((uint16_t)in[4] << 8));
+    c.perZoneMin     = (uint16_t)(in[5] | ((uint16_t)in[6] << 8));
+    c.fertCount      = in[7];
+    return c;
 }
 
 void packScheduleEntry(const ScheduleEntry& e, uint8_t out[SCHED_ENTRY_BYTES]) {
