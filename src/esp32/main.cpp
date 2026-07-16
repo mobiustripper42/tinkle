@@ -85,7 +85,7 @@ static Clock             wallClock(systemClock);
 // through RunController (the sole actuator commander), applying the §6 fert policy. The
 // schedule is empty until the web-config editor lands (Phase 4); with no clock yet (no WiFi
 // pre-Phase-4) tick() is a no-op regardless.
-static Scheduler         scheduler(runController, wallClock);
+static Scheduler         scheduler(runController, wallClock, ZONE_COUNT);   // count DW fires with
 
 // Flow monitoring (§7 / #34). The ISR-backed counter (flow_sensor.h) is the only hardware
 // touch; FlowMonitor turns its cumulative pulses into per-run gallons + a live GPM rate. K
@@ -181,6 +181,22 @@ void setup() {
         const uint8_t n = persistence.loadScheduleEntries(stored, Scheduler::MAX_ENTRIES);
         for (uint8_t i = 0; i < n; ++i) scheduler.add(stored[i]);
         if (n) Serial.printf("[tinkle] schedule: %u entries loaded\n", n);
+
+        // DEC-024: Distributed Watering config. When enabled it replaces the entry schedule
+        // (either/or); disabled by default, so this is a no-op on a controller that never set it.
+        const DistributedConfig dc = persistence.distributed();
+        scheduler.setDistributed(dc);
+        if (dc.enabled) {
+            if (scheduler.distributedActive())
+                Serial.printf("[tinkle] distributed watering: %u–%u min window, %u min/zone, fert %u\n",
+                              dc.windowStartMin, dc.windowEndMin, dc.perZoneMin, dc.fertCount);
+            else
+                // Enabled but not schedulable — the fixed schedule governs instead of a silent
+                // dry day. Loud so a corrupt/bad config is visible on the serial console.
+                Serial.printf("[tinkle] distributed watering ENABLED but INVALID "
+                              "(window %u–%u, %u min/zone) — NOT running; fixed schedule governs\n",
+                              dc.windowStartMin, dc.windowEndMin, dc.perZoneMin);
+        }
     }
 
     // Rehydrate the run-history ring from its NVS blob (DEC-018) before the loop can push a

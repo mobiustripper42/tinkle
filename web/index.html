@@ -84,6 +84,40 @@ nav .ico{display:block; font-size:1.3rem}
 .hist-row:last-child{border-bottom:none}
 .hist-when{font-weight:700}
 .hist-row.faulted .hist-when{color:var(--stop)}
+
+/* ---- Distributed Watering (DEC-024) ---- */
+.modeseg{display:flex; border:2px solid var(--ink); border-radius:.6rem; overflow:hidden; margin:.25rem 0 .5rem}
+.modeseg button{border:none; border-radius:0; margin:0; background:#fff; color:var(--dim); font-weight:700}
+.modeseg button+button{border-left:2px solid var(--ink)}
+.modeseg button.on{background:var(--ink); color:#fff}
+.modeseg .sub{display:block; font-size:.72rem; font-weight:600; opacity:.8}
+.moderun{display:flex; align-items:center; gap:.5rem; padding:.55rem .7rem; border-radius:.5rem; font-weight:700; margin:.25rem 0 .5rem; font-size:.92rem}
+.moderun.on{background:#eaf5ee; border:1px solid var(--go); color:var(--go)}
+.moderun.off{background:#f0f0ee; border:1px solid var(--line); color:var(--dim)}
+.plan{border-width:2px}
+.plan.ok{border-color:var(--go); background:#f2f8f4}
+.plan.warn{border-color:var(--warn); background:#fbf7ec}
+.plan.block{border-color:var(--stop); background:#fbeeee}
+.plan-head{display:flex; align-items:baseline; justify-content:space-between; gap:.5rem; margin-bottom:.3rem}
+.plan-title{font-weight:800; text-transform:uppercase; letter-spacing:.04em; font-size:.82rem}
+.pill{font-size:.72rem; font-weight:800; padding:.15rem .5rem; border-radius:1rem; text-transform:uppercase; letter-spacing:.03em; white-space:nowrap}
+.pill.ok{background:var(--go); color:#fff}
+.pill.warn{background:var(--warn); color:#fff}
+.pill.block{background:var(--stop); color:#fff}
+.plan-hero{font-size:1.1rem; font-weight:800; margin:.15rem 0 .3rem}
+.plan-hero b{font-size:2rem; font-variant-numeric:tabular-nums}
+.verdict{font-size:.85rem; font-weight:800; text-transform:uppercase; letter-spacing:.03em}
+.verdict.g{color:var(--go)} .verdict.w{color:var(--warn)} .verdict.e{color:var(--stop)} .verdict.i{color:var(--dim)}
+.chips{display:flex; flex-wrap:wrap; gap:.35rem; margin:.35rem 0 .1rem}
+.chip{font-variant-numeric:tabular-nums; font-weight:700; font-size:.85rem; padding:.28rem .55rem; border:1.5px solid var(--line); border-radius:.45rem; background:#fff; white-space:nowrap}
+.chip.fert{background:var(--ink); color:#fff; border-color:var(--ink)}
+.meter{height:.55rem; border-radius:1rem; background:#e6e6e3; overflow:hidden; margin:.35rem 0 .15rem}
+.meter>i{display:block; height:100%; background:var(--go); border-radius:1rem}
+.meter.block>i{background:var(--stop)}
+.issues{list-style:none; padding:0; margin:.4rem 0 0}
+.issues li{display:flex; gap:.45rem; align-items:flex-start; padding:.2rem 0; font-size:.9rem; font-weight:600}
+.issues li .mk{flex:0 0 auto; font-weight:800}
+.issues li.e{color:var(--stop)} .issues li.w{color:var(--warn)} .issues li.g{color:var(--go)} .issues li.i{color:var(--dim); font-weight:600}
 </style>
 </head>
 <body>
@@ -134,17 +168,62 @@ nav .ico{display:block; font-size:1.3rem}
 
 <!-- 3 · Schedule -->
 <section id="scr-sched" class="screen">
-  <h1>Schedule</h1>
-  <div id="sched-list"></div>
-  <button id="sched-add">+ Add entry</button>
-  <button class="go" id="sched-save">SAVE SCHEDULE</button>
-  <div class="dirtybar" id="sched-dirtybar">
-    <span class="dirty-tag">&#9679; Unsaved changes</span>
-    <button class="small shrink" id="sched-discard">Discard</button>
+  <h1>Watering</h1>
+  <div class="modeseg" role="tablist" aria-label="Watering mode">
+    <button id="wtab-sched" role="tab" aria-selected="true" aria-controls="wpane-sched" class="on">Schedule<span class="sub">fixed times</span></button>
+    <button id="wtab-dist"  role="tab" aria-selected="false" aria-controls="wpane-dist">Distributed<span class="sub">even spread</span></button>
   </div>
-  <div id="sched-msg" class="muted" role="status"></div>
-  <p class="muted">Saving replaces the whole schedule on the controller. The schedule
-  runs from the controller's flash — phone and WiFi not required.</p>
+
+  <!-- Schedule (fixed-time entries) -->
+  <div id="wpane-sched" role="tabpanel">
+    <div id="dist-off-banner" class="moderun off" style="display:none">
+      <span>&#9679;</span><span>Distributed Watering is running — the schedule is off.</span></div>
+    <div id="sched-list"></div>
+    <button id="sched-add">+ Add entry</button>
+    <button class="go" id="sched-save">SAVE SCHEDULE</button>
+    <div class="dirtybar" id="sched-dirtybar">
+      <span class="dirty-tag">&#9679; Unsaved changes</span>
+      <button class="small shrink" id="sched-discard">Discard</button>
+    </div>
+    <div id="sched-msg" class="muted" role="status"></div>
+    <p class="muted">Saving replaces the whole schedule on the controller. The schedule
+    runs from the controller's flash — phone and WiFi not required.</p>
+  </div>
+
+  <!-- Distributed Watering (DEC-024) -->
+  <div id="wpane-dist" role="tabpanel" style="display:none">
+    <div id="dist-run-banner" class="moderun off"><span>&#9711;</span><span>Distributed Watering is off — the schedule is running.</span></div>
+    <label class="row"><input id="d-enabled" type="checkbox" class="shrink">
+      <span><b>Run Distributed Watering</b> — spread the day's water evenly across a window.</span></label>
+    <div class="row">
+      <div><label for="d-start">Window start</label><input id="d-start" type="time" value="09:00"></div>
+      <div><label for="d-end">Window end</label><input id="d-end" type="time" value="15:30"></div>
+    </div>
+    <label for="d-min">Water per zone (minutes / day)</label>
+    <input id="d-min" type="number" inputmode="numeric" min="0" max="240" value="32">
+    <p class="muted">Split into 7-minute-or-longer runs, up to 6/day. Every zone gets this same total.</p>
+    <label for="d-fert">Fertigate the first…</label>
+    <select id="d-fert">
+      <option value="0">Off — plain water all day</option>
+      <option value="1">1 watering</option>
+      <option value="2">2 waterings</option>
+      <option value="3">3 waterings</option>
+      <option value="4">4 waterings</option>
+      <option value="5">5 waterings</option>
+      <option value="6">6 waterings</option>
+    </select>
+    <p class="muted">Fertilizer goes down first; plain water flushes the lines for the rest
+    of the day. Every zone gets fert on those waterings.</p>
+    <div id="d-plan" class="card plan ok" aria-live="polite"></div>
+    <button class="go" id="d-save">SAVE PLAN</button>
+    <div class="dirtybar" id="d-dirtybar">
+      <span class="dirty-tag">&#9679; Unsaved changes</span>
+      <button class="small shrink" id="d-discard">Discard</button>
+    </div>
+    <div id="d-msg" class="muted" role="status"></div>
+    <p class="muted">Saving replaces the plan on the controller. It runs from flash —
+    phone and WiFi not required once saved.</p>
+  </div>
 </section>
 
 <!-- 4 · Settings -->
@@ -453,17 +532,20 @@ function show(name) {
   // STOP ALL belongs where actuation happens — hide it on the config screens (#81).
   $('#stopall').style.display = (name === 'sched' || name === 'set') ? 'none' : '';
   current = name;
-  if (name === 'sched' && !schedDirty) loadSchedule();      // never clobber edits
+  if (name === 'sched') {                                    // never clobber edits
+    if (!schedDirty) loadSchedule();
+    if (!distDirty)  loadDistributed();
+  }
   if ((name === 'set' || name === 'run') && !setDirty) loadSettings();
   if (name === 'history') loadHistory();                    // lazy fetch on open (not polled)
 }
 // Guard a tab switch that would abandon unsaved Schedule/Settings edits (#82). OK reverts the
 // leaving screen in place from its cached device copy (offline-safe — no fetch dependency).
 function requestShow(name) {
-  const dirty = (current === 'sched' && schedDirty) || (current === 'set' && setDirty);
+  const dirty = (current === 'sched' && (schedDirty || distDirty)) || (current === 'set' && setDirty);
   if (dirty && name !== current) {
     if (!confirm('Discard unsaved changes?')) return;       // Cancel — stay put
-    if (current === 'sched') discardSched();                // revert in place (offline-safe)
+    if (current === 'sched') { discardSched(); discardDist(); }   // revert in place (offline-safe)
     if (current === 'set')   discardSettings();
   }
   show(name);
@@ -592,6 +674,155 @@ $('#sched-save').addEventListener('click', async () => {
   if (r.ok) { schedSetDirty(false); schedSaved = clone(sched); }   // saved copy is now the device copy
   flash('#sched-msg', r.ok ? 'Saved ' + r.count + ' entries.'
                            : 'Refused: ' + (r.error || r.code), r.ok);
+});
+
+/* ---- distributed watering (DEC-024) ---- */
+let distDirty = false;
+let distSaved = null;                          // last device-known config, for Discard
+let distEnv = { floorMin:7, maxRuns:6, overheadSec:25, zoneCount:3 };   // refreshed from GET
+let distActive = false;                        // is Distributed the running mode?
+const DIST_GPM = 1.45;                          // nominal per-zone flow for the gal/day guide (estimate)
+const DIST_LO = 110, DIST_HI = 140, DIST_CATCH = 2530;
+function distSetDirty(v){ distDirty = v; $('#d-dirtybar').classList.toggle('show', v); }
+const pad2 = n => String(n).padStart(2,'0');
+
+function setWMode(which){
+  const isSched = which === 'sched';
+  $('#wtab-sched').classList.toggle('on', isSched);
+  $('#wtab-dist').classList.toggle('on', !isSched);
+  $('#wtab-sched').setAttribute('aria-selected', isSched);
+  $('#wtab-dist').setAttribute('aria-selected', !isSched);
+  $('#wpane-sched').style.display = isSched ? '' : 'none';
+  $('#wpane-dist').style.display  = isSched ? 'none' : '';
+}
+$('#wtab-sched').addEventListener('click', () => setWMode('sched'));
+$('#wtab-dist').addEventListener('click',  () => setWMode('dist'));
+
+function snapshotDist(){
+  return { enabled:$('#d-enabled').checked, start:$('#d-start').value, end:$('#d-end').value,
+           min:$('#d-min').value, fert:$('#d-fert').value };
+}
+function updateDistBanners(){
+  $('#dist-off-banner').style.display = distActive ? '' : 'none';
+  const rb = $('#dist-run-banner');
+  rb.className = 'moderun ' + (distActive ? 'on' : 'off');
+  rb.innerHTML = distActive
+    ? '<span>&#9679;</span><span>Distributed Watering is running the tunnel.</span>'
+    : '<span>&#9711;</span><span>Distributed Watering is off — the schedule is running.</span>';
+}
+async function loadDistributed(){
+  const r = await api('/api/distributed');
+  if (!r.ok) return;
+  distEnv = { floorMin:r.floorMin||7, maxRuns:r.maxRuns||6, overheadSec:r.overheadSec||25, zoneCount:r.zoneCount||3 };
+  distActive = !!r.active;
+  $('#d-enabled').checked = !!r.enabled;
+  if (r.enabled){
+    $('#d-start').value = pad2(Math.floor(r.windowStartMin/60)) + ':' + pad2(r.windowStartMin%60);
+    $('#d-end').value   = pad2(Math.floor(r.windowEndMin/60))   + ':' + pad2(r.windowEndMin%60);
+    $('#d-min').value   = r.perZoneMin;
+    $('#d-fert').value  = r.fertCount;
+  }
+  distSaved = snapshotDist();
+  distSetDirty(false);
+  updateDistBanners();
+  renderDistPreview();
+}
+
+// Mirrors the firmware computeDistributedPlan (scheduler.cpp) exactly so the preview never
+// lies: same 7-min floor / 6-run cap, same ceil cycle-span + overhead, same bookend spacing
+// and over-subscription fit check. The gal/day guideline is UI-only (firmware doesn't judge it).
+function computeDistPlan(){
+  const [sh,sm] = $('#d-start').value.split(':').map(Number);
+  const [eh,em] = $('#d-end').value.split(':').map(Number);
+  const winStart = sh*60+sm, winEnd = eh*60+em;
+  const perZone = Math.max(0, +$('#d-min').value || 0);
+  const fertReq = +$('#d-fert').value || 0;
+  const F = distEnv.floorMin, MR = distEnv.maxRuns, OV = distEnv.overheadSec, Z = distEnv.zoneCount;
+  const issues = []; let sev = 'ok';
+  const bump = s => { if (s==='block' || (s==='warn' && sev==='ok')) sev = s; };
+
+  if (winEnd <= winStart){ issues.push(['e','End time must be after start time.']); return {sev:'block',issues,schedulable:false}; }
+  if (perZone < F){ issues.push(['e',`Water per zone must be at least ${F} min (one run's floor).`]); return {sev:'block',issues,schedulable:false}; }
+  if (perZone > 1440){ issues.push(['e','Water per zone can’t exceed 1440 min (a day).']); return {sev:'block',issues,schedulable:false}; }
+  const winMin = winEnd - winStart;
+  let runs = Math.min(MR, Math.floor(perZone / F));
+  const runLenSec = Math.floor(perZone * 60 / runs);
+  if (Math.floor(perZone / F) > MR){ issues.push(['w',`Capped at ${MR} runs/day — each run is longer (${(runLenSec/60).toFixed(1)} min) than ideal.`]); bump('warn'); }
+  const cycleSpanMin = Math.ceil(Z * (runLenSec + OV) / 60);
+  const schedulable = runs * cycleSpanMin <= winMin;
+  const gap  = runs > 1 ? Math.floor((winMin - cycleSpanMin) / (runs - 1)) : 0;
+  const soak = gap - cycleSpanMin;
+  if (!schedulable){ issues.push(['e',`Won't fit: needs ${runs*cycleSpanMin} min of runs in a ${winMin}-min window. Widen the window or lower the minutes.`]); bump('block'); }
+  else if (runs > 1) issues.push(['g',`Each bed rests ~${soak} min between its runs.`]);
+  else issues.push(['g','One run/zone per day — no repeat cycle.']);
+
+  const galDay = Math.round(perZone * Z * DIST_GPM);
+  const BLOCK  = DIST_CATCH * 0.25;
+  let verdict;
+  if (galDay > BLOCK){ verdict = (galDay/DIST_HI).toFixed(1)+'× guide'; issues.push(['e',`~${galDay} gal/day is over 25% of the ${DIST_CATCH}-gal tank in one day. Won't save — lower the minutes or widen the window.`]); bump('block'); }
+  else if (galDay > DIST_HI){ verdict = (galDay/DIST_HI).toFixed(1)+'× guide'; issues.push(['i',`~${galDay} gal/day is above the ${DIST_LO}–${DIST_HI} gal summer guideline — fine in hot weather.`]); }
+  else if (galDay < DIST_LO){ verdict = 'below guide'; issues.push(['i',`~${galDay} gal/day is below the ${DIST_LO}–${DIST_HI} gal summer guideline — normal for cool or early-season watering.`]); }
+  else verdict = 'in guide';
+
+  const fertN = Math.min(fertReq, runs);
+  if (fertReq > runs && runs > 0){ issues.push(['w',`Only ${runs} watering${runs>1?'s':''}/day — fertigating all of them.`]); bump('warn'); }
+  const times = [];
+  if (schedulable) for (let i=0;i<runs;i++){ const m = winStart + i*gap; times.push(pad2(Math.floor(m/60)%24)+':'+pad2(m%60)); }
+  return {sev,issues,schedulable,runs,runLenSec,galDay,verdict,fertN,times,BLOCK,meterPct:Math.min(1,galDay/BLOCK)};
+}
+
+function renderDistPreview(){
+  const el = $('#d-plan');
+  if (!$('#d-enabled').checked){
+    el.className = 'card plan warn';
+    el.innerHTML = `<div class="plan-head"><span class="plan-title">Plan preview</span><span class="pill warn">Off</span></div>
+      <div class="muted">Distributed Watering is switched off — the fixed schedule runs. Turn on <b>Run Distributed Watering</b> to use this.</div>`;
+    $('#d-save').disabled = false; return;
+  }
+  const p = computeDistPlan();
+  el.className = 'card plan ' + p.sev;
+  const pill = p.sev==='ok' ? '<span class="pill ok">Ready</span>'
+            : p.sev==='warn' ? '<span class="pill warn">Check</span>'
+            : '<span class="pill block">Won’t save</span>';
+  let body = `<div class="plan-head"><span class="plan-title">Plan preview</span>${pill}</div>`;
+  if (p.schedulable){
+    const vcls = p.verdict==='in guide' ? 'g' : (p.sev==='block' ? 'e' : 'i');
+    body += `<div class="plan-hero">~<b>${p.galDay}</b> gal/day &nbsp;<span class="verdict ${vcls}">${p.verdict}</span></div>`;
+    body += `<div class="muted" style="margin:-.25rem 0 .4rem">${p.runs} run${p.runs>1?'s':''}/zone &times; ${(p.runLenSec/60).toFixed(1)} min, every zone.</div>`;
+    const mcls = p.galDay>p.BLOCK ? 'block' : 'ok';
+    body += `<div class="meter ${mcls}"><i style="width:${Math.round(p.meterPct*100)}%"></i></div>
+      <div class="kv"><span>Summer guideline ${DIST_LO}–${DIST_HI} gal/day</span><span>${p.verdict}</span></div>`;
+    body += `<div class="chips">` + p.times.map((t,i)=>{ const f=i<p.fertN; return `<span class="chip${f?' fert':''}">${t}${f?' &middot; fert':''}</span>`; }).join('') + `</div>`;
+    body += `<div class="muted" style="margin-top:.15rem">Each time waters Zone 1 &rarr; 2 &rarr; 3 in a row.${p.fertN?' Filled = fertigated.':' Plain water all day.'}</div>`;
+  }
+  if (p.issues.length){
+    body += `<ul class="issues">` + p.issues.map(([k,t])=>{ const mk = k==='e'?'✕':k==='w'?'⚠':k==='i'?'ℹ':'✓'; return `<li class="${k}"><span class="mk">${mk}</span><span>${t}</span></li>`; }).join('') + `</ul>`;
+  }
+  el.innerHTML = body;
+  $('#d-save').disabled = (p.sev === 'block');
+}
+
+['#d-start','#d-end','#d-min'].forEach(s => $(s).addEventListener('input',  () => { distSetDirty(true); renderDistPreview(); }));
+['#d-fert','#d-enabled'].forEach(s => $(s).addEventListener('change', () => { distSetDirty(true); renderDistPreview(); }));
+function discardDist(){
+  if (!distSaved) return;
+  $('#d-enabled').checked = distSaved.enabled; $('#d-start').value = distSaved.start;
+  $('#d-end').value = distSaved.end; $('#d-min').value = distSaved.min; $('#d-fert').value = distSaved.fert;
+  distSetDirty(false); renderDistPreview();
+}
+$('#d-discard').addEventListener('click', discardDist);
+$('#d-save').addEventListener('click', async () => {
+  const en = $('#d-enabled').checked;
+  const [sh,sm] = $('#d-start').value.split(':').map(Number);
+  const [eh,em] = $('#d-end').value.split(':').map(Number);
+  const body = en ? { enabled:true, windowStartMin:sh*60+sm, windowEndMin:eh*60+em,
+                      perZoneMin:Math.max(0,+$('#d-min').value||0), fertCount:+$('#d-fert').value||0 }
+                  : { enabled:false };
+  const r = await api('/api/distributed', body);
+  if (r.ok){ distSetDirty(false); distSaved = snapshotDist(); distActive = !!r.active; updateDistBanners(); }
+  flash('#d-msg', r.ok ? (r.active ? 'Saved — Distributed Watering is running.'
+                                   : (en ? 'Saved.' : 'Saved — the schedule runs now.'))
+                       : 'Refused: ' + (r.error || r.code), r.ok);
 });
 
 /* ---- settings ---- */
@@ -738,6 +969,17 @@ function flash(sel, msg, ok) {
 
 /* ---- mock API for UI development (?mock=1 / file://) ---- */
 let M;
+// Mirror the firmware computeDistributedPlan validity for the mock's active/reject paths.
+function mockDistValid(c){
+  if (!c.enabled) return false;
+  if (c.windowStartMin >= 1440 || c.windowEndMin > 1440 || c.windowEndMin <= c.windowStartMin) return false;
+  if (c.perZoneMin < 7 || c.perZoneMin > 1440) return false;
+  const win = c.windowEndMin - c.windowStartMin;
+  const runs = Math.min(6, Math.floor(c.perZoneMin / 7));
+  const runLenSec = Math.floor(c.perZoneMin * 60 / runs);
+  const span = Math.ceil(3 * (runLenSec + 25) / 60);
+  return runs * span <= win;
+}
 function mock(path, body) {
   if (!M) M = {
     state:'idle', zone:-1, until:0, fault:'none',
@@ -751,7 +993,8 @@ function mock(path, body) {
       { startEpoch:0,          clockWasValid:false, zone:2, durationSec:120, gallons:2.00,  fertigate:false, result:'stopped',   fault:'none' }
     ],
     set:{ zoneDefaults:[600,600,600], swMaxRuntimeSec:1200, pulsesPerGallon:450,
-          flowOverride:false, wifi:{ ssid:'mock-net', configured:true } }
+          flowOverride:false, wifi:{ ssid:'mock-net', configured:true } },
+    dist:{ enabled:false, windowStartMin:540, windowEndMin:930, perZoneMin:32, fertCount:1 }
   };
   const now = Date.now();
   if (M.state === 'running' && now > M.until) { M.state = 'idle'; M.zone = -1; }
@@ -784,6 +1027,17 @@ function mock(path, body) {
       M.entries = body.entries;
       return { ok:true, code:200, saved:true, count:body.entries.length }; }
     return { ok:true, code:200, entries:M.entries, max:16, dropped:0 }; }
+  if (path === '/api/distributed') {
+    if (body) {
+      const c = { enabled:!!body.enabled, windowStartMin:body.windowStartMin|0,
+                  windowEndMin:body.windowEndMin|0, perZoneMin:body.perZoneMin|0, fertCount:body.fertCount|0 };
+      if (c.enabled && !mockDistValid(c)) return e422('not schedulable (check window, minutes, floor)');
+      M.dist = c;
+      return { ok:true, code:200, saved:true, enabled:c.enabled, active: mockDistValid(c) }; }
+    const d = M.dist;
+    return { ok:true, code:200, enabled:d.enabled, windowStartMin:d.windowStartMin,
+             windowEndMin:d.windowEndMin, perZoneMin:d.perZoneMin, fertCount:d.fertCount,
+             active: mockDistValid(d), floorMin:7, maxRuns:6, overheadSec:25, zoneCount:3 }; }
   if (path === '/api/settings') {
     if (body) {
       if (body.swMaxRuntimeSec !== undefined &&

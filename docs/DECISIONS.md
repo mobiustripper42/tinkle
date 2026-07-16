@@ -647,3 +647,67 @@ up as a pattern in History, not as silence.
 **Status:** Decided (field-driven). Amends §4 step 2, §9, §14, §15, §17. Supersedes the latch
 behavior of #48/#49; the DEC-016 host-test discipline carries over (new tests for qualification,
 abort-preserves-queue, hold-then-proceed, stuck-line skip).
+
+## DEC-024: Distributed Watering — day-level even-spread irrigation via Scheduler emission (supersedes #136 cycle-and-soak)
+**Decision:** Add **Distributed Watering**, a mutually-exclusive alternative to the fixed-time
+entry schedule (either the schedule runs, or Distributed Watering runs — never both). The operator
+sets a daily **window** (start/end), a **per-zone daily water budget** (minutes), and a **fert
+count** (fertigate the first N waterings). The Scheduler derives a run count from a fixed per-run
+floor, computes evenly-spaced cycle boundaries across the window, and at each boundary emits one
+run per zone (queue depth 3, under `MAX_QUEUE=4`). Each bed soaks between its runs while the other
+zones water — **the rotation is the soak**, so no `RunController` sub-state is added.
+
+Fert is quantized to **whole cycles** (each of the first N boundaries fertigates all three zones),
+which structurally avoids a per-zone fertilizer imbalance. Config lives in **one packed NVS record
+under its own key**, alongside the schedule blob; `ScheduleEntry` is untouched and `SCHEMA_VER`
+stays 1 (DEC-008 additive rule). **Zero diff** to the watchdog, heartbeat, and pump-gate paths.
+
+**Firmware run floor + cap (agronomic, operator research 2026-07-16):** each run is **≥ 7 min**
+(hard firmware floor) and **≤ 6 runs/day** — "distributed constancy," not micropulse. Even spacing
+pins low run counts to the window edges (2 runs → one near start, one near end); the operator tunes
+placement by narrowing the window (the bookend pattern is intended, not a bug).
+
+**Daily-water guideline (softened):** the plan preview shows projected gal/day against a
+**summer guideline band (110–140)**, hardcoded for now and rendered as an **informational note,
+never a block** — a fixed band is wrong most of the year in both directions, so it must not cry
+wolf on a correct early-spring setting. Making the band seasonal is deferred to #139. The **only
+hard stop** is a safety ceiling at **25 % of catchment/day** (~632 gal), which blocks the save.
+
+**Why:** infiltration on compacted tunnel beds without a `Soak` sub-state, without touching the
+ATtiny arm/de-arm path, and without the cumulative-vs-per-pulse `swMaxRuntimeSec` ambiguity a
+`RunController`-internal soak would force. Distributed Watering is a tunnel-level *mode*, not a list
+of entries: 8 cycles × 3 zones = 24 runs exceeds `MAX_ENTRIES=16`, so the entry list cannot express
+it at all — one config record is forced, not merely preferred.
+
+**Alternatives rejected:**
+- **RunController-internal `Soak` state (#136 cycle-and-soak):** superseded. Redundant once the
+  rotation supplies the gap; would add a state, hold a zone FET energized across every soak, and
+  require new heartbeat/flow-check reasoning for no gain. The operator's own agronomic research
+  ("distributed constancy, not a micropulse generator; hard-floor 7 min") independently rejects it.
+- **Pulse spec on `ScheduleEntry`:** impossible (24 > `MAX_ENTRIES=16`) and would force a format
+  bump on a live packed record.
+- **Fert pinned to window start / global minute budget:** a budget that isn't a whole multiple of
+  the cycle gives some zones fert others don't get, every day. Whole-cycle quantization fixes it.
+- **Hard-blocking the 110–140 band:** rejected — a fixed peak-season band nags correct spring/fall
+  settings. Guideline is informational; the catchment ceiling is the only block.
+
+**Consequences / envelope:** IDLE entries rise ~3/day → 4–8/day; pump starts ~9/day → ~24/day
+(duty confirmed by operator). DEC-014 `ValveRestMonitor` fires more often (log-only, but churns the
+fault ring — another reason E2 must be fixed first). Worst-case daily draw is bounded by the
+25 %-catchment block. **The day becomes a single point of failure:** any *latching* fault mid-window
+costs the rest of the day's water, where the 3-block schedule banked early water — this is the real
+cost of the trade and the reason the E2 gate below is a hard prerequisite.
+
+**E2 latch preserved (consistency with DEC-023):** `FAULT_UNEXPECTED_FLOW` keeps its latch — a
+stuck valve with a live pump must still fail stopped, and DEC-023 exempted only the watchdog
+because the relay was already its backstop; nothing backstops E2. But today's idle-flow detector
+false-positives on normal draindown (threshold ~0.36 GPM inside a decay tail the 60 s `DrainGate`
+cap doesn't outlast), which at 4–8 IDLE entries/day would latch out ~a day of water essentially
+every day. **Distributed Watering is therefore gated on the E2 discriminator fix** (make the
+detector discriminate persistent flow from draindown decay — keeping the latch and the fail-dry
+direction, killing only the false positive). See the E2 tracking issue + #138.
+
+**Status:** Decided (design; architect-reviewed 2026-07-16, mock approved). **Blocked on the E2
+discriminator** before any watering ships. Adds §-TBD to the firmware spec at build time. Milestones:
+E2 discriminator + #138 (gate) → Distributed Watering core (Scheduler emission + config + fert
+quantization + validation) → SPA editor. Seasonal guideline is #139 (deferred).
