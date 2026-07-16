@@ -9,6 +9,7 @@
 #include "persistence.h"
 #include "clock.h"
 #include "scheduler.h"
+#include "nightly_reboot.h"
 #include "flow_monitor.h"
 #include "flow_fault_detector.h"
 #include "calibration_controller.h"
@@ -1205,6 +1206,39 @@ void test_sched_add_capacity() {
     TEST_ASSERT_EQUAL_UINT8(Scheduler::MAX_ENTRIES, s.count());
     s.clear();
     TEST_ASSERT_EQUAL_UINT8(0, s.count());
+}
+
+// --- Nightly reboot (field reliability) --------------------------------------------
+using tinkle::NightlyReboot;
+static constexpr uint32_t UP_3H = 3u * 3600u * 1000u;   // > the 2 h min-uptime guard
+
+// Fires exactly once when idle inside the post-midnight window; not again the same day.
+void test_nightly_reboot_fires_once_when_idle() {
+    NightlyReboot nr;
+    TEST_ASSERT_TRUE(nr.due(100, 30, UP_3H, true, true));    // day 100, 00:30, idle -> reboot
+    TEST_ASSERT_FALSE(nr.due(100, 31, UP_3H, true, true));   // same day -> not again
+}
+
+// Busy at midnight: defers, then fires at the first idle tick still inside the window.
+void test_nightly_reboot_defers_while_busy() {
+    NightlyReboot nr;
+    TEST_ASSERT_FALSE(nr.due(100, 5, UP_3H, true, false));   // 00:05 but a run is active
+    TEST_ASSERT_TRUE(nr.due(100, 20, UP_3H, true, true));    // 00:20 idle, still in window -> reboot
+}
+
+// Guards: outside the window, fresh boot (loop guard), and no clock all suppress it.
+void test_nightly_reboot_guards() {
+    NightlyReboot nr;
+    TEST_ASSERT_FALSE(nr.due(100, 61, UP_3H, true, true));            // past the 60-min window
+    TEST_ASSERT_FALSE(nr.due(100, 10, 60u * 1000u, true, true));      // uptime 1 min < 2 h (no loop)
+    TEST_ASSERT_FALSE(nr.due(100, 10, UP_3H, false, true));           // clock invalid
+}
+
+// The busy-all-window case skips the night; the next day still reboots.
+void test_nightly_reboot_next_day_after_skip() {
+    NightlyReboot nr;
+    TEST_ASSERT_FALSE(nr.due(100, 30, UP_3H, true, false));  // busy the whole window -> skipped
+    TEST_ASSERT_TRUE(nr.due(101, 0, UP_3H, true, true));     // next day, idle -> reboot
 }
 
 // --- Fertigation end-to-end (firmware spec §6 / #28) -----------------------------
@@ -3183,6 +3217,10 @@ int main() {
     RUN_TEST(test_sched_dropped_on_full_queue);
     RUN_TEST(test_sched_eval_now_on_edit);
     RUN_TEST(test_sched_add_capacity);
+    RUN_TEST(test_nightly_reboot_fires_once_when_idle);
+    RUN_TEST(test_nightly_reboot_defers_while_busy);
+    RUN_TEST(test_nightly_reboot_guards);
+    RUN_TEST(test_nightly_reboot_next_day_after_skip);
 
     RUN_TEST(test_sched_rc_fert_routing);
 

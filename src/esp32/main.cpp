@@ -7,6 +7,7 @@
 #include "../core/persistence.h"
 #include "../core/clock.h"
 #include "../core/scheduler.h"
+#include "../core/nightly_reboot.h"
 #include "../core/flow_monitor.h"
 #include "../core/flow_fault_detector.h"
 #include "../core/calibration_controller.h"
@@ -86,6 +87,7 @@ static Clock             wallClock(systemClock);
 // schedule is empty until the web-config editor lands (Phase 4); with no clock yet (no WiFi
 // pre-Phase-4) tick() is a no-op regardless.
 static Scheduler         scheduler(runController, wallClock);
+static NightlyReboot     nightlyReboot;   // field-reliability nightly power-cycle (idle-gated)
 
 // Flow monitoring (§7 / #34). The ISR-backed counter (flow_sensor.h) is the only hardware
 // touch; FlowMonitor turns its cumulative pulses into per-run gallons + a live GPM rate. K
@@ -416,6 +418,25 @@ void loop() {
         Serial.println("[tinkle] OTA flashed — rebooting into the new image");
         Serial.flush();
         ESP.restart();
+    }
+
+    // Nightly self-reboot (field reliability): once per day just after local midnight, only
+    // when safely idle. Clears WiFi/heap stalls that build up over uptime. Skips the night if
+    // busy the whole window — never interrupts a run. Fail-dry holds: idle => heartbeat already
+    // parked, relay de-armed, so the reboot just extends pump-unpowered into the next boot.
+    {
+        const bool safe = runController.isIdle() && runController.queueDepth() == 0
+                          && !runController.isFaulted() && !runController.otaActive();
+        const WallTime wt = wallClock.wall(now);
+        const uint16_t minOfDay = (uint16_t)(wt.hour * 60 + wt.minute);
+        const uint32_t dayOrd   = wallClock.epoch(now) / 86400u;
+        if (nightlyReboot.due(dayOrd, minOfDay, now, wallClock.valid(), safe)) {
+            Serial.println("[tinkle] nightly reboot (idle, post-midnight)");
+            if (runController.runLogDirty()) persistence.saveRunLog(runController.runLog());
+            if (faultManager.dirty())        persistence.saveFaultLog(faultManager);
+            Serial.flush();
+            ESP.restart();
+        }
     }
 
     // micros() subtraction wraps cleanly across the ~71 min rollover.
