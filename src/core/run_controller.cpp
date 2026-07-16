@@ -115,9 +115,13 @@ void RunController::raiseFault(Fault code, uint32_t nowMs) {
     valve_.safeState(nowMs);                        // pump off -> zones de-energized -> diverter plain
     fault_ = code;
     qHead_ = qCount_ = 0;
-    // Faulted runs land in the ring too (DEC-018) — unless the run was ALREADY
-    // logged at Settle entry (a fault in the dwell would double-log it).
-    if (state_ != RunState::Settle) logRun(RunResult::Faulted, fault_);
+    // Faulted runs land in the ring too (DEC-018) — unless the run was ALREADY logged at
+    // Settle entry (a fault in the dwell would double-log it), OR there is no run in flight.
+    // An idle-time fault (e.g. UnexpectedFlow raised from IDLE) leaves current_ /
+    // pendingCentigallons_ still holding the PREVIOUS run, so logging here would push a
+    // phantom Faulted duplicate of it (#138). Idle has nothing to log.
+    if (state_ != RunState::Settle && state_ != RunState::Idle)
+        logRun(RunResult::Faulted, fault_);
     state_ = RunState::Fault;
     stateStartMs_ = nowMs;
 }
