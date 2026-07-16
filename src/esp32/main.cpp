@@ -405,6 +405,31 @@ void loop() {
     // by construction, so there is no hold-state to cache — RunController sets the legs
     // per-run in PREP_DIVERTER, DEC-013.)
 
+    // Nightly self-reboot (field reliability): once per day just after local midnight, only
+    // when safely idle. Clears WiFi/heap stalls that build up over uptime. Skips the night if
+    // busy the whole window — never interrupts a run. Fail-dry holds: idle => heartbeat already
+    // parked, relay de-armed, so the reboot just extends pump-unpowered into the next boot.
+    // INSIDE the lock: reads live RunController state, which the async HTTP task also mutates
+    // (POST /api/run starts a run synchronously) — a lock-free read could power-cycle a run
+    // starting in the same tick, the one thing this must never do. A faulted device is excluded
+    // (a reboot would silently clear the latched fault the operator needs to see) — the tradeoff
+    // is that the box most needing a WiFi/heap reset is the one that doesn't get it.
+    {
+        const bool safe = runController.isIdle() && runController.queueDepth() == 0
+                          && !runController.isFaulted() && !runController.otaActive()
+                          && !calibration.active();   // don't discard an in-progress bucket test
+        const WallTime wt = wallClock.wall(now);
+        const uint16_t minOfDay = (uint16_t)(wt.hour * 60 + wt.minute);
+        const uint32_t dayOrd   = wallClock.epoch(now) / 86400u;
+        if (nightlyReboot.due(dayOrd, minOfDay, now, wallClock.valid(), safe)) {
+            Serial.println("[tinkle] nightly reboot (idle, post-midnight)");
+            if (runController.runLogDirty()) persistence.saveRunLog(runController.runLog());
+            if (faultManager.dirty())        persistence.saveFaultLog(faultManager);
+            Serial.flush();
+            ESP.restart();
+        }
+    }
+
     // Core-state section over — let any waiting HTTP handler in. The async server
     // needs no tick; WiFi is watched at the top of the pass.
     webServer.unlock();
@@ -418,25 +443,6 @@ void loop() {
         Serial.println("[tinkle] OTA flashed — rebooting into the new image");
         Serial.flush();
         ESP.restart();
-    }
-
-    // Nightly self-reboot (field reliability): once per day just after local midnight, only
-    // when safely idle. Clears WiFi/heap stalls that build up over uptime. Skips the night if
-    // busy the whole window — never interrupts a run. Fail-dry holds: idle => heartbeat already
-    // parked, relay de-armed, so the reboot just extends pump-unpowered into the next boot.
-    {
-        const bool safe = runController.isIdle() && runController.queueDepth() == 0
-                          && !runController.isFaulted() && !runController.otaActive();
-        const WallTime wt = wallClock.wall(now);
-        const uint16_t minOfDay = (uint16_t)(wt.hour * 60 + wt.minute);
-        const uint32_t dayOrd   = wallClock.epoch(now) / 86400u;
-        if (nightlyReboot.due(dayOrd, minOfDay, now, wallClock.valid(), safe)) {
-            Serial.println("[tinkle] nightly reboot (idle, post-midnight)");
-            if (runController.runLogDirty()) persistence.saveRunLog(runController.runLog());
-            if (faultManager.dirty())        persistence.saveFaultLog(faultManager);
-            Serial.flush();
-            ESP.restart();
-        }
     }
 
     // micros() subtraction wraps cleanly across the ~71 min rollover.
