@@ -14,6 +14,7 @@ static constexpr const char* KEY_PASS    = "wifi_pass";   //  9
 static constexpr const char* KEY_SCHED   = "sched";       //  5  packed schedule blob (#56)
 static constexpr const char* KEY_RUNLOG  = "runlog";      //  6  packed run-history blob (DEC-018)
 static constexpr const char* KEY_FAULTLOG = "faultlog";   //  8  packed fault-log blob (#90)
+static constexpr const char* KEY_DIST    = "dist";        //  4  Distributed Watering config (DEC-024)
 
 const char* Persistence::zoneKey(char* buf, uint8_t zone) {
     // "z<N>_dur": longest is two-digit zone "z15_dur" = 7 chars + NUL. buf must be >= 8.
@@ -62,6 +63,12 @@ void Persistence::begin() {
     flowOverride_ = store_.getU8(KEY_FLOWOVR, 0) != 0;     // DEC-015: default = checks ON
     store_.getStr(KEY_SSID, wifiSsid_, SSID_CAP);          // "" when unconfigured
     store_.getStr(KEY_PASS, wifiPass_, PASS_CAP);
+
+    // DEC-024: Distributed Watering config. Absent (torn/short) => disabled default, so a
+    // controller that never enabled it reads exactly as before.
+    uint8_t distBlob[DIST_CONFIG_BYTES];
+    if (store_.getBytes(KEY_DIST, distBlob, sizeof(distBlob)) == DIST_CONFIG_BYTES)
+        distributed_ = unpackDistributedConfig(distBlob);
 }
 
 uint32_t Persistence::zoneDefaultSec(uint8_t zone) const {
@@ -129,6 +136,13 @@ uint8_t Persistence::loadScheduleEntries(ScheduleEntry* out, uint8_t cap) {
     for (uint8_t i = 0; i < n; ++i)
         out[i] = unpackScheduleEntry(blob + i * SCHED_ENTRY_BYTES);
     return n;
+}
+
+void Persistence::setDistributed(const DistributedConfig& c) {
+    distributed_ = c;
+    uint8_t blob[DIST_CONFIG_BYTES];
+    packDistributedConfig(c, blob);           // whole record, replaced atomically (operator-rate)
+    store_.putBytes(KEY_DIST, blob, DIST_CONFIG_BYTES);
 }
 
 void Persistence::saveScheduleEntries(const ScheduleEntry* entries, uint8_t count) {

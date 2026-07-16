@@ -113,6 +113,12 @@ public:
     uint8_t loadScheduleEntries(ScheduleEntry* out, uint8_t cap);
     void    saveScheduleEntries(const ScheduleEntry* entries, uint8_t count);
 
+    // --- Distributed Watering config (DEC-024; own `dist` key, additive under DEC-008) ---
+    // One packed record; absent => a default (disabled) config, so a controller that has
+    // never used Distributed Watering behaves exactly as before (read-with-default).
+    DistributedConfig distributed() const { return distributed_; }
+    void              setDistributed(const DistributedConfig& c);
+
     // --- run-history blob (§8/§15; DEC-018) ---
     // One packed `runlog` blob = the whole ring (mirrors the `sched` blob — replaced
     // atomically each write, not per-entry keys). Additive under DEC-008: new key, no
@@ -141,6 +147,7 @@ private:
     bool     flowOverride_ = false;        // DEC-015: default = checks ON
     char     wifiSsid_[SSID_CAP] = {};
     char     wifiPass_[PASS_CAP] = {};
+    DistributedConfig distributed_;        // DEC-024; default = disabled (read-with-default)
 };
 
 } // namespace tinkle
