@@ -743,6 +743,7 @@ function computeDistPlan(){
 
   if (winEnd <= winStart){ issues.push(['e','End time must be after start time.']); return {sev:'block',issues,schedulable:false}; }
   if (perZone < F){ issues.push(['e',`Water per zone must be at least ${F} min (one run's floor).`]); return {sev:'block',issues,schedulable:false}; }
+  if (perZone > 1440){ issues.push(['e','Water per zone can’t exceed 1440 min (a day).']); return {sev:'block',issues,schedulable:false}; }
   const winMin = winEnd - winStart;
   let runs = Math.min(MR, Math.floor(perZone / F));
   const runLenSec = Math.floor(perZone * 60 / runs);

@@ -2830,6 +2830,7 @@ static void test_api_distributed_disable_and_fault_gate() {
         parseJson("{\"enabled\":false}").as<JsonVariantConst>(), o2, 0));
     TEST_ASSERT_FALSE(o2["active"].as<bool>());
     TEST_ASSERT_FALSE(r.sched.distributed().enabled);
+    TEST_ASSERT_EQUAL_UINT16(32, r.sched.distributed().perZoneMin);   // disable keeps the plan
 
     r.rc.raiseFault(Fault::NoFlow, 0);                           // faulted -> 409, no edit
     JsonDocument o3;

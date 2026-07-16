@@ -288,7 +288,10 @@ int Api::postSchedule(JsonVariantConst in, JsonDocument& out, uint32_t nowMs) {
 
 int Api::postDistributed(JsonVariantConst in, JsonDocument& out, uint32_t nowMs) {
     if (d_.run.isFaulted()) return err(out, 409, "faulted");
-    DistributedConfig c;
+    // Seed from the current record so a disable ({enabled:false}) just flips the mode off and
+    // keeps the window/minutes/fert — toggling back on shouldn't force a full re-entry. An
+    // enable overwrites those fields from the body below.
+    DistributedConfig c = d_.sched.distributed();
     c.enabled = in["enabled"].as<bool>();                  // absent -> false (disable)
 
     if (c.enabled) {
