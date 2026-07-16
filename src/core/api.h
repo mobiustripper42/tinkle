@@ -68,12 +68,14 @@ public:
     int getSchedule(JsonDocument& out);
     int getSettings(JsonDocument& out);
     int getHistory (JsonDocument& out, uint32_t nowMs);   // DEC-018 run + fault history (#70)
+    int getDistributed(JsonDocument& out);                // DEC-024 Distributed Watering config + plan
 
     // --- POST (body pre-parsed by the glue; `in` may be a null variant for no body) ---
     int postRun      (JsonVariantConst in, JsonDocument& out, uint32_t nowMs);
     int postStop     (JsonDocument& out, uint32_t nowMs);
     int postSchedule (JsonVariantConst in, JsonDocument& out, uint32_t nowMs);
     int postSettings (JsonVariantConst in, JsonDocument& out, uint32_t nowMs);
+    int postDistributed(JsonVariantConst in, JsonDocument& out, uint32_t nowMs);  // DEC-024
     int postCalStart (JsonVariantConst in, JsonDocument& out, uint32_t pulses, uint32_t nowMs);
     int postCalFinish(JsonVariantConst in, JsonDocument& out, uint32_t pulses, uint32_t nowMs);
     int postFaultClear(JsonDocument& out, uint32_t nowMs);

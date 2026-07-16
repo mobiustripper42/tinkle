@@ -59,11 +59,13 @@ public:
         server_.on("/api/schedule", HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Schedule); });
         server_.on("/api/settings", HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Settings); });
         server_.on("/api/history",  HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::History); });
+        server_.on("/api/distributed", HTTP_GET, [this](AsyncWebServerRequest* r) { handleGet(r, Get::Distributed); });
 
         onPost("/api/run",              Post::Run);
         onPost("/api/stop",             Post::Stop);
         onPost("/api/schedule",         Post::Schedule);
         onPost("/api/settings",         Post::Settings);
+        onPost("/api/distributed",      Post::Distributed);
         onPost("/api/calibrate/start",  Post::CalStart);
         onPost("/api/calibrate/finish", Post::CalFinish);
         onPost("/api/fault/clear",      Post::FaultClear);
@@ -102,8 +104,8 @@ public:
     }
 
 private:
-    enum class Get  : uint8_t { Status, Schedule, Settings, History };
-    enum class Post : uint8_t { Run, Stop, Schedule, Settings, CalStart, CalFinish, FaultClear };
+    enum class Get  : uint8_t { Status, Schedule, Settings, History, Distributed };
+    enum class Post : uint8_t { Run, Stop, Schedule, Settings, Distributed, CalStart, CalFinish, FaultClear };
 
     void handleGet(AsyncWebServerRequest* r, Get which) {
         if (!mutex_ || xSemaphoreTake(mutex_, pdMS_TO_TICKS(LOCK_TIMEOUT_MS)) != pdTRUE) {
@@ -128,6 +130,7 @@ private:
             case Get::Schedule: code = api_.getSchedule(out); break;
             case Get::Settings: code = api_.getSettings(out); break;
             case Get::History:  code = api_.getHistory(out, millis()); break;
+            case Get::Distributed: code = api_.getDistributed(out); break;
         }
         xSemaphoreGive(mutex_);
         sendJson(r, code, out);
@@ -175,6 +178,7 @@ private:
             case Post::Stop:       code = api_.postStop(out, now);                        break;
             case Post::Schedule:   code = api_.postSchedule(body, out, now);              break;
             case Post::Settings:   code = api_.postSettings(body, out, now);              break;
+            case Post::Distributed: code = api_.postDistributed(body, out, now);          break;
             case Post::CalStart:   code = api_.postCalStart(body, out, pulses, now);      break;
             case Post::CalFinish:  code = api_.postCalFinish(body, out, pulses, now);     break;
             case Post::FaultClear: code = api_.postFaultClear(out, now);                  break;

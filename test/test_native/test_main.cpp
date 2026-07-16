@@ -2770,6 +2770,75 @@ static void test_api_settings_get_post() {
     TEST_ASSERT_TRUE(r.rc.remainingSec(now) <= 900);
 }
 
+// DEC-024 Distributed Watering config API: GET/POST roundtrip, server-computed plan,
+// validation backstop, and the fault gate.
+static void test_api_distributed_roundtrip() {
+    ApiRig r;
+    JsonDocument out;
+    TEST_ASSERT_EQUAL_INT(200, r.api.getDistributed(out));
+    TEST_ASSERT_FALSE(out["enabled"].as<bool>());
+    TEST_ASSERT_FALSE(out["active"].as<bool>());
+    TEST_ASSERT_EQUAL_UINT8(3, out["zoneCount"].as<uint8_t>());   // sched default MAX_ZONES
+    TEST_ASSERT_EQUAL_UINT16(7, out["floorMin"].as<uint16_t>());
+
+    JsonDocument body = parseJson(
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,"
+        "\"perZoneMin\":32,\"fertCount\":1}");
+    JsonDocument o2;
+    TEST_ASSERT_EQUAL_INT(200, r.api.postDistributed(body.as<JsonVariantConst>(), o2, 0));
+    TEST_ASSERT_TRUE(o2["active"].as<bool>());
+    TEST_ASSERT_TRUE(r.store.distributed().enabled);             // persisted
+    TEST_ASSERT_TRUE(r.sched.distributed().enabled);             // live
+
+    JsonDocument o3;
+    TEST_ASSERT_EQUAL_INT(200, r.api.getDistributed(o3));
+    TEST_ASSERT_EQUAL_UINT16(540, o3["windowStartMin"].as<uint16_t>());
+    TEST_ASSERT_EQUAL_UINT16(32,  o3["perZoneMin"].as<uint16_t>());
+    TEST_ASSERT_EQUAL_UINT8(1,    o3["fertCount"].as<uint8_t>());
+    TEST_ASSERT_EQUAL_UINT8(4,    o3["plan"]["cycles"].as<uint8_t>());       // matches firmware
+    TEST_ASSERT_EQUAL_UINT16(480, o3["plan"]["runLenSec"].as<uint16_t>());
+    TEST_ASSERT_EQUAL_UINT16(540, o3["plan"]["cycleStartMin"][0].as<uint16_t>());
+}
+
+static void test_api_distributed_rejects_invalid() {
+    ApiRig r;
+    JsonDocument o1;
+    TEST_ASSERT_EQUAL_INT(422, r.api.postDistributed(parseJson(   // over-subscribed window
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":570,\"perZoneMin\":42,\"fertCount\":0}")
+        .as<JsonVariantConst>(), o1, 0));
+    JsonDocument o2;
+    TEST_ASSERT_EQUAL_INT(422, r.api.postDistributed(parseJson(   // below the 7-min floor
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,\"perZoneMin\":5,\"fertCount\":0}")
+        .as<JsonVariantConst>(), o2, 0));
+    JsonDocument o3;
+    TEST_ASSERT_EQUAL_INT(422, r.api.postDistributed(parseJson(   // fertCount past the cap
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,\"perZoneMin\":32,\"fertCount\":9}")
+        .as<JsonVariantConst>(), o3, 0));
+    TEST_ASSERT_FALSE(r.store.distributed().enabled);            // nothing persisted
+}
+
+static void test_api_distributed_disable_and_fault_gate() {
+    ApiRig r;
+    JsonDocument o1;
+    r.api.postDistributed(parseJson(
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,\"perZoneMin\":32,\"fertCount\":0}")
+        .as<JsonVariantConst>(), o1, 0);
+    TEST_ASSERT_TRUE(r.sched.distributed().enabled);
+
+    JsonDocument o2;                                             // disable -> schedule governs
+    TEST_ASSERT_EQUAL_INT(200, r.api.postDistributed(
+        parseJson("{\"enabled\":false}").as<JsonVariantConst>(), o2, 0));
+    TEST_ASSERT_FALSE(o2["active"].as<bool>());
+    TEST_ASSERT_FALSE(r.sched.distributed().enabled);
+    TEST_ASSERT_EQUAL_UINT16(32, r.sched.distributed().perZoneMin);   // disable keeps the plan
+
+    r.rc.raiseFault(Fault::NoFlow, 0);                           // faulted -> 409, no edit
+    JsonDocument o3;
+    TEST_ASSERT_EQUAL_INT(409, r.api.postDistributed(parseJson(
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,\"perZoneMin\":32,\"fertCount\":0}")
+        .as<JsonVariantConst>(), o3, 0));
+}
+
 // DEC-015 (#57): enabling the override mutes flow verdicts, clears a latched flow
 // fault even while water still pulses (the recovery path), and persists.
 static void test_api_flow_override_dec015() {
@@ -3461,6 +3530,9 @@ int main() {
     RUN_TEST(test_api_fault_gate_and_exemptions);
     RUN_TEST(test_api_schedule_roundtrip_persist_atomic);
     RUN_TEST(test_api_settings_get_post);
+    RUN_TEST(test_api_distributed_roundtrip);
+    RUN_TEST(test_api_distributed_rejects_invalid);
+    RUN_TEST(test_api_distributed_disable_and_fault_gate);
     RUN_TEST(test_api_flow_override_dec015);
     RUN_TEST(test_flow_detector_mute);
     RUN_TEST(test_api_ota_gate_and_run_inhibit);

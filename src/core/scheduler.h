@@ -117,6 +117,7 @@ public:
     // then governs by the fixed schedule rather than watering nothing. The SPA (M2) blocks
     // saving an invalid enabled config up front; this is the firmware backstop.
     bool distributedActive() const { return computeDistributedPlan(dist_, zoneCount_).valid; }
+    uint8_t zoneCount() const { return zoneCount_; }   // the count evaluateDistributed fires with
 
     // Call every loop tick. Evaluates the schedule on each new local minute (no-op until
     // the clock is valid, and at most once per minute — see IDEMPOTENCY above).
