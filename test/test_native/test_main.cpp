@@ -9,6 +9,7 @@
 #include "persistence.h"
 #include "clock.h"
 #include "scheduler.h"
+#include "wifi_link_monitor.h"
 #include "flow_monitor.h"
 #include "flow_fault_detector.h"
 #include "calibration_controller.h"
@@ -1232,6 +1233,58 @@ void test_sched_add_capacity() {
     TEST_ASSERT_EQUAL_UINT8(Scheduler::MAX_ENTRIES, s.count());
     s.clear();
     TEST_ASSERT_EQUAL_UINT8(0, s.count());
+}
+
+// --- WiFi STA-drop recovery (#147) -------------------------------------------------
+using tinkle::WifiLinkMonitor;
+using tinkle::WifiAction;
+
+// A momentary blip shorter than the grace window does NOT trigger a reconnect (no thrash).
+void test_wifi_blip_under_grace_no_reconnect() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    TEST_ASSERT_EQUAL(WifiAction::None, m.update(true, 0));       // connected
+    TEST_ASSERT_EQUAL(WifiAction::None, m.update(false, 1000));   // dropped
+    TEST_ASSERT_EQUAL(WifiAction::None, m.update(false, 5000));   // still within grace
+    TEST_ASSERT_EQUAL(WifiAction::None, m.update(true, 6000));    // recovered on its own
+}
+
+// A sustained drop reconnects after the grace, then again every retry interval.
+void test_wifi_sustained_drop_reconnects_periodically() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    m.update(true, 0);
+    m.update(false, 1000);                                        // drop at t=1s
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, 8000));   // grace not elapsed (7s down)
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 9000));   // 8s down -> first reconnect
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, 20000));  // <15s since last try
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 24000)); // 15s later -> retry again
+}
+
+// Re-association re-arms: a later drop starts its own fresh grace + retry cadence.
+void test_wifi_reassociation_rearms() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    m.update(true, 0);
+    m.update(false, 1000);
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 9000));   // recovering
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(true, 12000));   // back up -> re-armed
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, 13000));  // new drop
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, 20000));  // within the fresh grace
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 21500));  // fresh grace elapsed
+}
+
+// millis() wraparound (~49.7 days uptime): the (uint32_t)(now - x) idiom must still time
+// the grace + retry correctly across the rollover.
+void test_wifi_recovery_survives_millis_wrap() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    const uint32_t base = 0xFFFFFFF0u;                 // 16 ms before rollover
+    m.update(true, base);
+    m.update(false, base + 1000u);                     // drop just before wrap (wraps at +16)
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, base + 5000u));   // <8s down (wrapped)
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, base + 9000u));   // 8s down -> reconnect
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, base + 24000u));  // +15s -> retry
 }
 
 // --- Distributed Watering (DEC-024) ------------------------------------------------
@@ -3449,6 +3502,10 @@ int main() {
     RUN_TEST(test_sched_dropped_on_full_queue);
     RUN_TEST(test_sched_eval_now_on_edit);
     RUN_TEST(test_sched_add_capacity);
+    RUN_TEST(test_wifi_blip_under_grace_no_reconnect);
+    RUN_TEST(test_wifi_sustained_drop_reconnects_periodically);
+    RUN_TEST(test_wifi_reassociation_rearms);
+    RUN_TEST(test_wifi_recovery_survives_millis_wrap);
     RUN_TEST(test_dist_plan_basic);
     RUN_TEST(test_dist_plan_floor_and_cap);
     RUN_TEST(test_dist_plan_oversubscribed_invalid);
