@@ -39,14 +39,23 @@ public:
         float    minRunningGPM  = 0.1f;    // at/below this during RUNNING (post-grace) reads
                                            // as no flow (clog, dead pump, valve never opened).
         // IDLE_FLOW_FAULT_PULSES (§15): pulses over one idle window above which idle flow reads
-        // as "unexpected". Set to ~1.0 GPM at the calibrated K≈1670 (139 pulses / 5 s), NOT the
-        // old ~0.36 GPM (50 pulses): a decayed post-run draindown tail sits above 0.36 GPM for
+        // as "unexpected". Real default ~1.0 GPM at the calibrated K≈1670 (139 pulses / 5 s), NOT
+        // the old ~0.36 GPM (50 pulses): a decayed post-run draindown tail sits above 0.36 GPM for
         // minutes and false-latched E2 past the drain-gate cap (#141), while a welded pump relay
         // (~1.45 GPM ≈ 202 / 5 s) still trips well clear of the threshold. Valid for an AT-GRADE
         // catchment — pump-off ⇒ a stuck-open valve passes ~0 flow, so draindown is the only idle
         // flow to reject. K-referenced: recalibrating K far from 1670 shifts the GPM meaning, so
         // re-derive then. Exact value owes a wet-run draindown-envelope confirmation (#141).
+        //
+        // TINKLE_SIM keeps the old 50: the Wokwi fake-flow source is a fixed 15 Hz square wave
+        // (≤ 75 pulses / 5 s window), so 139 is unreachable and E2 could never be provoked in the
+        // sim tier (headless 02_idle_unexpected_flow.yaml + MANUAL.md walkthrough). 50 stays under
+        // the 75-pulse ceiling so the fault still fires there — same reason its siblings split.
+#ifdef TINKLE_SIM
+        uint32_t idleFaultPulses = 50;
+#else
         uint32_t idleFaultPulses = 139;
+#endif
         uint32_t idleWindowMs   = 5000;    // tumbling window for the idle-flow accumulation.
 
         // #124 drain grace: on each IDLE entry the idle check waits for flow to

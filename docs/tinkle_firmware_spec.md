@@ -354,7 +354,7 @@ struct ScheduleEntry {
 | `HARD_MAX_RUNTIME` | 30 min | ATtiny ceiling (own clock) |
 | `swMaxRuntimeSec` | 1200 | ESP32 per-run ceiling, configurable |
 | `FLOW_GRACE_S` | 20 | settle before no-flow check |
-| `IDLE_FLOW_FAULT_PULSES` | 50 (seed, tune) | unexpected-flow threshold over one idle window (`FlowFaultDetector`, #35) |
+| `IDLE_FLOW_FAULT_PULSES` | 139 (K≈1670-referenced ≈ 1.0 GPM; `TINKLE_SIM`: 50) | unexpected-flow threshold over one idle window (`FlowFaultDetector`, #35). ~1 GPM rejects post-run draindown while a welded relay (~1.45 GPM) still trips; at-grade catchment (#141) |
 | `CAL_RUN_SEC` | 120 (seed; `TINKLE_SIM`: 10) | calibration run ceiling, its own bound under `swMaxRuntimeSec` (#36) |
 | cal sanity bounds | K ∈ [50, 5000] p/gal, ≥ 0.25 gal | reject absurd calibrations → `FAULT_CAL_RANGE` (#36; seeds, tune) |
 | `REST_WINDOW_MS` | 10000 (seed; `TINKLE_SIM`: 3000) | DEC-014 post-close rest window (#52) |
