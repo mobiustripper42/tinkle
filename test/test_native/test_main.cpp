@@ -507,6 +507,26 @@ static void test_rc_fault_from_idle() {
     TEST_ASSERT_FALSE(vd.pumpIsOn());
 }
 
+// #138: a fault raised while IDLE has no run in flight — current_/pending* still hold the
+// PREVIOUS run, so logging would push a phantom Faulted duplicate of it. The fault still
+// latches; it just adds no RunLog row.
+static void test_rc_idle_fault_logs_no_phantom() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest a; a.zoneIndex = 0; a.durationSec = 1; a.fertigate = false;
+    TEST_ASSERT_TRUE(rc.requestRun(a, 0));
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    const uint8_t before = rc.runLog().count();
+    TEST_ASSERT_EQUAL(RunResult::Completed, rc.lastRun().result);   // the one real run
+
+    rc.raiseFault(Fault::UnexpectedFlow, now + 100);                // idle-time E2
+    TEST_ASSERT_EQUAL(RunState::Fault, rc.state());                 // still latches
+    TEST_ASSERT_EQUAL_UINT8(before, rc.runLog().count());          // but no phantom row
+    TEST_ASSERT_EQUAL(RunResult::Completed, rc.lastRun().result);  // last row untouched
+}
+
 // Queued requests run sequentially: zone 0 then zone 1.
 static void test_rc_queue_runs_sequentially() {
     ValveDriver vd(g, cfg);
@@ -1469,6 +1489,25 @@ void test_ff_never_decaying_flow_still_faults() {
     TEST_ASSERT_EQUAL(Fault::UnexpectedFlow, f);
     // Latency is bounded: cap (3000) + one idle window (1000) past the IDLE edge.
     TEST_ASSERT_TRUE(trippedAt <= 4000 + 3000 + 1000);
+}
+
+// #141: at the PRODUCTION default config (K≈1670), the idle-flow threshold is ~1 GPM, not
+// ~0.36 GPM. A decayed draindown tail (~0.36 GPM ≈ 50 pulses / 5 s) no longer latches E2;
+// a welded pump relay (~1.45 GPM ≈ 202 pulses / 5 s) still does. begin() arms the boot-idle
+// window directly, so this exercises the threshold itself, not the #124 drain gate.
+void test_ff_default_threshold_ignores_draindown_traps_welded_relay() {
+    FlowFaultDetector::Config prod;                    // production seeds
+
+    FlowFaultDetector tail(prod);                      // decayed draindown tail
+    tail.begin(0, 0);
+    TEST_ASSERT_EQUAL(Fault::None, tail.update(RunState::Idle, 0.36f, 0, 0));
+    TEST_ASSERT_EQUAL(Fault::None, tail.update(RunState::Idle, 0.36f, 50, 5000));      // +50 < 139
+
+    FlowFaultDetector welded(prod);                    // welded/stuck pump relay
+    welded.begin(0, 0);
+    TEST_ASSERT_EQUAL(Fault::None, welded.update(RunState::Idle, 1.45f, 0, 0));
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow,
+                      welded.update(RunState::Idle, 1.45f, 202, 5000));                // +202 > 139
 }
 
 // End-to-end: a no-flow verdict routed to RunController slams the safe state and latches (§14).
@@ -3144,6 +3183,7 @@ int main() {
     RUN_TEST(test_rc_stop_unwinds);
     RUN_TEST(test_rc_fault_latches_and_clears);
     RUN_TEST(test_rc_fault_from_idle);
+    RUN_TEST(test_rc_idle_fault_logs_no_phantom);
     RUN_TEST(test_rc_queue_runs_sequentially);
     RUN_TEST(test_rc_rejects_bad_requests);
     RUN_TEST(test_rc_sw_max_runtime_clamps);
@@ -3206,6 +3246,7 @@ int main() {
     RUN_TEST(test_ff_post_run_idle_rebaseline);
     RUN_TEST(test_ff_trailing_draindown_no_fault_then_still_armed);
     RUN_TEST(test_ff_never_decaying_flow_still_faults);
+    RUN_TEST(test_ff_default_threshold_ignores_draindown_traps_welded_relay);
     RUN_TEST(test_ff_integration_no_flow_faults_rc);
 
     RUN_TEST(test_cal_start_bounded_plain_run);
