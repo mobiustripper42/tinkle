@@ -1247,6 +1247,19 @@ void test_wifi_reassociation_rearms() {
     TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 21500));  // fresh grace elapsed
 }
 
+// millis() wraparound (~49.7 days uptime): the (uint32_t)(now - x) idiom must still time
+// the grace + retry correctly across the rollover.
+void test_wifi_recovery_survives_millis_wrap() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    const uint32_t base = 0xFFFFFFF0u;                 // 16 ms before rollover
+    m.update(true, base);
+    m.update(false, base + 1000u);                     // drop just before wrap (wraps at +16)
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, base + 5000u));   // <8s down (wrapped)
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, base + 9000u));   // 8s down -> reconnect
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, base + 24000u));  // +15s -> retry
+}
+
 // --- Fertigation end-to-end (firmware spec §6 / #28) -----------------------------
 // The §6 policy is decided in the Scheduler and actuated by RunController via the §4
 // diverter step. These tests exercise the REAL stack (Scheduler -> RunController ->
@@ -3226,6 +3239,7 @@ int main() {
     RUN_TEST(test_wifi_blip_under_grace_no_reconnect);
     RUN_TEST(test_wifi_sustained_drop_reconnects_periodically);
     RUN_TEST(test_wifi_reassociation_rearms);
+    RUN_TEST(test_wifi_recovery_survives_millis_wrap);
 
     RUN_TEST(test_sched_rc_fert_routing);
 
