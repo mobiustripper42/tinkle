@@ -85,7 +85,7 @@ static Clock             wallClock(systemClock);
 // through RunController (the sole actuator commander), applying the §6 fert policy. The
 // schedule is empty until the web-config editor lands (Phase 4); with no clock yet (no WiFi
 // pre-Phase-4) tick() is a no-op regardless.
-static Scheduler         scheduler(runController, wallClock);
+static Scheduler         scheduler(runController, wallClock, ZONE_COUNT);   // count DW fires with
 
 // Flow monitoring (§7 / #34). The ISR-backed counter (flow_sensor.h) is the only hardware
 // touch; FlowMonitor turns its cumulative pulses into per-run gallons + a live GPM rate. K

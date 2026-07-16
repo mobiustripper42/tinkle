@@ -170,6 +170,32 @@ int Api::getSettings(JsonDocument& out) {
     return 200;
 }
 
+int Api::getDistributed(JsonDocument& out) {
+    const DistributedConfig c = d_.sched.distributed();
+    out["enabled"]        = c.enabled;
+    out["windowStartMin"] = c.windowStartMin;
+    out["windowEndMin"]   = c.windowEndMin;
+    out["perZoneMin"]     = c.perZoneMin;
+    out["fertCount"]      = c.fertCount;
+    out["active"]         = d_.sched.distributedActive();   // enabled AND schedulable
+    // Envelope + zone count so the SPA preview mirrors computeDistributedPlan exactly.
+    out["floorMin"]    = (uint16_t)DIST_RUN_FLOOR_MIN;
+    out["maxRuns"]     = (uint8_t)DIST_MAX_RUNS;
+    out["overheadSec"] = (uint16_t)DIST_RUN_OVERHEAD_SEC;
+    out["zoneCount"]   = d_.sched.zoneCount();
+    // The authoritative server-computed plan (what the controller WILL fire) — the SPA shows
+    // this after a save and mirrors it client-side while editing.
+    const DistributedPlan p = computeDistributedPlan(c, d_.sched.zoneCount());
+    if (p.valid) {
+        JsonObject po = out["plan"].to<JsonObject>();
+        po["cycles"]    = p.cycles;
+        po["runLenSec"] = p.runLenSec;
+        JsonArray cs = po["cycleStartMin"].to<JsonArray>();
+        for (uint8_t i = 0; i < p.cycles; ++i) cs.add(p.cycleStartMin[i]);
+    }
+    return 200;
+}
+
 // --------------------------------------------------------------------------- POST
 
 int Api::postRun(JsonVariantConst in, JsonDocument& out, uint32_t nowMs) {
@@ -257,6 +283,41 @@ int Api::postSchedule(JsonVariantConst in, JsonDocument& out, uint32_t nowMs) {
 
     out["saved"] = true;
     out["count"] = n;
+    return 200;
+}
+
+int Api::postDistributed(JsonVariantConst in, JsonDocument& out, uint32_t nowMs) {
+    if (d_.run.isFaulted()) return err(out, 409, "faulted");
+    DistributedConfig c;
+    c.enabled = in["enabled"].as<bool>();                  // absent -> false (disable)
+
+    if (c.enabled) {
+        if (!in["windowStartMin"].is<int>() || !in["windowEndMin"].is<int>() ||
+            !in["perZoneMin"].is<int>())
+            return err(out, 400, "window and perZoneMin required");
+        const int ws = in["windowStartMin"].as<int>();
+        const int we = in["windowEndMin"].as<int>();
+        const int pm = in["perZoneMin"].as<int>();
+        const int fc = in["fertCount"].isNull() ? 0 : in["fertCount"].as<int>();
+        if (ws < 0 || ws > 1439 || we < 1 || we > 1440)  return err(out, 422, "window out of range");
+        if (pm < 0 || pm > (int)DIST_MAX_PERZONE_MIN)    return err(out, 422, "perZoneMin out of range");
+        if (fc < 0 || fc > (int)DIST_MAX_RUNS)           return err(out, 422, "fertCount out of range");
+        c.windowStartMin = (uint16_t)ws;
+        c.windowEndMin   = (uint16_t)we;
+        c.perZoneMin     = (uint16_t)pm;
+        c.fertCount      = (uint8_t)fc;
+        // Reject an enabled config that can't be scheduled (below floor / over-subscribed /
+        // bad window). The SPA blocks this up front; this is the authoritative server backstop.
+        if (!computeDistributedPlan(c, d_.sched.zoneCount()).valid)
+            return err(out, 422, "not schedulable (check window, minutes, floor)");
+    }
+
+    d_.store.setDistributed(c);       // persist (atomic; own NVS key)
+    d_.sched.setDistributed(c);       // live — either/or with the entry schedule
+    d_.sched.evalNow(nowMs);          // §13 checks-on-edit
+    out["saved"]   = true;
+    out["enabled"] = c.enabled;
+    out["active"]  = d_.sched.distributedActive();
     return 200;
 }
 
