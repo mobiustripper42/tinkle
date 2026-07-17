@@ -726,7 +726,8 @@ async function loadDistributed(){
   distSetDirty(false);
   // Open the Watering page on whichever mode is enabled, so the running config is what
   // you see first (Distributed enabled -> Distributed tab, else the fixed Schedule tab).
-  setWMode(r.enabled ? 'dist' : 'sched');
+  // Only when nothing is mid-edit — never flip the visible tab out from under unsaved work.
+  if (!schedDirty && !distDirty) setWMode(r.enabled ? 'dist' : 'sched');
   updateDistBanners();
   renderDistPreview();
 }
