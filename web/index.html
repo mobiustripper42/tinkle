@@ -337,7 +337,7 @@ nav .ico{display:block; font-size:1.3rem}
 <nav>
   <button data-scr="home"   class="active"><span class="ico">&#8962;</span>Home</button>
   <button data-scr="run"    ><span class="ico">&#9654;</span>Run</button>
-  <button data-scr="sched"  ><span class="ico">&#128337;</span>Sched</button>
+  <button data-scr="sched"  ><span class="ico">&#128337;</span>Water</button>
   <button data-scr="set"    ><span class="ico">&#9881;</span>Setup</button>
   <button data-scr="cal"    ><span class="ico">&#128167;</span>Cal</button>
   <button data-scr="faults" ><span class="ico">&#9888;</span>Faults</button>
@@ -724,6 +724,10 @@ async function loadDistributed(){
   }
   distSaved = snapshotDist();
   distSetDirty(false);
+  // Open the Watering page on whichever mode is enabled, so the running config is what
+  // you see first (Distributed enabled -> Distributed tab, else the fixed Schedule tab).
+  // Only when nothing is mid-edit — never flip the visible tab out from under unsaved work.
+  if (!schedDirty && !distDirty) setWMode(r.enabled ? 'dist' : 'sched');
   updateDistBanners();
   renderDistPreview();
 }
@@ -793,7 +797,7 @@ function renderDistPreview(){
     body += `<div class="meter ${mcls}"><i style="width:${Math.round(p.meterPct*100)}%"></i></div>
       <div class="kv"><span>Summer guideline ${DIST_LO}–${DIST_HI} gal/day</span><span>${p.verdict}</span></div>`;
     body += `<div class="chips">` + p.times.map((t,i)=>{ const f=i<p.fertN; return `<span class="chip${f?' fert':''}">${t}${f?' &middot; fert':''}</span>`; }).join('') + `</div>`;
-    body += `<div class="muted" style="margin-top:.15rem">Each time waters Zone 1 &rarr; 2 &rarr; 3 in a row.${p.fertN?' Filled = fertigated.':' Plain water all day.'}</div>`;
+    body += `<div class="muted" style="margin-top:.15rem">Each time waters Zone 3 &rarr; 1 &rarr; 2 in a row.${p.fertN?' Filled = fertigated.':' Plain water all day.'}</div>`;
   }
   if (p.issues.length){
     body += `<ul class="issues">` + p.issues.map(([k,t])=>{ const mk = k==='e'?'✕':k==='w'?'⚠':k==='i'?'ℹ':'✓'; return `<li class="${k}"><span class="mk">${mk}</span><span>${t}</span></li>`; }).join('') + `</ul>`;
