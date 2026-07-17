@@ -1330,6 +1330,8 @@ void test_dist_plan_oversubscribed_invalid() {
 }
 
 // A cycle fires one run per live zone, back-to-back; fert rides the first fertCount cycles.
+// Fire order is the session-23 diagnostic hardcode Zone 3 -> 1 -> 2 (indices 2,0,1); see
+// scheduler.cpp evaluateDistributed / #151 (which makes it configurable and reverts this).
 void test_dist_emits_cycle_all_zones_fert_first() {
     FakeWallClock src; src.available = true;
     src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);   // Monday 09:00 = cycle 0
@@ -1339,9 +1341,9 @@ void test_dist_emits_cycle_all_zones_fert_first() {
     s.setDistributed(mkDist(540, 930, 32, 1));            // fert the first cycle only
     s.tick(0);
     TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());
-    TEST_ASSERT_EQUAL_UINT8(0, sink.reqs[0].zoneIndex);
-    TEST_ASSERT_EQUAL_UINT8(1, sink.reqs[1].zoneIndex);
-    TEST_ASSERT_EQUAL_UINT8(2, sink.reqs[2].zoneIndex);
+    TEST_ASSERT_EQUAL_UINT8(2, sink.reqs[0].zoneIndex);   // Zone 3 fires first (diagnostic order)
+    TEST_ASSERT_EQUAL_UINT8(0, sink.reqs[1].zoneIndex);   // then Zone 1
+    TEST_ASSERT_EQUAL_UINT8(1, sink.reqs[2].zoneIndex);   // then Zone 2
     TEST_ASSERT_EQUAL_UINT32(480, sink.reqs[0].durationSec);
     TEST_ASSERT_TRUE(sink.reqs[0].fertigate);            // cycle 0 < fertCount 1
     TEST_ASSERT_TRUE(sink.reqs[2].fertigate);
