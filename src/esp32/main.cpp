@@ -20,6 +20,7 @@
 #include "preferences_store.h"
 #include "system_clock.h"
 #include "flow_sensor.h"
+#include "poopdeck_publisher.h"
 
 // Tinkle ESP32 firmware — entry point and the cooperative non-blocking loop
 // (firmware spec §2). On boot RunController::begin forces the fail-dry safe state
@@ -80,6 +81,17 @@ static Persistence       persistence(prefsStore, ZONE_COUNT);
 // NTP lands (no WiFi before Phase 4) it stays false and the SPA shows the clock as unsynced.
 static SystemClock       systemClock;
 static Clock             wallClock(systemClock);
+
+// Poop Deck telemetry publisher (#13) — MQTT on a background FreeRTOS task, fed by the
+// control loop as runs complete. Host + password come from build flags (poopdeck_secret.ini);
+// an absent secret means the publisher can't authenticate and simply never connects.
+#ifndef POOPDECK_MQTT_HOST
+#define POOPDECK_MQTT_HOST "192.168.50.201"   // bee-grace on the farm LAN
+#endif
+#ifndef POOPDECK_MQTT_PASSWORD
+#define POOPDECK_MQTT_PASSWORD ""             // no secret baked in -> no telemetry
+#endif
+static PoopdeckPublisher  poopdeck;
 
 // Scheduler (§13). Evaluates schedule entries once per local minute and enqueues due runs
 // through RunController (the sole actuator commander), applying the §6 fert policy. The
@@ -216,6 +228,17 @@ void setup() {
     systemClock.begin();
     wallClock.begin(millis());
 
+    // Poop Deck telemetry (#13): start the background publisher task, then replay any runs
+    // that survived in the boot ring (idempotent on the store, so the replay is safe).
+    PoopdeckPublisher::Config pdCfg;
+    pdCfg.host     = POOPDECK_MQTT_HOST;
+    pdCfg.port     = 1883;
+    pdCfg.clientId = "tinkle";
+    pdCfg.user     = "tinkle";
+    pdCfg.password = POOPDECK_MQTT_PASSWORD;
+    poopdeck.begin(pdCfg, systemClock);
+    poopdeck.enqueueBacklog(runController.runLog());
+
     // Flow sensor ISR + monitor (§7). Load the calibrated K from NVS, then baseline the
     // counter so gallons starts at zero.
     flowSensor.begin();
@@ -324,6 +347,24 @@ void loop() {
         }
     } else {
         runLogPending = false;
+    }
+
+    // Poop Deck telemetry (#13): enqueue each newly-logged run exactly once (identity by its
+    // natural key), independent of the NVS debounce above. loop() runs far faster than a run
+    // completes, so every new head is caught; enqueue() drops non-publishable runs and is
+    // non-blocking (it hands off to the publisher task, never the control loop).
+    {
+        static bool     pdSeeded    = false;
+        static uint32_t pdLastEpoch = 0;
+        static uint8_t  pdLastZone  = 0xFF;
+        const RunEntry& h = runController.lastRun();
+        if (!pdSeeded) {
+            pdLastEpoch = h.startEpoch; pdLastZone = h.zoneIndex; pdSeeded = true;
+        } else if (h.result != RunResult::None &&
+                   (h.startEpoch != pdLastEpoch || h.zoneIndex != pdLastZone)) {
+            poopdeck.enqueue(h);
+            pdLastEpoch = h.startEpoch; pdLastZone = h.zoneIndex;
+        }
     }
 
     // Persist the fault log IMMEDIATELY on change (#90) — deliberately NOT debounced like the

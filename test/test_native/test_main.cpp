@@ -18,6 +18,7 @@
 #include "fault_manager.h"
 #include "valve_rest_monitor.h"
 #include "api.h"
+#include "telemetry_payload.h"
 
 // Native unit tests for ValveDriver (firmware spec §5, v1.4). Fake GPIO + an explicit
 // clock value (no millis()): the host-testable tier per CLAUDE.md.
@@ -3441,6 +3442,106 @@ static void test_api_history_full_ring() {
                              out["runs"][0]["startEpoch"].as<uint32_t>());   // newest is the head
 }
 
+// --- Poop Deck telemetry payload (#13) -------------------------------------
+// Pure builder: RunEntry -> v1 irrigation JSON / topic (telemetry_payload.h).
+// Timezone/formatting is the esp32 shim's job, so these pass a fixed, already-
+// formatted ISO timestamp and assert the wire shape the store ingests.
+
+namespace {
+// A completed, clock-valid run with known fields. gnu++11 -> field assignment
+// (RunEntry has default member initializers, so brace-init is ill-formed).
+tinkle::RunEntry makePublishableRun() {
+    tinkle::RunEntry e;
+    e.zoneIndex     = 1;            // -> zone2 (1-based on the wire)
+    e.durationSec   = 600;
+    e.centigallons  = 1240;         // 12.40 gal
+    e.fertigate     = true;
+    e.result        = tinkle::RunResult::Completed;
+    e.clockWasValid = true;
+    e.faultCode     = 0;
+    return e;
+}
+const char* const POOPDECK_TS = "2026-07-15T00:00:00-04:00";
+}  // namespace
+
+void test_poopdeck_topic_is_one_based() {
+    tinkle::RunEntry e = makePublishableRun();   // zoneIndex 1
+    char topic[48];
+    TEST_ASSERT_TRUE(tinkle::buildIrrigationTopic(e, topic, sizeof(topic)) > 0);
+    TEST_ASSERT_EQUAL_STRING("farm/irrigation/tinkle/zone2", topic);
+    e.zoneIndex = 0;
+    tinkle::buildIrrigationTopic(e, topic, sizeof(topic));
+    TEST_ASSERT_EQUAL_STRING("farm/irrigation/tinkle/zone1", topic);
+}
+
+void test_poopdeck_payload_basic() {
+    tinkle::RunEntry e = makePublishableRun();
+    char buf[256];
+    TEST_ASSERT_TRUE(tinkle::buildIrrigationPayload(e, POOPDECK_TS, buf, sizeof(buf)) > 0);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"v\":1,\"source\":\"tinkle\",\"zone\":2,"
+        "\"ts_start\":\"2026-07-15T00:00:00-04:00\",\"duration_s\":600,"
+        "\"gallons\":12.40,\"fertigated\":true}",
+        buf);
+}
+
+void test_poopdeck_payload_fault_included() {
+    tinkle::RunEntry e = makePublishableRun();
+    e.result = tinkle::RunResult::Faulted;
+    e.faultCode = 1;   // NoFlow -> "no-flow"
+    char buf[256];
+    tinkle::buildIrrigationPayload(e, POOPDECK_TS, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(std::string(buf).find("\"fault\":\"no-flow\"") != std::string::npos);
+}
+
+void test_poopdeck_gallons_two_decimals() {
+    tinkle::RunEntry e = makePublishableRun();
+    char buf[256];
+    e.centigallons = 605; tinkle::buildIrrigationPayload(e, POOPDECK_TS, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(std::string(buf).find("\"gallons\":6.05") != std::string::npos);
+    e.centigallons = 200; tinkle::buildIrrigationPayload(e, POOPDECK_TS, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(std::string(buf).find("\"gallons\":2.00") != std::string::npos);
+    e.centigallons = 0;   tinkle::buildIrrigationPayload(e, POOPDECK_TS, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(std::string(buf).find("\"gallons\":0.00") != std::string::npos);
+}
+
+void test_poopdeck_not_publishable_without_clock() {
+    tinkle::RunEntry e = makePublishableRun();
+    e.clockWasValid = false;
+    TEST_ASSERT_FALSE(tinkle::isPublishable(e));
+    char buf[256];
+    TEST_ASSERT_TRUE(tinkle::buildIrrigationPayload(e, POOPDECK_TS, buf, sizeof(buf)) == 0);
+    TEST_ASSERT_EQUAL_STRING("", buf);   // cleared — callers guard-on-0
+}
+
+void test_poopdeck_not_publishable_when_no_run() {
+    tinkle::RunEntry e = makePublishableRun();
+    e.result = tinkle::RunResult::None;
+    TEST_ASSERT_FALSE(tinkle::isPublishable(e));
+    char buf[256];
+    TEST_ASSERT_TRUE(tinkle::buildIrrigationPayload(e, POOPDECK_TS, buf, sizeof(buf)) == 0);
+}
+
+void test_poopdeck_payload_empty_ts_rejected() {
+    tinkle::RunEntry e = makePublishableRun();
+    char buf[256];
+    TEST_ASSERT_TRUE(tinkle::buildIrrigationPayload(e, "", buf, sizeof(buf)) == 0);
+}
+
+void test_poopdeck_payload_overflow_is_safe() {
+    tinkle::RunEntry e = makePublishableRun();
+    char buf[16];   // too small for the object
+    TEST_ASSERT_TRUE(tinkle::buildIrrigationPayload(e, POOPDECK_TS, buf, sizeof(buf)) == 0);
+    TEST_ASSERT_EQUAL_STRING("", buf);
+}
+
+void test_poopdeck_fault_map() {
+    TEST_ASSERT_NULL(tinkle::faultCodeToString(0));
+    TEST_ASSERT_EQUAL_STRING("no-flow", tinkle::faultCodeToString(1));
+    TEST_ASSERT_EQUAL_STRING("valve-rest", tinkle::faultCodeToString(6));
+    TEST_ASSERT_EQUAL_STRING("fault", tinkle::faultCodeToString(99));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_begin_safe_levels);
@@ -3613,5 +3714,15 @@ int main() {
     RUN_TEST(test_api_history_shape);
     RUN_TEST(test_api_history_faulted_run);
     RUN_TEST(test_api_history_full_ring);
+
+    RUN_TEST(test_poopdeck_topic_is_one_based);
+    RUN_TEST(test_poopdeck_payload_basic);
+    RUN_TEST(test_poopdeck_payload_fault_included);
+    RUN_TEST(test_poopdeck_gallons_two_decimals);
+    RUN_TEST(test_poopdeck_not_publishable_without_clock);
+    RUN_TEST(test_poopdeck_not_publishable_when_no_run);
+    RUN_TEST(test_poopdeck_payload_empty_ts_rejected);
+    RUN_TEST(test_poopdeck_payload_overflow_is_safe);
+    RUN_TEST(test_poopdeck_fault_map);
     return UNITY_END();
 }
