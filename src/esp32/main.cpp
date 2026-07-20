@@ -7,6 +7,7 @@
 #include "../core/persistence.h"
 #include "../core/clock.h"
 #include "../core/scheduler.h"
+#include "../core/nightly_reboot.h"
 #include "../core/flow_monitor.h"
 #include "../core/flow_fault_detector.h"
 #include "../core/calibration_controller.h"
@@ -86,6 +87,7 @@ static Clock             wallClock(systemClock);
 // schedule is empty until the web-config editor lands (Phase 4); with no clock yet (no WiFi
 // pre-Phase-4) tick() is a no-op regardless.
 static Scheduler         scheduler(runController, wallClock, ZONE_COUNT);   // count DW fires with
+static NightlyReboot     nightlyReboot;   // field-reliability nightly power-cycle (idle-gated)
 
 // Flow monitoring (§7 / #34). The ISR-backed counter (flow_sensor.h) is the only hardware
 // touch; FlowMonitor turns its cumulative pulses into per-run gallons + a live GPM rate. K
@@ -418,6 +420,31 @@ void loop() {
     // (No diverter-position persistence in v1.4: the two-leg NO/NC diverter rests plain
     // by construction, so there is no hold-state to cache — RunController sets the legs
     // per-run in PREP_DIVERTER, DEC-013.)
+
+    // Nightly self-reboot (field reliability): once per day just after local midnight, only
+    // when safely idle. Clears WiFi/heap stalls that build up over uptime. Skips the night if
+    // busy the whole window — never interrupts a run. Fail-dry holds: idle => heartbeat already
+    // parked, relay de-armed, so the reboot just extends pump-unpowered into the next boot.
+    // INSIDE the lock: reads live RunController state, which the async HTTP task also mutates
+    // (POST /api/run starts a run synchronously) — a lock-free read could power-cycle a run
+    // starting in the same tick, the one thing this must never do. A faulted device is excluded
+    // (a reboot would silently clear the latched fault the operator needs to see) — the tradeoff
+    // is that the box most needing a WiFi/heap reset is the one that doesn't get it.
+    {
+        const bool safe = runController.isIdle() && runController.queueDepth() == 0
+                          && !runController.isFaulted() && !runController.otaActive()
+                          && !calibration.active();   // don't discard an in-progress bucket test
+        const WallTime wt = wallClock.wall(now);
+        const uint16_t minOfDay = (uint16_t)(wt.hour * 60 + wt.minute);
+        const uint32_t dayOrd   = wallClock.epoch(now) / 86400u;
+        if (nightlyReboot.due(dayOrd, minOfDay, now, wallClock.valid(), safe)) {
+            Serial.println("[tinkle] nightly reboot (idle, post-midnight)");
+            if (runController.runLogDirty()) persistence.saveRunLog(runController.runLog());
+            if (faultManager.dirty())        persistence.saveFaultLog(faultManager);
+            Serial.flush();
+            ESP.restart();
+        }
+    }
 
     // Core-state section over — let any waiting HTTP handler in. The async server
     // needs no tick; WiFi is watched at the top of the pass.
