@@ -2014,6 +2014,35 @@ static void test_cal_tally_immune_to_chained_run() {
     TEST_ASSERT_EQUAL_FLOAT(450.0f, r.flow.k());
 }
 
+// #144: an out-of-range calibration submitted while an UNRELATED run is in flight (cal in
+// Awaiting, its own run long over, a queued/scheduled/manual run now Running) must NOT latch
+// or phantom-log that healthy run. The number is still Rejected (no K write); the wet-side
+// CalRange latch is simply withheld — a data-entry error can't be about that run.
+static void test_cal_reject_spares_unrelated_run() {
+    CalRig r;
+    uint32_t pulses = 0;
+    TEST_ASSERT_TRUE(r.cal.start(0, pulses, 0));
+    uint32_t now = r.pump(0, 5, 8000, pulses,
+                          [&]{ return r.rc.state() == RunState::Running; });
+    pulses += 900;
+
+    // A DIFFERENT run starts while the operator is still entering the measured gallons.
+    RunRequest other; other.zoneIndex = 1; other.durationSec = 30;
+    TEST_ASSERT_TRUE(r.rc.requestRun(other, now));      // queues behind the cal run
+    now = r.pump(now, 1000, 70000, pulses,
+                 [&]{ return r.cal.phase() == CalPhase::Awaiting; });
+    now = r.pump(now, 1000, 70000, pulses,
+                 [&]{ return r.rc.state() == RunState::Running; });  // the OTHER run is live
+    const uint8_t logsBefore = r.rc.runLog().count();
+
+    TEST_ASSERT_EQUAL(CalResult::Rejected, r.cal.finish(0.1f, pulses, now));
+    TEST_ASSERT_FALSE(r.rc.isFaulted());                            // no CalRange latch (#144)
+    TEST_ASSERT_EQUAL(RunState::Running, r.rc.state());             // run keeps watering
+    TEST_ASSERT_TRUE(r.vd.pumpIsOn());
+    TEST_ASSERT_EQUAL_UINT8(logsBefore, r.rc.runLog().count());     // no phantom Faulted row
+    TEST_ASSERT_EQUAL_INT(0, r.kv.writesTo("k_ppg"));               // bad number, no K write
+}
+
 // ----------------------------------------------------------------------------
 // Watchdog handshake (firmware spec §9, Unit B / DEC-016). Both halves of the one
 // protocol, tested against the same constants: WatchdogTrip is the EXACT unit the
@@ -3693,6 +3722,7 @@ int main() {
     RUN_TEST(test_cal_run_fault_aborts);
     RUN_TEST(test_cal_cancel);
     RUN_TEST(test_cal_tally_immune_to_chained_run);
+    RUN_TEST(test_cal_reject_spares_unrelated_run);
 
     RUN_TEST(test_wdt_powerup_disarmed_frozen_line_never_arms);
     RUN_TEST(test_wdt_arms_on_edge_and_holds_with_beat);

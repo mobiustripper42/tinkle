@@ -30,6 +30,12 @@
 // safe state, and K keeps its prior value. The Phase 4 endpoint range-validates input
 // before calling finish(), so a latched CalRange means the measurement itself is
 // untrustworthy, which is exactly when the operator should be made to look.
+//   EXCEPTION (#144): the CalRange latch is WITHHELD when finish() would otherwise hit an
+//   UNRELATED run — i.e. an out-of-range submit arrives in Awaiting after a different run
+//   (scheduled/manual) has started. The number is still Rejected and K unchanged; only the
+//   wet-side latch/log is skipped, so a calibration data-entry error never faults or
+//   phantom-logs a healthy in-flight run. Raised normally when the cal owns the run or the
+//   controller is idle (the ordinary no-concurrent case).
 
 namespace tinkle {
 
@@ -58,7 +64,8 @@ public:
     enum class FinishResult : uint8_t {
         Ok,              // K computed, persisted, applied to FlowMonitor
         NotCalibrating,  // no calibration in progress — no fault raised
-        Rejected         // sanity bounds failed — FAULT_CAL_RANGE raised, K unchanged
+        Rejected         // sanity bounds failed, K unchanged — FAULT_CAL_RANGE latched
+                         // UNLESS finish() would hit an unrelated in-flight run (#144)
     };
 
     CalibrationController(RunController& rc, Persistence& store, FlowMonitor& flow,
