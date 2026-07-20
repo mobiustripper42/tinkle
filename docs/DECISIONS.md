@@ -273,8 +273,8 @@ open, everything else closed" — the correct safe default.
 **Why it's safe:** the **pump-power gate (DEC-012), not any valve,** is the fail-dry barrier, so
 the valves' resting states are a convenience, not the safety mechanism.
 **Driver / clamp (sourcing):** IRLZ44N per valve (margin makes the cap-inrush spec moot), gate
-resistor + gate-to-GND pulldown (boot-off), and a **TVS (1.5KE30A, through-hole) drain-to-source
-per FET** (SMAJ30A in the original v1.4 sourcing — updated to the through-hole 1.5KE30A under
+resistor + gate-to-GND pulldown (boot-off), and a **TVS (1.5KE30CA, through-hole) drain-to-source
+per FET** (SMAJ30A in the original v1.4 sourcing — updated to the through-hole 1.5KE30CA under
 DEC-020) — the valves have an internal bridge rectifier, so a freewheel diode won't clamp; clamp the FET.
 Valves on **raw 24 V**. (The button LED rings that previously shared the 24 V rail are gone under
 DEC-019 — their load leaves the power budget.)
@@ -519,7 +519,7 @@ sourcing/packaging reconcile, not a redesign.
    It **won't register below 2 L/min**; our zone runs ~1.78 GPM ≈ 6.7 L/min, comfortably above the
    floor. The firmware's seed/default K-factor changes to the Leridian's — **[FW], tracked
    separately** — but field calibration (DEC-015 path) is unchanged and authoritative regardless.
-4. **Per-FET clamp → 1.5KE30A (through-hole)**, not the SMD SMAJ30A. Same job (drain-to-source TVS;
+4. **Per-FET clamp → 1.5KE30CA (through-hole, bidirectional)**, not the SMD SMAJ30A. Same job (drain-to-source TVS;
    the internal-rectifier valves can't be clamped by a freewheel diode across the load), through-hole
    to suit the protoboard build. *(As-built 2026-07-04: the **bidirectional 1.5KE30CA** was ordered
    in place of the A and kept — positive clamp identical, and the FET body diode already covers the
