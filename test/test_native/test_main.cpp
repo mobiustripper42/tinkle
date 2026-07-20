@@ -10,6 +10,7 @@
 #include "clock.h"
 #include "scheduler.h"
 #include "nightly_reboot.h"
+#include "wifi_link_monitor.h"
 #include "flow_monitor.h"
 #include "flow_fault_detector.h"
 #include "calibration_controller.h"
@@ -506,6 +507,26 @@ static void test_rc_fault_from_idle() {
     TEST_ASSERT_EQUAL(RunState::Fault, rc.state());
     TEST_ASSERT_EQUAL(Fault::UnexpectedFlow, rc.activeFault());
     TEST_ASSERT_FALSE(vd.pumpIsOn());
+}
+
+// #138: a fault raised while IDLE has no run in flight — current_/pending* still hold the
+// PREVIOUS run, so logging would push a phantom Faulted duplicate of it. The fault still
+// latches; it just adds no RunLog row.
+static void test_rc_idle_fault_logs_no_phantom() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest a; a.zoneIndex = 0; a.durationSec = 1; a.fertigate = false;
+    TEST_ASSERT_TRUE(rc.requestRun(a, 0));
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Idle; });
+    TEST_ASSERT_EQUAL(RunState::Idle, rc.state());
+    const uint8_t before = rc.runLog().count();
+    TEST_ASSERT_EQUAL(RunResult::Completed, rc.lastRun().result);   // the one real run
+
+    rc.raiseFault(Fault::UnexpectedFlow, now + 100);                // idle-time E2
+    TEST_ASSERT_EQUAL(RunState::Fault, rc.state());                 // still latches
+    TEST_ASSERT_EQUAL_UINT8(before, rc.runLog().count());          // but no phantom row
+    TEST_ASSERT_EQUAL(RunResult::Completed, rc.lastRun().result);  // last row untouched
 }
 
 // Queued requests run sequentially: zone 0 then zone 1.
@@ -1063,6 +1084,13 @@ struct FakeRunSink : tinkle::IRunSink {
 using tinkle::Scheduler;
 using tinkle::ScheduleEntry;
 using tinkle::FertOverride;
+using tinkle::DistributedConfig;
+using tinkle::DistributedPlan;
+using tinkle::computeDistributedPlan;
+using tinkle::packDistributedConfig;
+using tinkle::unpackDistributedConfig;
+using tinkle::DIST_CONFIG_BYTES;
+using tinkle::DIST_MAX_RUNS;
 using tinkle::epochFromCivil;
 
 // A clock pinned to a given local epoch (anchored at ms=0, so epoch advances with nowMs).
@@ -1239,6 +1267,210 @@ void test_nightly_reboot_next_day_after_skip() {
     NightlyReboot nr;
     TEST_ASSERT_FALSE(nr.due(100, 30, UP_3H, true, false));  // busy the whole window -> skipped
     TEST_ASSERT_TRUE(nr.due(101, 0, UP_3H, true, true));     // next day, idle -> reboot
+}
+
+// --- WiFi STA-drop recovery (#147) -------------------------------------------------
+using tinkle::WifiLinkMonitor;
+using tinkle::WifiAction;
+
+// A momentary blip shorter than the grace window does NOT trigger a reconnect (no thrash).
+void test_wifi_blip_under_grace_no_reconnect() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    TEST_ASSERT_EQUAL(WifiAction::None, m.update(true, 0));       // connected
+    TEST_ASSERT_EQUAL(WifiAction::None, m.update(false, 1000));   // dropped
+    TEST_ASSERT_EQUAL(WifiAction::None, m.update(false, 5000));   // still within grace
+    TEST_ASSERT_EQUAL(WifiAction::None, m.update(true, 6000));    // recovered on its own
+}
+
+// A sustained drop reconnects after the grace, then again every retry interval.
+void test_wifi_sustained_drop_reconnects_periodically() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    m.update(true, 0);
+    m.update(false, 1000);                                        // drop at t=1s
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, 8000));   // grace not elapsed (7s down)
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 9000));   // 8s down -> first reconnect
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, 20000));  // <15s since last try
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 24000)); // 15s later -> retry again
+}
+
+// Re-association re-arms: a later drop starts its own fresh grace + retry cadence.
+void test_wifi_reassociation_rearms() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    m.update(true, 0);
+    m.update(false, 1000);
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 9000));   // recovering
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(true, 12000));   // back up -> re-armed
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, 13000));  // new drop
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, 20000));  // within the fresh grace
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, 21500));  // fresh grace elapsed
+}
+
+// millis() wraparound (~49.7 days uptime): the (uint32_t)(now - x) idiom must still time
+// the grace + retry correctly across the rollover.
+void test_wifi_recovery_survives_millis_wrap() {
+    WifiLinkMonitor::Config cfg; cfg.graceMs = 8000; cfg.retryIntervalMs = 15000;
+    WifiLinkMonitor m(cfg);
+    const uint32_t base = 0xFFFFFFF0u;                 // 16 ms before rollover
+    m.update(true, base);
+    m.update(false, base + 1000u);                     // drop just before wrap (wraps at +16)
+    TEST_ASSERT_EQUAL(WifiAction::None,      m.update(false, base + 5000u));   // <8s down (wrapped)
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, base + 9000u));   // 8s down -> reconnect
+    TEST_ASSERT_EQUAL(WifiAction::Reconnect, m.update(false, base + 24000u));  // +15s -> retry
+}
+
+// --- Distributed Watering (DEC-024) ------------------------------------------------
+namespace {
+DistributedConfig mkDist(uint16_t startMin, uint16_t endMin, uint16_t perZoneMin,
+                         uint8_t fertCount, bool enabled = true) {
+    DistributedConfig c;
+    c.enabled = enabled; c.windowStartMin = startMin; c.windowEndMin = endMin;
+    c.perZoneMin = perZoneMin; c.fertCount = fertCount;
+    return c;
+}
+} // namespace
+
+// Plan: 32 min/zone over 09:00–15:30 (540–930) with 3 zones -> 4 runs x 8 min, bookended.
+void test_dist_plan_basic() {
+    DistributedPlan p = computeDistributedPlan(mkDist(540, 930, 32, 1), 3);
+    TEST_ASSERT_TRUE(p.valid);
+    TEST_ASSERT_EQUAL_UINT8(4, p.cycles);
+    TEST_ASSERT_EQUAL_UINT16(480, p.runLenSec);          // 32*60/4
+    TEST_ASSERT_EQUAL_UINT16(540, p.cycleStartMin[0]);   // first at window start
+    TEST_ASSERT_EQUAL_UINT16(903, p.cycleStartMin[3]);   // last cycle ends by the window end
+}
+
+// Floor + cap: below the 7-min floor is invalid; a big budget caps at DIST_MAX_RUNS.
+void test_dist_plan_floor_and_cap() {
+    TEST_ASSERT_FALSE(computeDistributedPlan(mkDist(540, 930, 6, 0), 3).valid);   // < floor
+
+    DistributedPlan one = computeDistributedPlan(mkDist(540, 930, 7, 0), 3);
+    TEST_ASSERT_TRUE(one.valid);
+    TEST_ASSERT_EQUAL_UINT8(1, one.cycles);
+    TEST_ASSERT_EQUAL_UINT16(420, one.runLenSec);
+    TEST_ASSERT_EQUAL_UINT16(540, one.cycleStartMin[0]);
+
+    DistributedPlan cap = computeDistributedPlan(mkDist(540, 930, 60, 0), 3);   // 60/7=8 -> cap 6
+    TEST_ASSERT_TRUE(cap.valid);
+    TEST_ASSERT_EQUAL_UINT8(DIST_MAX_RUNS, cap.cycles);
+    TEST_ASSERT_EQUAL_UINT16(600, cap.runLenSec);        // 60*60/6
+}
+
+// Over-subscription: 6 runs of 7 min can't fit a 30-min window -> invalid, emits nothing.
+void test_dist_plan_oversubscribed_invalid() {
+    TEST_ASSERT_FALSE(computeDistributedPlan(mkDist(540, 570, 42, 0), 3).valid);
+}
+
+// A cycle fires one run per live zone, back-to-back; fert rides the first fertCount cycles.
+// Fire order is the session-23 diagnostic hardcode Zone 3 -> 1 -> 2 (indices 2,0,1); see
+// scheduler.cpp evaluateDistributed / #151 (which makes it configurable and reverts this).
+void test_dist_emits_cycle_all_zones_fert_first() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);   // Monday 09:00 = cycle 0
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.setDistributed(mkDist(540, 930, 32, 1));            // fert the first cycle only
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());
+    TEST_ASSERT_EQUAL_UINT8(2, sink.reqs[0].zoneIndex);   // Zone 3 fires first (diagnostic order)
+    TEST_ASSERT_EQUAL_UINT8(0, sink.reqs[1].zoneIndex);   // then Zone 1
+    TEST_ASSERT_EQUAL_UINT8(1, sink.reqs[2].zoneIndex);   // then Zone 2
+    TEST_ASSERT_EQUAL_UINT32(480, sink.reqs[0].durationSec);
+    TEST_ASSERT_TRUE(sink.reqs[0].fertigate);            // cycle 0 < fertCount 1
+    TEST_ASSERT_TRUE(sink.reqs[2].fertigate);
+
+    s.tick(121u * 60u * 1000u);                          // advance to cycle 1 (11:01)
+    TEST_ASSERT_EQUAL_INT(6, (int)sink.reqs.size());
+    TEST_ASSERT_FALSE(sink.reqs[3].fertigate);           // cycle 1 >= fertCount -> plain
+}
+
+// evalNow() re-entry within the same minute must NOT re-fire a cycle (cycle-index keyed).
+void test_dist_idempotent_across_evalnow() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.setDistributed(mkDist(540, 930, 32, 0));
+    s.tick(0);                                           // cycle 0 -> 3 runs
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());
+    s.evalNow(0);                                        // same minute re-eval (config edit)
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());     // NOT 6
+}
+
+// Either/or: when Distributed is enabled, entry-schedule entries are dormant.
+void test_dist_either_or_entry_dormant() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.add(mkEntry(2, 9, 0, DAILY, 999));                 // due at 09:00, distinct duration
+    s.setDistributed(mkDist(540, 930, 32, 0));           // enabled -> replaces the schedule
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());     // only the distributed runs
+    for (size_t i = 0; i < sink.reqs.size(); ++i)
+        TEST_ASSERT_EQUAL_UINT32(480, sink.reqs[i].durationSec);   // none is the 999-s entry
+}
+
+// A refused cycle counts every dropped zone run (§13 drop + count).
+void test_dist_dropped_counts() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink; sink.accept = false;
+    Scheduler s(sink, c, 3);
+    s.setDistributed(mkDist(540, 930, 32, 0));
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(0, (int)sink.reqs.size());
+    TEST_ASSERT_EQUAL_UINT32(3, s.dropped());
+}
+
+// Enabled but INVALID (over-subscribed): distributed is not active, and the controller
+// must NOT water nothing — the fixed schedule governs instead. (#142 review: no silent dry day.)
+void test_dist_invalid_enabled_falls_back_to_schedule() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.add(mkEntry(1, 9, 0, DAILY, 300));                 // fixed entry due at 09:00
+    s.setDistributed(mkDist(540, 570, 42, 0));           // enabled but over-subscribed -> invalid
+    TEST_ASSERT_FALSE(s.distributedActive());
+    s.tick(0);
+    TEST_ASSERT_EQUAL_INT(1, (int)sink.reqs.size());     // the fixed entry ran, not distributed
+    TEST_ASSERT_EQUAL_UINT8(1, sink.reqs[0].zoneIndex);
+    TEST_ASSERT_EQUAL_UINT32(300, sink.reqs[0].durationSec);
+}
+
+// The fired-cycle bitmask resets at the day boundary: cycle 0 re-fires the next day.
+void test_dist_day_boundary_resets_mask() {
+    FakeWallClock src; src.available = true;
+    src.epochVal = epochFromCivil(2026, 6, 8, 9, 0, 0);   // Mon 09:00
+    Clock c(src); c.begin(0);
+    FakeRunSink sink;
+    Scheduler s(sink, c, 3);
+    s.setDistributed(mkDist(540, 930, 32, 0));
+    s.tick(0);                                            // Mon cycle 0 -> 3 runs
+    TEST_ASSERT_EQUAL_INT(3, (int)sink.reqs.size());
+    s.tick(86400u * 1000u);                               // Tue 09:00 -> mask reset, cycle 0 again
+    TEST_ASSERT_EQUAL_INT(6, (int)sink.reqs.size());
+}
+
+// Packed `dist` record survives a roundtrip.
+void test_dist_config_pack_roundtrip() {
+    DistributedConfig c = mkDist(540, 930, 32, 2);
+    uint8_t blob[DIST_CONFIG_BYTES];
+    packDistributedConfig(c, blob);
+    DistributedConfig r = unpackDistributedConfig(blob);
+    TEST_ASSERT_TRUE(r.enabled);
+    TEST_ASSERT_EQUAL_UINT16(540, r.windowStartMin);
+    TEST_ASSERT_EQUAL_UINT16(930, r.windowEndMin);
+    TEST_ASSERT_EQUAL_UINT16(32, r.perZoneMin);
+    TEST_ASSERT_EQUAL_UINT8(2, r.fertCount);
 }
 
 // --- Fertigation end-to-end (firmware spec §6 / #28) -----------------------------
@@ -1503,6 +1735,25 @@ void test_ff_never_decaying_flow_still_faults() {
     TEST_ASSERT_EQUAL(Fault::UnexpectedFlow, f);
     // Latency is bounded: cap (3000) + one idle window (1000) past the IDLE edge.
     TEST_ASSERT_TRUE(trippedAt <= 4000 + 3000 + 1000);
+}
+
+// #141: at the PRODUCTION default config (K≈1670), the idle-flow threshold is ~1 GPM, not
+// ~0.36 GPM. A decayed draindown tail (~0.36 GPM ≈ 50 pulses / 5 s) no longer latches E2;
+// a welded pump relay (~1.45 GPM ≈ 202 pulses / 5 s) still does. begin() arms the boot-idle
+// window directly, so this exercises the threshold itself, not the #124 drain gate.
+void test_ff_default_threshold_ignores_draindown_traps_welded_relay() {
+    FlowFaultDetector::Config prod;                    // production seeds
+
+    FlowFaultDetector tail(prod);                      // decayed draindown tail
+    tail.begin(0, 0);
+    TEST_ASSERT_EQUAL(Fault::None, tail.update(RunState::Idle, 0.36f, 0, 0));
+    TEST_ASSERT_EQUAL(Fault::None, tail.update(RunState::Idle, 0.36f, 50, 5000));      // +50 < 139
+
+    FlowFaultDetector welded(prod);                    // welded/stuck pump relay
+    welded.begin(0, 0);
+    TEST_ASSERT_EQUAL(Fault::None, welded.update(RunState::Idle, 1.45f, 0, 0));
+    TEST_ASSERT_EQUAL(Fault::UnexpectedFlow,
+                      welded.update(RunState::Idle, 1.45f, 202, 5000));                // +202 > 139
 }
 
 // End-to-end: a no-flow verdict routed to RunController slams the safe state and latches (§14).
@@ -2608,6 +2859,75 @@ static void test_api_settings_get_post() {
     TEST_ASSERT_TRUE(r.rc.remainingSec(now) <= 900);
 }
 
+// DEC-024 Distributed Watering config API: GET/POST roundtrip, server-computed plan,
+// validation backstop, and the fault gate.
+static void test_api_distributed_roundtrip() {
+    ApiRig r;
+    JsonDocument out;
+    TEST_ASSERT_EQUAL_INT(200, r.api.getDistributed(out));
+    TEST_ASSERT_FALSE(out["enabled"].as<bool>());
+    TEST_ASSERT_FALSE(out["active"].as<bool>());
+    TEST_ASSERT_EQUAL_UINT8(3, out["zoneCount"].as<uint8_t>());   // sched default MAX_ZONES
+    TEST_ASSERT_EQUAL_UINT16(7, out["floorMin"].as<uint16_t>());
+
+    JsonDocument body = parseJson(
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,"
+        "\"perZoneMin\":32,\"fertCount\":1}");
+    JsonDocument o2;
+    TEST_ASSERT_EQUAL_INT(200, r.api.postDistributed(body.as<JsonVariantConst>(), o2, 0));
+    TEST_ASSERT_TRUE(o2["active"].as<bool>());
+    TEST_ASSERT_TRUE(r.store.distributed().enabled);             // persisted
+    TEST_ASSERT_TRUE(r.sched.distributed().enabled);             // live
+
+    JsonDocument o3;
+    TEST_ASSERT_EQUAL_INT(200, r.api.getDistributed(o3));
+    TEST_ASSERT_EQUAL_UINT16(540, o3["windowStartMin"].as<uint16_t>());
+    TEST_ASSERT_EQUAL_UINT16(32,  o3["perZoneMin"].as<uint16_t>());
+    TEST_ASSERT_EQUAL_UINT8(1,    o3["fertCount"].as<uint8_t>());
+    TEST_ASSERT_EQUAL_UINT8(4,    o3["plan"]["cycles"].as<uint8_t>());       // matches firmware
+    TEST_ASSERT_EQUAL_UINT16(480, o3["plan"]["runLenSec"].as<uint16_t>());
+    TEST_ASSERT_EQUAL_UINT16(540, o3["plan"]["cycleStartMin"][0].as<uint16_t>());
+}
+
+static void test_api_distributed_rejects_invalid() {
+    ApiRig r;
+    JsonDocument o1;
+    TEST_ASSERT_EQUAL_INT(422, r.api.postDistributed(parseJson(   // over-subscribed window
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":570,\"perZoneMin\":42,\"fertCount\":0}")
+        .as<JsonVariantConst>(), o1, 0));
+    JsonDocument o2;
+    TEST_ASSERT_EQUAL_INT(422, r.api.postDistributed(parseJson(   // below the 7-min floor
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,\"perZoneMin\":5,\"fertCount\":0}")
+        .as<JsonVariantConst>(), o2, 0));
+    JsonDocument o3;
+    TEST_ASSERT_EQUAL_INT(422, r.api.postDistributed(parseJson(   // fertCount past the cap
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,\"perZoneMin\":32,\"fertCount\":9}")
+        .as<JsonVariantConst>(), o3, 0));
+    TEST_ASSERT_FALSE(r.store.distributed().enabled);            // nothing persisted
+}
+
+static void test_api_distributed_disable_and_fault_gate() {
+    ApiRig r;
+    JsonDocument o1;
+    r.api.postDistributed(parseJson(
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,\"perZoneMin\":32,\"fertCount\":0}")
+        .as<JsonVariantConst>(), o1, 0);
+    TEST_ASSERT_TRUE(r.sched.distributed().enabled);
+
+    JsonDocument o2;                                             // disable -> schedule governs
+    TEST_ASSERT_EQUAL_INT(200, r.api.postDistributed(
+        parseJson("{\"enabled\":false}").as<JsonVariantConst>(), o2, 0));
+    TEST_ASSERT_FALSE(o2["active"].as<bool>());
+    TEST_ASSERT_FALSE(r.sched.distributed().enabled);
+    TEST_ASSERT_EQUAL_UINT16(32, r.sched.distributed().perZoneMin);   // disable keeps the plan
+
+    r.rc.raiseFault(Fault::NoFlow, 0);                           // faulted -> 409, no edit
+    JsonDocument o3;
+    TEST_ASSERT_EQUAL_INT(409, r.api.postDistributed(parseJson(
+        "{\"enabled\":true,\"windowStartMin\":540,\"windowEndMin\":930,\"perZoneMin\":32,\"fertCount\":0}")
+        .as<JsonVariantConst>(), o3, 0));
+}
+
 // DEC-015 (#57): enabling the override mutes flow verdicts, clears a latched flow
 // fault even while water still pulses (the recovery path), and persists.
 static void test_api_flow_override_dec015() {
@@ -3178,6 +3498,7 @@ int main() {
     RUN_TEST(test_rc_stop_unwinds);
     RUN_TEST(test_rc_fault_latches_and_clears);
     RUN_TEST(test_rc_fault_from_idle);
+    RUN_TEST(test_rc_idle_fault_logs_no_phantom);
     RUN_TEST(test_rc_queue_runs_sequentially);
     RUN_TEST(test_rc_rejects_bad_requests);
     RUN_TEST(test_rc_sw_max_runtime_clamps);
@@ -3221,6 +3542,20 @@ int main() {
     RUN_TEST(test_nightly_reboot_defers_while_busy);
     RUN_TEST(test_nightly_reboot_guards);
     RUN_TEST(test_nightly_reboot_next_day_after_skip);
+    RUN_TEST(test_wifi_blip_under_grace_no_reconnect);
+    RUN_TEST(test_wifi_sustained_drop_reconnects_periodically);
+    RUN_TEST(test_wifi_reassociation_rearms);
+    RUN_TEST(test_wifi_recovery_survives_millis_wrap);
+    RUN_TEST(test_dist_plan_basic);
+    RUN_TEST(test_dist_plan_floor_and_cap);
+    RUN_TEST(test_dist_plan_oversubscribed_invalid);
+    RUN_TEST(test_dist_emits_cycle_all_zones_fert_first);
+    RUN_TEST(test_dist_idempotent_across_evalnow);
+    RUN_TEST(test_dist_either_or_entry_dormant);
+    RUN_TEST(test_dist_dropped_counts);
+    RUN_TEST(test_dist_invalid_enabled_falls_back_to_schedule);
+    RUN_TEST(test_dist_day_boundary_resets_mask);
+    RUN_TEST(test_dist_config_pack_roundtrip);
 
     RUN_TEST(test_sched_rc_fert_routing);
 
@@ -3244,6 +3579,7 @@ int main() {
     RUN_TEST(test_ff_post_run_idle_rebaseline);
     RUN_TEST(test_ff_trailing_draindown_no_fault_then_still_armed);
     RUN_TEST(test_ff_never_decaying_flow_still_faults);
+    RUN_TEST(test_ff_default_threshold_ignores_draindown_traps_welded_relay);
     RUN_TEST(test_ff_integration_no_flow_faults_rc);
 
     RUN_TEST(test_cal_start_bounded_plain_run);
@@ -3291,6 +3627,9 @@ int main() {
     RUN_TEST(test_api_fault_gate_and_exemptions);
     RUN_TEST(test_api_schedule_roundtrip_persist_atomic);
     RUN_TEST(test_api_settings_get_post);
+    RUN_TEST(test_api_distributed_roundtrip);
+    RUN_TEST(test_api_distributed_rejects_invalid);
+    RUN_TEST(test_api_distributed_disable_and_fault_gate);
     RUN_TEST(test_api_flow_override_dec015);
     RUN_TEST(test_flow_detector_mute);
     RUN_TEST(test_api_ota_gate_and_run_inhibit);

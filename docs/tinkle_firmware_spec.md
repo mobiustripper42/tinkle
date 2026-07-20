@@ -248,7 +248,7 @@ All mutating endpoints validate ranges and reject if currently in FAULT (except 
   - **One documented deviation:** `POST /api/settings` is allowed in FAULT — settings command no actuation, and DEC-015's enable-while-latched *is* the recovery path for a lying flow sensor. `/api/fault/clear` routes through `FaultManager::requestClear()` (the resolved-condition gate applies to the HTTP clear — the only clear path now that the button is gone, DEC-019). `/api/stop` also voids an active calibration (operator bailed: no K, no CalRange).
   - **Schedule** posts are atomic full-replaces: validate everything, then `clear()`+`add()`+NVS save (packed 10-byte entries, `sched` blob) + `evalNow()`. The blob rehydrates at boot — the schedule runs headless off flash (§17 local autonomy).
   - **`WebServer` (esp32, `web_server.h`)** is routes + body collection + one FreeRTOS mutex: async handlers run on the other core, so every `Api` call serializes against the loop (loop holds the lock per pass, releases between passes; handlers answer 503 after 250 ms rather than block the TCP task). Bodies cap at 4 KB (413).
-  - **`WifiManager` (esp32, `wifi_manager.h`)**: non-blocking STA join with NVS creds → 20 s timeout → open SoftAP `Tinkle-Setup`; mDNS `tinkle.local` either way. Creds written via `/api/settings` apply at next boot. WiFi has no role in watering.
+  - **`WifiManager` (esp32, `wifi_manager.h`)**: non-blocking STA join with NVS creds → 20 s timeout → open SoftAP `Tinkle-Setup`; mDNS `tinkle.local` either way. Creds written via `/api/settings` apply at next boot. WiFi has no role in watering. **Post-join STA-drop recovery (#147):** once joined, the link is watched every tick; a sustained drop (> ~8 s, debounced) triggers `WiFi.reconnect()` retried every ~15 s **indefinitely** and re-announces mDNS on re-association — it does **not** fall back to SoftAP on a mid-season drop, so the box self-heals onto the returning farm AP rather than stranding off-network. Tradeoff: a *permanent* AP change (new SSID/password) after the first join is only escaped by a power-cycle (which re-runs the initial join → SoftAP fallback).
   - **`GET /api/status` additions** beyond the list above: fault-log ring (§14), `valveRestFlags` (DEC-014), calibration phase, schedule-drop counter, wifi mode/ip/rssi, uptime.
 
 ### 10.1 Served web interface (SPA) — part of the build
@@ -354,7 +354,7 @@ struct ScheduleEntry {
 | `HARD_MAX_RUNTIME` | 30 min | ATtiny ceiling (own clock) |
 | `swMaxRuntimeSec` | 1200 | ESP32 per-run ceiling, configurable |
 | `FLOW_GRACE_S` | 20 | settle before no-flow check |
-| `IDLE_FLOW_FAULT_PULSES` | 50 (seed, tune) | unexpected-flow threshold over one idle window (`FlowFaultDetector`, #35) |
+| `IDLE_FLOW_FAULT_PULSES` | 139 (K≈1670-referenced ≈ 1.0 GPM; `TINKLE_SIM`: 50) | unexpected-flow threshold over one idle window (`FlowFaultDetector`, #35). ~1 GPM rejects post-run draindown while a welded relay (~1.45 GPM) still trips; at-grade catchment (#141) |
 | `CAL_RUN_SEC` | 120 (seed; `TINKLE_SIM`: 10) | calibration run ceiling, its own bound under `swMaxRuntimeSec` (#36) |
 | cal sanity bounds | K ∈ [50, 5000] p/gal, ≥ 0.25 gal | reject absurd calibrations → `FAULT_CAL_RANGE` (#36; seeds, tune) |
 | `REST_WINDOW_MS` | 10000 (seed; `TINKLE_SIM`: 3000) | DEC-014 post-close rest window (#52) |
@@ -363,6 +363,9 @@ struct ScheduleEntry {
 | `DRAIN_QUIET_PULSES` | 2 (seed, tune) | #124: max pulses tolerated in one quiet sub-window (~0.02 GPM at K≈1670) |
 | `DRAIN_CAP_MS` | 60000 (seed; `TINKLE_SIM`: 5000) | #124: bound on the drain wait — the idle check arms regardless (burst still latches); `ValveRestMonitor` flags the zone directly (still flowing = the DEC-014 failure) |
 | `RUNLOG_DEPTH` | 32 | run-history ring entries (DEC-018); 11 B/entry packed `runlog` NVS blob (~356 B); bumpable to 64 (wear, not space, is the ceiling) |
+| `DIST_RUN_FLOOR_MIN` | 7 | DEC-024 Distributed Watering: hard minimum run length; the day's per-zone budget splits into runs no shorter than this |
+| `DIST_MAX_RUNS` | 6 | DEC-024: max cycles/runs per zone per day (the fired-cycle bitmask is per-day) |
+| `DIST_RUN_OVERHEAD_SEC` | 25 | DEC-024: per-run valve/pump/settle overhead used in the cycle-fit check (estimate pending `ZONE_TRAVEL_MS` confirm, #98) |
 
 Bench-confirm `ZONE_TRAVEL_MS` and `DIVERTER_TRAVEL_MS` against the actual parts before trusting the defaults.
 

@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include "../core/persistence.h"
+#include "../core/wifi_link_monitor.h"   // #147 STA-drop recovery decision (host-tested)
 
 // WifiManager — STA-join with stored creds, SoftAP fallback, mDNS (§10 / #55).
 // Header-only ESP32 shim like the other bindings; the core never sees WiFi.
@@ -50,16 +51,41 @@ public:
     }
 
     void tick(uint32_t nowMs) {
-        if (mode_ != Mode::Connecting) return;
-        if (WiFi.status() == WL_CONNECTED) {
-            mode_ = Mode::Sta;
-            startMdns();
-            Serial.printf("[tinkle] WiFi STA up: %s -> http://tinkle.local (%s)\n",
-                          store_.wifiSsid(), WiFi.localIP().toString().c_str());
-        } else if ((uint32_t)(nowMs - startMs_) >= STA_TIMEOUT_MS) {
-            Serial.println(F("[tinkle] WiFi STA join timed out -> SoftAP fallback"));
-            WiFi.disconnect(true);
-            startSoftAp();
+        if (mode_ == Mode::Connecting) {
+            if (WiFi.status() == WL_CONNECTED) {
+                mode_ = Mode::Sta;
+                link_.update(true, nowMs);   // arm the drop monitor from a healthy baseline
+                startMdns();
+                Serial.printf("[tinkle] WiFi STA up: %s -> http://tinkle.local (%s)\n",
+                              store_.wifiSsid(), WiFi.localIP().toString().c_str());
+            } else if ((uint32_t)(nowMs - startMs_) >= STA_TIMEOUT_MS) {
+                Serial.println(F("[tinkle] WiFi STA join timed out -> SoftAP fallback"));
+                WiFi.disconnect(true);
+                startSoftAp();
+            }
+            return;
+        }
+
+        // #147: once joined, keep WATCHING the STA link — the SDK's auto-reconnect wedges,
+        // and the old code did nothing here, so a dropped link never recovered. On a sustained
+        // drop, re-kick the join (indefinitely — no SoftAP trap); on re-association, re-announce
+        // mDNS so tinkle.local isn't stale.
+        if (mode_ == Mode::Sta) {
+            const bool up = (WiFi.status() == WL_CONNECTED);
+            if (link_.update(up, nowMs) == WifiAction::Reconnect) {
+                Serial.println(F("[tinkle] WiFi STA link down -> reconnecting"));
+                WiFi.reconnect();
+                reconnecting_ = true;        // a real (post-grace) drop is in recovery
+            }
+            // Re-announce mDNS only after an ACTUAL reconnect completes, not on a sub-grace
+            // blip that self-heals — keeps the "down -> reconnecting" / "re-associated" log
+            // lines paired and avoids churn on a marginal link.
+            if (up && reconnecting_) {
+                reconnecting_ = false;
+                startMdns();
+                Serial.printf("[tinkle] WiFi STA re-associated (%s)\n",
+                              WiFi.localIP().toString().c_str());
+            }
         }
     }
 
@@ -92,10 +118,12 @@ private:
         if (mdnsUp_)  MDNS.addService("http", "tcp", 80);
     }
 
-    Persistence& store_;
-    Mode         mode_    = Mode::Connecting;
-    uint32_t     startMs_ = 0;
-    bool         mdnsUp_  = false;
+    Persistence&    store_;
+    Mode            mode_    = Mode::Connecting;
+    uint32_t        startMs_ = 0;
+    bool            mdnsUp_       = false;
+    bool            reconnecting_ = false;   // #147: a real drop is in recovery (gates mDNS re-announce)
+    WifiLinkMonitor link_;                   // #147: sustained-drop -> reconnect decision
 };
 
 } // namespace tinkle
