@@ -46,6 +46,14 @@ CalibrationController::FinishResult
 CalibrationController::finish(float measuredGallons, uint32_t pulses, uint32_t nowMs) {
     if (phase_ == Phase::Idle) return FinishResult::NotCalibrating;
 
+    // Whether THIS finish() owns the run in flight: only true when the cal's own bounded
+    // run is still active (Phase::Running) — we stop it just below. In Phase::Awaiting the
+    // cal run has already ended (rc_ went Settle->Idle), so any run rc_ is now moving is an
+    // UNRELATED one (a due schedule entry or a manual request that started while the
+    // operator was entering the number). A CalRange reject must never latch/log against
+    // that run (#144) — the same phantom-log/latch family as #138, through a different door.
+    const bool ownsRun = (phase_ == Phase::Running);
+
     // Finish mid-run freezes the tally NOW and unwinds — pulses that trail during the
     // close travel go uncounted, biasing K slightly low. The SPA flow finishes after
     // the bounded run ends (Awaiting), where the tally includes the trailing flow.
@@ -55,15 +63,20 @@ CalibrationController::finish(float measuredGallons, uint32_t pulses, uint32_t n
     }
     phase_ = Phase::Idle;                        // the calibration ends either way
 
+    // A bad calibration number is always Rejected (no K write). The CalRange latch is a
+    // signal about the calibration, so raise it only when it can't harm an unrelated run:
+    // this finish owns the run, or the controller is idle (the normal no-concurrent case).
+    const bool safeToFault = ownsRun || rc_.isIdle();
+
     // Sanity bounds (§7). The volume compare is written so NaN fails it; a zero tally
     // yields K = 0, which the range check rejects — no divide-by-zero path to a write.
     if (!(measuredGallons >= cfg_.minGallons)) {
-        rc_.raiseFault(Fault::CalRange, nowMs);
+        if (safeToFault) rc_.raiseFault(Fault::CalRange, nowMs);
         return FinishResult::Rejected;
     }
     const float k = (float)tally_ / measuredGallons;
     if (k < cfg_.minK || k > cfg_.maxK) {
-        rc_.raiseFault(Fault::CalRange, nowMs);
+        if (safeToFault) rc_.raiseFault(Fault::CalRange, nowMs);
         return FinishResult::Rejected;
     }
 
