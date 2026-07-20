@@ -22,3 +22,6 @@ test/sim/screenshots/
 
 # OTA shared secret (#126) — never commit; ota_secret.ini.example is the template
 ota_secret.ini
+
+# Poop Deck MQTT producer password (#13) — never commit; poopdeck_secret.ini.example is the template
+poopdeck_secret.ini
