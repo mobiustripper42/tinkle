@@ -6,7 +6,7 @@ branch: claude/its-alive-issue-163-yt56a5
 started: 2026-07-24T11:19:39Z
 ended:
 points:
-pr_numbers: [166, 168, 169]
+pr_numbers: [166, 168, 169, 170]
 status: open
 transcript: /root/.claude/projects/-home-user-tinkle/f5b4c5ee-ffae-5178-9146-73ffa5ad5532.jsonl
 ---
@@ -94,7 +94,36 @@ build (try/except; SystemExit reserved for the size gate), stale platformio.ini 
 **Branch:** task/159-firmware-build-versioning
 **Opened at:** 2026-07-24T16:12:12Z
 
+## Task 4: Spec notes — #158 + #151 won't-fix; fix stale kFireOrder comment (docs)
+
+Issue-list cleanup: two enhancements closed as won't-fix, rationale recorded durably so future
+readers get the "why" from the docs.
+
+**Completed:**
+- `docs/tinkle_firmware_spec.md` — #158 note (calibration §7): the #144 withheld `CAL_RANGE`
+  reject is intentionally trace-less (interactive cal has live feedback; not worth wiring a
+  `FaultManager&` into `CalibrationController`). #151 note (DEC-024 constants): per-zone
+  enable/disable + configurable firing order not built — turning a zone off in even-spread
+  Distributed is confusing, and the permutation UI is disproportionate on a 3-zone box.
+- `src/core/scheduler.cpp` — corrected the stale `kFireOrder` comment (said "superseded by #151,
+  which reverts this"; #151 is closed, so 3→1→2 is kept as the intentional fixed order). Order
+  value **unchanged**; comment only. Native suite 168/168.
+- Filed **#167** (Poop Deck liveness heartbeat) earlier this session as the "learn of an outage
+  while it's live" follow-up.
+
+**Code review:** Docs + one comment, no logic — self-reviewed clean; suite 168/168.
+**PR:** [#170](https://github.com/mobiustripper42/tinkle/pull/170)
+**Points:** 1
+**Branch:** task/158-151-spec-notes
+**Opened at:** 2026-07-24T16:51:12Z
+
 **Next Steps:**
+- Merge the open PRs (#166 #161, #168 #160, #169 #159, #170 docs) — all cut from main
+  independently, overlapping files (run_controller.h, web/index.html, docs), so expect a couple
+  of "Update branch" resolutions; order is free.
+- Close #158 + #151 as *not planned* once #170 merges.
+- esp32 build couldn't run this session (Windows host, no toolchain) — confirm `pio run -e esp32`
+  on a toolchain machine, or wire CI later, before trusting the on-target builds.
 - Confirm `pio run -e esp32` + SPA gzip gate on a toolchain machine before merging #166.
 - Downstream (poop-deck repo, deferred): Grafana alert rule on the `fault` field → email; a
   "no telemetry in N hours" heartbeat is the only way to learn of an outage while it's live.
