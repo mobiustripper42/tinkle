@@ -6,7 +6,7 @@ branch: claude/its-alive-issue-163-yt56a5
 started: 2026-07-24T11:19:39Z
 ended:
 points:
-pr_numbers: [166, 168, 169, 170]
+pr_numbers: [166, 168, 169, 170, 171]
 status: open
 transcript: /root/.claude/projects/-home-user-tinkle/f5b4c5ee-ffae-5178-9146-73ffa5ad5532.jsonl
 ---
@@ -116,6 +116,29 @@ readers get the "why" from the docs.
 **Points:** 1
 **Branch:** task/158-151-spec-notes
 **Opened at:** 2026-07-24T16:51:12Z
+
+## Task 5: SPA UI-review pass — the full #140 basket (STOP feedback, decoded faults, touch + polish)
+
+**Completed:**
+- `web/index.html` (only) — all 14 findings from the Session-22 @ui-reviewer basket (SPA 6/10):
+  STOP ALL flashes a confirmation from any screen; fault log + History decode raw keys to E-codes;
+  OTA guards unsaved Settings edits; 7-day toggles → a 4+3 grid above the touch floor; banners
+  fault-first; Home big-number shows the E-code in a fault; override banner tappable; CLEAR FAULT
+  warn-toned; a "Next run" preview on Home; disabled-button duller fill (fixed a CSS specificity
+  tie); `:focus-visible`; `button:active` behind `prefers-reduced-motion`; unified "fert" casing;
+  `wifi.rssi` rendered. Mock now gates `distSummary` on distributed-active (mirrors the real API).
+- **Verified in headless Chromium** against `?mock=1` (Home / Water / Faults screenshots sent to
+  eric) — no esp32 toolchain needed, which is why this was a good fit for the Windows session.
+  `node --check` clean; gzip 19.7 KB (< 50 KB gate). No firmware/C++ touched.
+
+**Code review:** 3 findings, all fixed — restore the button touch floor eroded by the earlier
+18→15px font (min-height 3rem→3.2rem); `flash()` now tracks its clear-timer per element (rapid
+STOP re-tap no longer blanks the message early); hide the redundant "Next run: Distributed active"
+line when the day-summary card is shown. Weekday/next-run math + no-injection confirmed clean.
+**PR:** [#171](https://github.com/mobiustripper42/tinkle/pull/171)
+**Points:** 5
+**Branch:** task/140-spa-ui-review
+**Opened at:** 2026-07-24T17:51:52Z
 
 **Next Steps:**
 - Merge the open PRs (#166 #161, #168 #160, #169 #159, #170 docs) — all cut from main
