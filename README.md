@@ -53,9 +53,14 @@ PlatformIO's official installer — it builds its own isolated virtualenv under
 dodges the system-Click breakage above):
 
 ```bash
+sudo apt install -y python3-venv       # the installer builds its own venv; Ubuntu ships it as a separate package
 curl -fsSL https://raw.githubusercontent.com/platformio/platformio-core-installer/master/get-platformio.py -o /tmp/get-platformio.py
 python3 /tmp/get-platformio.py
 ```
+
+> On a fresh Ubuntu the installer fails with *"Can not install PlatformIO Core due to a
+> missed `venv` module"* until `python3-venv` is present — it pulls the correct
+> versioned package (`python3.12-venv` on 24.04). Install it, then re-run the installer.
 
 Then put `pio` on your PATH (add to `~/.bashrc` / `~/.zshrc` to make it stick):
 
