@@ -441,8 +441,8 @@ function renderHome() {
   $('#st-wifi').textContent  = S.wifi ? S.wifi.mode + ' ' + (S.wifi.ip || '') : '—';
   $('#st-up').textContent    = S.uptimeMs ? Math.floor(S.uptimeMs/3600000)+'h '+
                                Math.floor(S.uptimeMs/60000)%60+'m' : '—';
-  // Build sha (#126): the running image's identity, front and center — one glance
-  // after an OTA answers "did the flash take". Also shown in Settings → Firmware.
+  // Build id (#126/#159): the running image's sha+timestamp identity, front and center —
+  // one glance after an OTA answers "did the flash take". Also shown in Settings → Firmware.
   $('#st-build').textContent = S.build || '—';
 }
 

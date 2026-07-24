@@ -576,7 +576,8 @@ can never energize the pump mid-flash (every run funnels through the `IRunSink` 
 API covered in one place); a failed or dropped upload lifts the inhibit, a good one ends in reboot;
 (3) **optional shared secret** — `X-OTA-Key` header checked against a build-flag from an untracked
 `ota_secret.ini` (the repo is public; a committed secret is not a secret). `/api/status` gains
-`build` (git short-sha via `tools/fw_build_id.py`) so a flash is observable from the phone.
+`build` (a `<sha>[-dirty]-<UTC timestamp>` identity via `tools/fw_build_id.py`; the timestamp makes
+it change on every flash, #159) so a flash is observable from the phone.
 
 **Why OTA-from-FAULT is allowed:** a latched fault is pump-off and queue-unwound — the safest state
 the system has — and reflash is a legitimate recovery path. The latch is RAM-only and re-derives

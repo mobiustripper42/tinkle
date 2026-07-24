@@ -25,3 +25,7 @@ ota_secret.ini
 
 # Poop Deck MQTT producer password (#13) — never commit; poopdeck_secret.ini.example is the template
 poopdeck_secret.ini
+
+# Per-build archived firmware images (#159) — clean up manually
+build_archive/
+__pycache__/
