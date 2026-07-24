@@ -9,6 +9,7 @@
 #include "flow_monitor.h"
 #include "flow_fault_detector.h"
 #include "valve_rest_monitor.h"
+#include "dist_summary.h"
 #include "clock.h"
 
 // Api — the §10 endpoint POLICY (#56), platform-independent on purpose. Everything

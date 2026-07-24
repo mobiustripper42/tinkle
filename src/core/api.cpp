@@ -26,6 +26,7 @@ const char* Api::faultName(Fault f) {
         case Fault::CalRange:       return "calRange";
         case Fault::Clock:          return "clock";
         case Fault::ValveRest:      return "valveRest";
+        case Fault::MissedCycle:    return "missedCycle";
         default:                    return "?";
     }
 }
@@ -60,7 +61,7 @@ int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
     flow["k"]              = d_.flow.k();
     flow["overrideActive"] = d_.store.flowOverride();      // DEC-015 status flag
 
-    const RunEntry& lr = d_.run.lastRun();              // the run-history ring head (DEC-018)
+    const RunEntry lr = d_.run.lastRealRun();           // last real run — skips MissedCycle markers (#161)
     JsonObject last = out["lastRun"].to<JsonObject>();
     last["result"]      = resultName(lr.result);
     last["zone"]        = lr.zoneIndex;
@@ -97,6 +98,29 @@ int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
     }
     cal["pulses"] = d_.cal.pulsesCounted();
     cal["lastK"]  = d_.cal.lastK();
+
+    // Distributed-Watering day summary (#161) — the Home at-a-glance card. Present only when
+    // Distributed mode is active AND the clock is valid (the summary is keyed to today's local
+    // day/minute; a summary with no wall clock would be meaningless). Every field is exact:
+    // completed-cycle counts + metered centigallons, no estimate.
+    if (d_.clock.valid()) {
+        const DistributedPlan plan = computeDistributedPlan(d_.sched.distributed(), d_.sched.zoneCount());
+        const uint16_t nowMin = (uint16_t)(wt.hour * 60 + wt.minute);
+        const uint32_t dayOrd = d_.clock.epoch(nowMs) / 86400u;
+        const DistDaySummary ds = computeDistSummary(d_.run.runLog(), plan, d_.sched.zoneCount(),
+                                                     dayOrd, nowMin);
+        if (ds.active) {
+            JsonObject dsum = out["distSummary"].to<JsonObject>();
+            dsum["cycles"] = ds.cycles;
+            JsonArray zones = dsum["zones"].to<JsonArray>();
+            for (uint8_t z = 0; z < ds.zoneCount; ++z) {
+                JsonObject o = zones.add<JsonObject>();
+                o["plannedByNow"] = ds.zones[z].plannedByNow;
+                o["completed"]    = ds.zones[z].completed;
+                o["centigallons"] = ds.zones[z].centigallons;
+            }
+        }
+    }
 
     out["scheduleDropped"] = d_.sched.dropped();
     return 200;

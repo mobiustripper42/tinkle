@@ -27,6 +27,7 @@ const char* faultCodeToString(uint8_t faultCode) {
         case 4:  return "cal-range";        // CalRange
         case 5:  return "clock";            // Clock
         case 6:  return "valve-rest";       // ValveRest
+        case 7:  return "missed-cycle";     // MissedCycle — a distributed cycle that never ran (#161)
         default: return "fault";            // unknown/added code — still surfaces a fault
     }
 }
