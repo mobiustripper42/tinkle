@@ -44,11 +44,17 @@ h2{font-size:1.05rem; margin:1rem 0 .4rem; color:var(--dim); text-transform:uppe
 
 button{font:inherit; font-weight:700; color:var(--ink); background:#fff;
        border:2px solid var(--ink); border-radius:.6rem;
-       padding:.8rem 1rem; min-height:3rem; width:100%; margin:.25rem 0; cursor:pointer}
-button:active{transform:scale(.985)}
-button:disabled{opacity:.45}
+       padding:.8rem 1rem; min-height:3.2rem; width:100%; margin:.25rem 0; cursor:pointer}  /* ~48px at the 15px base — keeps the touch floor after the smaller font (#140) */
+/* #140: gate the press-scale behind reduced-motion; disabled needs a duller FILL (opacity
+   alone flattens in sunlight); a visible focus ring since tap-highlight is off. */
+@media (prefers-reduced-motion: no-preference){ button:active{transform:scale(.985)} }
 button.go{background:var(--go); border-color:var(--go); color:#fff}
+button.warn{background:var(--warn); border-color:var(--warn); color:#fff}   /* re-arming after a trip — not START-green (#140) */
 button.danger{background:var(--stop); border-color:var(--stop); color:#fff}
+/* disabled AFTER the colored variants so it wins the equal-specificity tie — a duller FILL, not
+   opacity alone (sunlight flattens opacity), even on a .go/.warn/.danger button (#140). */
+button:disabled{opacity:.6; background:#e6e6e2; color:var(--dim); border-color:var(--line); cursor:not-allowed}
+:focus-visible{outline:3px solid var(--warn); outline-offset:2px}
 button.small{width:auto; min-height:2.4rem; padding:.4rem .8rem; font-size:.9rem}
 
 label{display:block; margin:.5rem 0 .15rem; color:var(--dim); font-size:.9rem}
@@ -59,8 +65,8 @@ input[type=checkbox]{width:1.6rem; height:1.6rem; min-height:0}
 .row>*{flex:1}
 .row>.shrink{flex:0 0 auto; width:auto}
 
-.days{display:flex; gap:.25rem; margin:.25rem 0}
-.days button{min-height:2.6rem; padding:.3rem 0; font-size:.85rem; margin:0}
+.days{display:grid; grid-template-columns:repeat(4,1fr); gap:.3rem; margin:.25rem 0}  /* 4+3 rows so each clears the touch floor (#140) */
+.days button{min-height:3.3rem; padding:.3rem 0; font-size:.9rem; margin:0}
 .days button.on{background:var(--ink); color:#fff}
 
 .muted{color:var(--dim); font-size:.9rem}
@@ -73,6 +79,9 @@ input[type=checkbox]{width:1.6rem; height:1.6rem; min-height:0}
 #stopall{position:fixed; left:0; right:0; bottom:4.25rem; padding:0 .75rem; z-index:5}
 #stopall button{max-width:34rem; margin:0 auto; display:block; font-size:1.3rem; min-height:3.6rem;
                 box-shadow:0 .25rem .75rem rgba(0,0,0,.25)}
+#stop-msg{max-width:34rem; margin:0 auto .3rem; text-align:center; font-weight:700;
+          background:var(--paper); border-radius:.4rem; padding:.15rem .4rem}   /* STOP-tap feedback (#140) */
+#stop-msg:empty{display:none}
 nav{position:fixed; left:0; right:0; bottom:0; display:flex; background:var(--ink); z-index:5}
 nav button{flex:1; background:none; border:none; border-radius:0; color:#bbb;
            font-size:.78rem; min-height:4rem; padding:.3rem 0; margin:0}
@@ -122,9 +131,10 @@ nav .ico{display:block; font-size:1.3rem}
 </head>
 <body>
 
-<div id="net-banner"   class="banner">DISCONNECTED — showing last known state</div>
-<div id="ovr-banner"   class="banner">&#9888; FLOW CHECK DISABLED</div>
+<!-- Severity order (#140): fault (red) first, then flow-override (amber), then disconnected. -->
 <div id="fault-banner" class="banner">FAULT — tap for details</div>
+<div id="ovr-banner"   class="banner">&#9888; FLOW CHECK DISABLED — tap to review</div>
+<div id="net-banner"   class="banner">DISCONNECTED — showing last known state</div>
 
 <main>
 
@@ -145,6 +155,9 @@ nav .ico{display:block; font-size:1.3rem}
     <div class="kv"><span>This run</span><span id="st-gal">—</span></div>
     <div class="kv"><span>Diverter</span><span id="st-div">—</span></div>
     <div class="kv"><span>Queued</span><span id="st-q">—</span></div>
+  </div>
+  <div class="card" id="st-next-card" style="display:none">
+    <div class="kv"><span>Next run</span><span id="st-next">—</span></div>
   </div>
   <h2>Last run</h2>
   <div class="card" id="st-last">—</div>
@@ -315,7 +328,7 @@ nav .ico{display:block; font-size:1.3rem}
 <section id="scr-faults" class="screen">
   <h1>Faults</h1>
   <div id="fault-active" class="card">No fault.</div>
-  <button class="go" id="fault-clear">CLEAR FAULT</button>
+  <button class="warn" id="fault-clear">CLEAR FAULT</button>
   <div id="fault-clear-msg" class="muted" role="status"></div>
   <h2>Valve service alerts</h2>
   <p class="muted">A valve that isn't sealing shut after a run shows here — service it (E6).</p>
@@ -338,7 +351,10 @@ nav .ico{display:block; font-size:1.3rem}
 
 </main>
 
-<div id="stopall"><button class="danger" id="stop-btn">&#9632; STOP ALL</button></div>
+<div id="stopall">
+  <div id="stop-msg" role="status"></div>
+  <button class="danger" id="stop-btn">&#9632; STOP ALL</button>
+</div>
 
 <nav>
   <button data-scr="home"   class="active"><span class="ico">&#8962;</span>Home</button>
@@ -359,7 +375,8 @@ const FAULT_TEXT = {
   unexpectedFlow:'E2 — Water moving while idle (stuck valve or leak).',
   watchdog:'E3 — Hardware watchdog tripped (run exceeded the hardware ceiling).',
   calRange:'E4 — Calibration rejected (measurement implausible).',
-  clock:'E5 — Clock invalid.', valveRest:'E6 — A valve failed to rest closed (service it).'
+  clock:'E5 — Clock invalid.', valveRest:'E6 — A valve failed to rest closed (service it).',
+  missedCycle:'E7 — A distributed watering cycle was missed (box was off or a fault skipped it).'
 };
 const STATE_TEXT = {
   idle:'IDLE', prepDiverter:'PREPARING…', openZone:'OPENING VALVE…',
@@ -432,11 +449,14 @@ function renderHome() {
   $('#st-state').textContent = STATE_TEXT[S.state] || S.state;
   const live = S.state === 'running'
     ? S.remainingSec - (Date.now() - statusAt)/1000 : S.remainingSec;
-  $('#st-count').textContent = S.state === 'running' ? mmss(live) : '--:--';
+  // In a fault, the big number shows the E-code (was a dead '--:--') so the headline number
+  // still carries the one thing that matters on a fault screen (#140).
+  $('#st-count').textContent = S.state === 'running' ? mmss(live)
+    : (S.state === 'fault' && S.fault) ? faultCode(S.fault.active) : '--:--';
   $('#st-zone').textContent  = zoneName(S.activeZone);
   $('#st-gpm').textContent   = S.flow ? S.flow.gpm.toFixed(2) + ' GPM' : '—';
   $('#st-gal').textContent   = S.flow ? S.flow.gallons.toFixed(2) + ' gal' : '—';
-  $('#st-div').textContent   = S.activeZone < 0 ? '—' : (S.activeFert ? 'FERT' : 'plain');
+  $('#st-div').textContent   = S.activeZone < 0 ? '—' : (S.activeFert ? 'fert' : 'plain');   // casing unified (#140)
   $('#st-q').textContent     = S.queueDepth || 0;
   const lr = S.lastRun || {};
   $('#st-last').textContent = lr.result === 'none' ? 'No runs since boot.' :
@@ -445,12 +465,47 @@ function renderHome() {
     (lr.result === 'faulted' ? ' (' + lr.fault + ')' : '');
   $('#st-clock').textContent = S.clock && S.clock.valid
     ? String(S.clock.hour).padStart(2,'0')+':'+String(S.clock.minute).padStart(2,'0') : 'not synced';
-  $('#st-wifi').textContent  = S.wifi ? S.wifi.mode + ' ' + (S.wifi.ip || '') : '—';
+  $('#st-wifi').textContent  = S.wifi
+    ? (S.wifi.mode + ' ' + (S.wifi.ip || '') + (typeof S.wifi.rssi === 'number' ? ' · ' + S.wifi.rssi + ' dBm' : '')).trim()
+    : '—';   // rssi is in the payload — now rendered (#140)
   $('#st-up').textContent    = S.uptimeMs ? Math.floor(S.uptimeMs/3600000)+'h '+
                                Math.floor(S.uptimeMs/60000)%60+'m' : '—';
   // Build id (#126/#159): the running image's sha+timestamp identity, front and center —
   // one glance after an OTA answers "did the flash take". Also shown in Settings → Firmware.
   $('#st-build').textContent = S.build || '—';
+  renderNextRun();
+}
+
+// Next-run preview on Home (#140): when the fixed schedule is the active mode, show the soonest
+// upcoming enabled entry from the cached schedule + the device clock; when Distributed is the
+// active mode, say so instead. Hidden when there's nothing to show (no clock / empty schedule).
+function nextScheduledRun() {
+  if (!S || !S.clock || !S.clock.valid || !sched || !sched.length) return null;
+  const nowMin = S.clock.weekday * 1440 + S.clock.hour * 60 + S.clock.minute;
+  let best = null;
+  sched.forEach(e => {
+    if (!e.enabled || !e.daysMask) return;
+    for (let d = 0; d < 7; d++) {
+      if (!(e.daysMask >> d & 1)) continue;
+      let delta = (d * 1440 + e.hour * 60 + e.minute) - nowMin;
+      if (delta < 0) delta += 7 * 1440;                    // wrap into next week
+      if (best === null || delta < best.delta) best = { delta, e };
+    }
+  });
+  return best;
+}
+function renderNextRun() {
+  const card = $('#st-next-card');
+  // In Distributed mode the day-summary card already carries the signal — don't stack a redundant
+  // "Distributed active" line above it (#140). The Next-run preview is a fixed-schedule concept.
+  const nr = (S && S.distSummary) ? null : nextScheduledRun();
+  if (!nr) { card.style.display = 'none'; return; }
+  const rel = nr.delta < 60 ? 'in ' + nr.delta + 'm'
+            : nr.delta < 1440 ? 'in ' + Math.round(nr.delta / 60) + 'h'
+            : 'in ' + Math.round(nr.delta / 1440) + 'd';
+  card.style.display = '';
+  $('#st-next').textContent = zoneName(nr.e.zoneIndex) + ' · ' +
+    pad2(nr.e.hour) + ':' + pad2(nr.e.minute) + ' · ' + rel;
 }
 
 // Distributed day summary (#161): per-zone "completed / planned-by-now cycles · gallons", with a
@@ -481,8 +536,8 @@ function renderFaults() {
     ZONE_NAMES.map((n,i) => flags & (1<<i)
       ? '<div class="flag-item">'+n+': not resting closed — service the valve (E6)</div>' : '').join('');
   $('#fault-log').innerHTML = (f.log && f.log.length)
-    ? f.log.map(e => '<div class="fault-item">'+e.code+' · '+fmtWhen(e.epoch, e.clockWasValid)+'</div>').join('')
-    : 'Empty.';
+    ? f.log.map(e => '<div class="fault-item">'+faultCode(e.code)+' · '+fmtWhen(e.epoch, e.clockWasValid)+'</div>').join('')
+    : 'Empty.';   // decode raw firmware keys to E-codes like the active card + run rows (#140)
 }
 
 function renderCal() {
@@ -535,8 +590,8 @@ function renderHistory() {
     : (H ? 'No runs yet.' : 'Couldn’t load history.');
   const faults = (H && H.faults) || [];
   $('#hist-faults').innerHTML = faults.length
-    ? faults.map(e => '<div class="fault-item">' + e.code + ' · ' +
-        fmtWhen(e.epoch, e.clockWasValid) + '</div>').join('')
+    ? faults.map(e => '<div class="fault-item">' + faultCode(e.code) + ' · ' +
+        fmtWhen(e.epoch, e.clockWasValid) + '</div>').join('')   // E-code, not the raw key (#140)
     : (H ? 'No faults logged.' : '—');
 }
 async function loadHistory() {
@@ -577,9 +632,15 @@ function requestShow(name) {
 document.querySelectorAll('nav button').forEach(b =>
   b.addEventListener('click', () => requestShow(b.dataset.scr)));
 $('#fault-banner').addEventListener('click', () => requestShow('faults'));
+$('#ovr-banner').addEventListener('click', () => requestShow('set'));   // tappable like the fault banner (#140)
 
 /* ---- STOP ALL (hidden on the config screens, #81; never confirms) ---- */
-$('#stop-btn').addEventListener('click', () => api('/api/stop', {}));
+// Give the tap explicit feedback (#140): from any screen but Home the operator otherwise had no
+// confirmation the water actually stopped. Reuses flash() + the .ok-flash/.err-flash styles.
+$('#stop-btn').addEventListener('click', async () => {
+  const r = await api('/api/stop', {});
+  flash('#stop-msg', r.ok ? 'Stopped — all water off.' : 'Stop failed: ' + (r.error || r.code), r.ok);
+});
 
 /* ---- manual run ---- */
 function fillZoneSelect(sel) {
@@ -918,6 +979,9 @@ $('#set-save').addEventListener('click', async () => {
 $('#ota-go').addEventListener('click', () => {
   const f = $('#ota-file').files[0];
   if (!f) { flash('#ota-msg', 'Pick a .bin first.', false); return; }
+  // The dirty-guard only fired on tab-nav; a flash from this same screen would silently discard
+  // unsaved Settings edits and could reboot onto stale WiFi creds (#140).
+  if (setDirty && !confirm('You have unsaved Settings changes — flashing discards them (a reboot onto stale WiFi is possible). Continue?')) return;
   if (!confirm('Flash "' + f.name + '"? The controller reboots after a good flash.')) return;
   if (MOCK) {   // UI-dev path — no device, canned success
     $('#ota-msg').textContent = 'Uploading… 100%';
@@ -988,11 +1052,16 @@ $('#fault-clear').addEventListener('click', async () => {
     : 'Refused — the underlying condition has not resolved.', !!r.cleared);
 });
 
+// Per-element timeout tracking (#140): a rapid re-flash of the same target (e.g. double-tapping
+// STOP) must not let the first call's 6 s timer blank the second message early. Clear the prior
+// timer before arming a new one, keyed to the element.
+const flashTimers = new WeakMap();
 function flash(sel, msg, ok) {
   const el = $(sel);
   el.textContent = msg;
   el.className = ok ? 'ok-flash' : 'err-flash';
-  setTimeout(() => { el.textContent = ''; el.className = 'muted'; }, 6000);
+  clearTimeout(flashTimers.get(el));
+  flashTimers.set(el, setTimeout(() => { el.textContent = ''; el.className = 'muted'; }, 6000));
 }
 
 /* ---- mock API for UI development (?mock=1 / file://) ---- */
@@ -1013,7 +1082,8 @@ function mock(path, body) {
     state:'idle', zone:-1, until:0, fault:'none',
     log:[ { code:'noFlow', epoch:1750000000, clockWasValid:true },     // epoch-stamped + persisted (#90)
           { code:'valveRest', epoch:0, clockWasValid:false } ],         // pre-NTP → renders "unsynced"
-    entries:[], cal:{ phase:'idle', pulses:0, lastK:0 },
+    entries:[{ id:1, zoneIndex:0, hour:6, minute:0, durationSec:600, daysMask:127, fertOverride:0, enabled:true }],
+    cal:{ phase:'idle', pulses:0, lastK:0 },
     history:[   // newest-first, mixed clockWasValid + a faulted run, like the real ring
       { startEpoch:1750000000, clockWasValid:true,  zone:0, durationSec:600, gallons:12.34, fertigate:false, result:'completed', fault:'none' },
       { startEpoch:1749996400, clockWasValid:true,  zone:1, durationSec:300, gallons:5.10,  fertigate:true,  result:'completed', fault:'none' },
@@ -1036,13 +1106,13 @@ function mock(path, body) {
     fault:{ active:M.fault, clearAllowed:M.fault !== 'none', log:M.log },
     valveRestFlags:0, clock:{ valid:true, hour:12, minute:34, weekday:3 },
     cal:M.cal, uptimeMs: now % 86400000,
-    // Distributed day summary (#161): a shortfall (Zone 2 missed a cycle) + two caught-up zones,
-    // so the Home card renders in dev without needing a live distributed plan. The real api.cpp
-    // emits this only when Distributed mode is active.
-    distSummary:{ cycles:4, zones:[
+    // Distributed day summary (#161): a shortfall (Zone 2) + two caught-up zones. Gated on the
+    // distributed plan being active — mirrors the real api.cpp, so dev shows the schedule "Next
+    // run" preview by default and swaps to the dist card once you enable Distributed (#140).
+    ...(mockDistValid(M.dist) ? { distSummary:{ cycles:4, zones:[
       { plannedByNow:2, completed:2, centigallons:2470 },
       { plannedByNow:2, completed:1, centigallons:1180 },
-      { plannedByNow:2, completed:2, centigallons:2510 } ] },
+      { plannedByNow:2, completed:2, centigallons:2510 } ] } } : {}),
     wifi:{ mode:'mock', ip:'0.0.0.0', rssi:-50 }, build:'mock0000' };
   // The mock REJECTS what the real api.cpp rejects (10-7200 s runs, 60-1800 s
   // swMax, gallon bounds) — dev mode must surface the empty-input paths a phone
@@ -1109,6 +1179,7 @@ function mock(path, body) {
 fillZoneSelect($('#run-zone'));   // 3-zone fallback NOW — a failed settings fetch
 fillZoneSelect($('#cal-zone'));   // must never leave an empty select posting zone 0
 loadSettings();
+loadSchedule();                   // populate `sched` so Home's "Next run" preview has data (#140)
 poll();
 </script>
 </body>
