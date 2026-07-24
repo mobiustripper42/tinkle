@@ -19,7 +19,7 @@
   --go:#0a7a2f; --stop:#c81e1e; --warn:#9a6700; --card:#f4f4f2;
 }
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
-html{font:18px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+html{font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 body{margin:0; background:var(--paper); color:var(--ink);
      padding-bottom:9.5rem}    /* room for STOP + tab bar */
 main{max-width:34rem; margin:0 auto; padding:.75rem}
@@ -131,6 +131,12 @@ nav .ico{display:block; font-size:1.3rem}
 <!-- 1 · Status / home -->
 <section id="scr-home" class="screen active">
   <h1>Tinkle</h1>
+  <!-- Distributed day summary (#161): today's cycles completed vs planned-by-now + gallons
+       delivered, per zone. Hidden unless Distributed Watering is the active mode. -->
+  <div class="card" id="dist-summary" style="display:none">
+    <div class="plan-title" id="dist-summary-head">Today · distributed</div>
+    <div id="dist-summary-rows"></div>
+  </div>
   <div class="card">
     <div class="state-line" id="st-state">—</div>
     <div class="big" id="st-count">--:--</div>
@@ -422,6 +428,7 @@ function zoneName(i) { return i < 0 ? '—' : (ZONE_NAMES[i] || ('Zone '+(i+1)))
 
 function renderHome() {
   if (!S) return;
+  renderDistSummary();
   $('#st-state').textContent = STATE_TEXT[S.state] || S.state;
   const live = S.state === 'running'
     ? S.remainingSec - (Date.now() - statusAt)/1000 : S.remainingSec;
@@ -444,6 +451,23 @@ function renderHome() {
   // Build sha (#126): the running image's identity, front and center — one glance
   // after an OTA answers "did the flash take". Also shown in Settings → Firmware.
   $('#st-build').textContent = S.build || '—';
+}
+
+// Distributed day summary (#161): per-zone "completed / planned-by-now cycles · gallons", with a
+// ⚠ when a zone is behind (a cycle that should have run by now didn't — the missed-cycle case).
+// Present only when Distributed mode is active, so the card self-hides in fixed-schedule mode.
+function renderDistSummary() {
+  const el = $('#dist-summary');
+  const ds = S && S.distSummary;
+  if (!ds || !ds.zones || !ds.zones.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  $('#dist-summary-head').textContent = 'Today · distributed · ' + ds.cycles + ' cycles/zone';
+  $('#dist-summary-rows').innerHTML = ds.zones.map((z, i) => {
+    const behind = z.completed < z.plannedByNow;
+    const gal = (z.centigallons / 100).toFixed(1);
+    return '<div class="kv"><span>' + zoneName(i) + (behind ? ' ⚠' : '') + '</span>'
+      + '<span>' + z.completed + '/' + z.plannedByNow + ' cycles · ' + gal + ' gal</span></div>';
+  }).join('');
 }
 
 function renderFaults() {
@@ -1012,6 +1036,13 @@ function mock(path, body) {
     fault:{ active:M.fault, clearAllowed:M.fault !== 'none', log:M.log },
     valveRestFlags:0, clock:{ valid:true, hour:12, minute:34, weekday:3 },
     cal:M.cal, uptimeMs: now % 86400000,
+    // Distributed day summary (#161): a shortfall (Zone 2 missed a cycle) + two caught-up zones,
+    // so the Home card renders in dev without needing a live distributed plan. The real api.cpp
+    // emits this only when Distributed mode is active.
+    distSummary:{ cycles:4, zones:[
+      { plannedByNow:2, completed:2, centigallons:2470 },
+      { plannedByNow:2, completed:1, centigallons:1180 },
+      { plannedByNow:2, completed:2, centigallons:2510 } ] },
     wifi:{ mode:'mock', ip:'0.0.0.0', rssi:-50 }, build:'mock0000' };
   // The mock REJECTS what the real api.cpp rejects (10-7200 s runs, 60-1800 s
   // swMax, gallon bounds) — dev mode must surface the empty-input paths a phone

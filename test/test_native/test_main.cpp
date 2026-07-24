@@ -1092,6 +1092,9 @@ using tinkle::packDistributedConfig;
 using tinkle::unpackDistributedConfig;
 using tinkle::DIST_CONFIG_BYTES;
 using tinkle::DIST_MAX_RUNS;
+using tinkle::computeDistSummary;
+using tinkle::nextMissedCycle;
+using tinkle::DistDaySummary;
 using tinkle::epochFromCivil;
 
 // A clock pinned to a given local epoch (anchored at ms=0, so epoch advances with nowMs).
@@ -1472,6 +1475,174 @@ void test_dist_config_pack_roundtrip() {
     TEST_ASSERT_EQUAL_UINT16(930, r.windowEndMin);
     TEST_ASSERT_EQUAL_UINT16(32, r.perZoneMin);
     TEST_ASSERT_EQUAL_UINT8(2, r.fertCount);
+}
+
+// --- Distributed day summary + missed-cycle detection (dist_summary.h / #161) -----
+// Plan mkDist(540,930,32,1)@3 zones: cycles=4, runLen=480s, cycleStartMin=[540,661,782,903],
+// cycleSpanMin=ceil(3*(480+25)/60)=26 -> slots c0[540,566) c1[661,687) c2[782,808) c3[903,929).
+// A day ordinal far from epoch 0 so day-boundary math is exercised, not accidentally 0.
+static constexpr uint32_t DIST_DAY = 20000u;   // local calendar-day ordinal (epoch/86400)
+
+// A run stamped at a given minute-of-day on a given day. Default a Completed, clock-valid run.
+static RunEntry mkRun(uint8_t zone, uint32_t dayOrd, uint16_t minOfDay, RunResult result,
+                      uint16_t cg = 1000, bool clockValid = true, uint8_t faultCode = 0) {
+    RunEntry e;
+    e.startEpoch    = dayOrd * 86400u + (uint32_t)minOfDay * 60u;
+    e.zoneIndex     = zone;
+    e.durationSec   = 480;
+    e.centigallons  = cg;
+    e.result        = result;
+    e.clockWasValid = clockValid;
+    e.faultCode     = faultCode;
+    return e;
+}
+
+// A full clean day: every zone completed every cycle -> nothing missed, card shows all caught up.
+void test_dist_summary_clean_day_no_miss() {
+    const DistributedPlan p = computeDistributedPlan(mkDist(540, 930, 32, 1), 3);
+    RunLog log;
+    const uint16_t starts[4] = {540, 661, 782, 903};
+    for (uint8_t c = 0; c < 4; ++c)
+        for (uint8_t z = 0; z < 3; ++z)
+            log.push(mkRun(z, DIST_DAY, starts[c], RunResult::Completed, 600));
+
+    const tinkle::DistDaySummary s = tinkle::computeDistSummary(log, p, 3, DIST_DAY, 1000);
+    TEST_ASSERT_TRUE(s.active);
+    TEST_ASSERT_EQUAL_UINT8(4, s.cycles);
+    for (uint8_t z = 0; z < 3; ++z) {
+        TEST_ASSERT_EQUAL_UINT8(4, s.zones[z].plannedByNow);
+        TEST_ASSERT_EQUAL_UINT8(4, s.zones[z].completed);
+        TEST_ASSERT_EQUAL_UINT16(2400, s.zones[z].centigallons);   // 4 * 600
+    }
+    RunEntry missed;
+    TEST_ASSERT_FALSE(nextMissedCycle(log, p, 3, DIST_DAY, 1000,
+                                      (uint8_t)Fault::MissedCycle, missed));
+}
+
+// A zone that latched after cycle 2 of 4: cycles 2 and 3 never ran. Detection returns the OLDEST
+// missed slot first, and once logged, a re-scan advances to the next — idempotent, not re-fired.
+void test_dist_summary_latched_after_two_detects_and_dedups() {
+    const DistributedPlan p = computeDistributedPlan(mkDist(540, 930, 32, 1), 3);
+    RunLog log;
+    const uint16_t starts[4] = {540, 661, 782, 903};
+    for (uint8_t c = 0; c < 4; ++c)
+        for (uint8_t z = 0; z < 3; ++z) {
+            if (z == 0 && c >= 2) continue;    // zone 0 latched: no runs for cycles 2, 3
+            log.push(mkRun(z, DIST_DAY, starts[c], RunResult::Completed, 600));
+        }
+
+    // Summary: zone 0 short (2 of 4), zones 1 and 2 caught up.
+    const tinkle::DistDaySummary s = tinkle::computeDistSummary(log, p, 3, DIST_DAY, 1000);
+    TEST_ASSERT_EQUAL_UINT8(2, s.zones[0].completed);
+    TEST_ASSERT_EQUAL_UINT8(4, s.zones[0].plannedByNow);
+    TEST_ASSERT_EQUAL_UINT8(4, s.zones[1].completed);
+
+    // Oldest miss first: zone 0, cycle 2 (slot start 782).
+    RunEntry m1;
+    TEST_ASSERT_TRUE(nextMissedCycle(log, p, 3, DIST_DAY, 1000, (uint8_t)Fault::MissedCycle, m1));
+    TEST_ASSERT_EQUAL_UINT8(0, m1.zoneIndex);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)RunResult::Faulted, (uint8_t)m1.result);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::MissedCycle, m1.faultCode);
+    TEST_ASSERT_TRUE(m1.clockWasValid);
+    TEST_ASSERT_EQUAL_UINT32(DIST_DAY * 86400u + 782u * 60u, m1.startEpoch);
+
+    // Log it (as main would). The next scan must skip it and advance to cycle 3, not re-fire c2.
+    log.push(m1);
+    RunEntry m2;
+    TEST_ASSERT_TRUE(nextMissedCycle(log, p, 3, DIST_DAY, 1000, (uint8_t)Fault::MissedCycle, m2));
+    TEST_ASSERT_EQUAL_UINT8(0, m2.zoneIndex);
+    TEST_ASSERT_EQUAL_UINT32(DIST_DAY * 86400u + 903u * 60u, m2.startEpoch);   // cycle 3
+
+    // Log the second; now nothing is missed.
+    log.push(m2);
+    RunEntry m3;
+    TEST_ASSERT_FALSE(nextMissedCycle(log, p, 3, DIST_DAY, 1000, (uint8_t)Fault::MissedCycle, m3));
+}
+
+// A cycle that FIRED and flow-faulted is one fault, not two: its Faulted entry occupies the slot,
+// so it is never re-reported as missed (and the card counts it short, since it didn't complete).
+void test_dist_summary_flow_fault_not_double_reported() {
+    const DistributedPlan p = computeDistributedPlan(mkDist(540, 930, 32, 1), 3);
+    RunLog log;
+    const uint16_t starts[4] = {540, 661, 782, 903};
+    for (uint8_t c = 0; c < 4; ++c)
+        for (uint8_t z = 0; z < 3; ++z) {
+            // Zone 0, cycle 0: fired but flow-faulted (NoFlow=1), 0 gallons delivered.
+            if (z == 0 && c == 0)
+                log.push(mkRun(z, DIST_DAY, starts[c], RunResult::Faulted, 0, true, 1));
+            else
+                log.push(mkRun(z, DIST_DAY, starts[c], RunResult::Completed, 600));
+        }
+
+    // Card: zone 0 completed only 3 (the faulted cycle didn't deliver).
+    const tinkle::DistDaySummary s = tinkle::computeDistSummary(log, p, 3, DIST_DAY, 1000);
+    TEST_ASSERT_EQUAL_UINT8(3, s.zones[0].completed);
+    TEST_ASSERT_EQUAL_UINT8(4, s.zones[0].plannedByNow);
+
+    // But NOT missed — the flow fault already logged its own entry in that slot.
+    RunEntry missed;
+    TEST_ASSERT_FALSE(nextMissedCycle(log, p, 3, DIST_DAY, 1000,
+                                      (uint8_t)Fault::MissedCycle, missed));
+}
+
+// Pre-NTP (clockWasValid=false) and prior-day runs can't be located in today's window, so they
+// count neither as completed nor as an attempt — the slot reads missed. (Distributed mode needs a
+// valid clock to fire at all, so these are guard cases, not the common path.)
+void test_dist_summary_excludes_pre_ntp_and_prior_day() {
+    const DistributedPlan p = computeDistributedPlan(mkDist(540, 930, 32, 1), 3);
+    RunLog log;
+    const uint16_t starts[4] = {540, 661, 782, 903};
+    for (uint8_t c = 0; c < 4; ++c)
+        for (uint8_t z = 0; z < 3; ++z) {
+            if (z == 0 && c == 0) continue;    // leave zone 0 / cycle 0 open for the two red herrings
+            log.push(mkRun(z, DIST_DAY, starts[c], RunResult::Completed, 600));
+        }
+    log.push(mkRun(0, DIST_DAY,     540, RunResult::Completed, 600, /*clockValid=*/false)); // pre-NTP
+    log.push(mkRun(0, DIST_DAY - 1, 540, RunResult::Completed, 600));                        // yesterday
+
+    // Neither counts: zone 0 completed today = 3 (cycles 1-3 only).
+    const tinkle::DistDaySummary s = tinkle::computeDistSummary(log, p, 3, DIST_DAY, 1000);
+    TEST_ASSERT_EQUAL_UINT8(3, s.zones[0].completed);
+
+    // And cycle 0 / zone 0 reads missed (the two excluded runs don't satisfy the slot).
+    RunEntry missed;
+    TEST_ASSERT_TRUE(nextMissedCycle(log, p, 3, DIST_DAY, 1000, (uint8_t)Fault::MissedCycle, missed));
+    TEST_ASSERT_EQUAL_UINT8(0, missed.zoneIndex);
+    TEST_ASSERT_EQUAL_UINT32(DIST_DAY * 86400u + 540u * 60u, missed.startEpoch);   // cycle 0
+}
+
+// Only elapsed cycles are judged: mid-window, a not-yet-due cycle is never "missed", and
+// plannedByNow reflects how many cycles have started so far.
+void test_dist_summary_midwindow_ignores_unelapsed() {
+    const DistributedPlan p = computeDistributedPlan(mkDist(540, 930, 32, 1), 3);
+    RunLog log;   // empty: nothing has run yet
+    // nowMin = 700: c0 [540,566) and c1 [661,687) have elapsed; c2/c3 have not.
+    const tinkle::DistDaySummary s = tinkle::computeDistSummary(log, p, 3, DIST_DAY, 700);
+    for (uint8_t z = 0; z < 3; ++z) {
+        TEST_ASSERT_EQUAL_UINT8(2, s.zones[z].plannedByNow);   // c0, c1 started
+        TEST_ASSERT_EQUAL_UINT8(0, s.zones[z].completed);
+    }
+    // The oldest elapsed-and-empty slot is c0/zone0 — c2/c3 are not yet due, so not flagged.
+    RunEntry missed;
+    TEST_ASSERT_TRUE(nextMissedCycle(log, p, 3, DIST_DAY, 700, (uint8_t)Fault::MissedCycle, missed));
+    TEST_ASSERT_EQUAL_UINT32(DIST_DAY * 86400u + 540u * 60u, missed.startEpoch);   // cycle 0, not later
+}
+
+// A non-distributed / invalid plan makes the advisor inert: no summary, nothing ever missed.
+void test_dist_summary_inert_when_not_distributed() {
+    const DistributedPlan invalid = computeDistributedPlan(mkDist(540, 930, 32, 1, /*enabled=*/false), 3);
+    RunLog log;
+    const tinkle::DistDaySummary s = tinkle::computeDistSummary(log, invalid, 3, DIST_DAY, 1000);
+    TEST_ASSERT_FALSE(s.active);
+    RunEntry missed;
+    TEST_ASSERT_FALSE(nextMissedCycle(log, invalid, 3, DIST_DAY, 1000,
+                                      (uint8_t)Fault::MissedCycle, missed));
+}
+
+// The publisher fault-code table maps the new code (paired with the api.cpp faultName + enum).
+void test_dist_missed_cycle_fault_code_maps() {
+    TEST_ASSERT_EQUAL_STRING("missed-cycle", tinkle::faultCodeToString(7));
+    TEST_ASSERT_EQUAL_STRING("missedCycle", tinkle::Api::faultName(Fault::MissedCycle));
 }
 
 // --- Fertigation end-to-end (firmware spec §6 / #28) -----------------------------
@@ -3686,6 +3857,13 @@ int main() {
     RUN_TEST(test_dist_invalid_enabled_falls_back_to_schedule);
     RUN_TEST(test_dist_day_boundary_resets_mask);
     RUN_TEST(test_dist_config_pack_roundtrip);
+    RUN_TEST(test_dist_summary_clean_day_no_miss);
+    RUN_TEST(test_dist_summary_latched_after_two_detects_and_dedups);
+    RUN_TEST(test_dist_summary_flow_fault_not_double_reported);
+    RUN_TEST(test_dist_summary_excludes_pre_ntp_and_prior_day);
+    RUN_TEST(test_dist_summary_midwindow_ignores_unelapsed);
+    RUN_TEST(test_dist_summary_inert_when_not_distributed);
+    RUN_TEST(test_dist_missed_cycle_fault_code_maps);
 
     RUN_TEST(test_sched_rc_fert_routing);
 

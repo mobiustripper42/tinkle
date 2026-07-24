@@ -7,6 +7,7 @@
 #include "../core/persistence.h"
 #include "../core/clock.h"
 #include "../core/scheduler.h"
+#include "../core/dist_summary.h"
 #include "../core/nightly_reboot.h"
 #include "../core/flow_monitor.h"
 #include "../core/flow_fault_detector.h"
@@ -333,6 +334,43 @@ void loop() {
     if (runState == RunState::Running)
         runController.noteRunVolume(centigallonsOf(flowMonitor.gallons()));
     prevRunState = runState;
+
+    // Missed distributed cycle detection (#161): once a second, when Distributed mode is active,
+    // scan the plan against the RunLog for the oldest elapsed cycle+zone that never ran and log it
+    // as a Faulted MissedCycle entry. It then persists (debounce below) and telemeters (publish-
+    // feed below catches the new head) exactly like any faulted run — so a silently-skipped cycle
+    // reaches Grafana without a new fault path. One per scan: a backlog (a power-out that ate
+    // several cycles) drains a cycle per second once the box is back. Idempotent via the persisted
+    // log — the logged entry sits in its slot, so the next scan skips it (reboot-safe, no double-
+    // report). Skipped entirely off the distributed path, so it costs nothing in fixed-schedule mode.
+    {
+        // Only scan while idle with an empty queue. Two reasons: (1) a completed run pushes its
+        // RunLog entry on the SETTLE transition, and the publish-feed below enqueues whatever is
+        // head that pass — pushing a miss in the same pass would shadow one of the two, dropping a
+        // telemetry message; an idle pass never settles a run, so the miss is the only push. (2) a
+        // cycle mid-execution isn't elapsed yet anyway, so there's nothing to find while busy.
+        static uint32_t lastMissScanMs = 0;
+        if (wallClock.valid() && scheduler.distributedActive()
+            && runController.isIdle() && runController.queueDepth() == 0
+            && (uint32_t)(now - lastMissScanMs) >= 1000u) {
+            lastMissScanMs = now;
+            const WallTime wt     = wallClock.wall(now);
+            const uint16_t nowMin = (uint16_t)(wt.hour * 60 + wt.minute);
+            const uint32_t dayOrd = wallClock.epoch(now) / 86400u;
+            const DistributedPlan plan =
+                computeDistributedPlan(scheduler.distributed(), scheduler.zoneCount());
+            RunEntry missed;
+            if (nextMissedCycle(runController.runLog(), plan, scheduler.zoneCount(),
+                                dayOrd, nowMin, (uint8_t)Fault::MissedCycle, missed)) {
+                runController.logMissedCycle(missed);
+                Serial.printf("[tinkle] distributed cycle missed: zone %u @ %02u:%02u — "
+                              "logged + telemetered as missed-cycle (#161)\n",
+                              (unsigned)(missed.zoneIndex + 1),
+                              (unsigned)((missed.startEpoch / 3600u) % 24u),
+                              (unsigned)((missed.startEpoch / 60u) % 60u));
+            }
+        }
+    }
 
     // Persist the run-history ring on change, debounced (DEC-018). RunController marks the log
     // dirty on each push (SETTLE / fault); write the blob once the ring has been quiet for the

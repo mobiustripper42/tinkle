@@ -711,3 +711,51 @@ direction, killing only the false positive). See the E2 tracking issue + #138.
 discriminator** before any watering ships. Adds §-TBD to the firmware spec at build time. Milestones:
 E2 discriminator + #138 (gate) → Distributed Watering core (Scheduler emission + config + fert
 quantization + validation) → SPA editor. Seasonal guideline is #139 (deferred).
+
+## DEC-025: Missed distributed cycles surface as a non-latching MissedCycle "fault", logged like a run
+**Decision:** When Distributed Watering (DEC-024) is active, a per-second advisor
+(`src/core/dist_summary.h`) compares the derived plan against the RunLog and, for any cycle+zone
+slot whose window has fully elapsed with **no run of any result logged**, records a synthetic
+`RunEntry` — `result=Faulted`, `faultCode=Fault::MissedCycle` (new enum value), 0 duration / 0
+volume, stamped at the slot's local start — via `RunController::logMissedCycle`. That entry then
+persists to NVS and telemeters through the existing Poop Deck publisher **exactly like any faulted
+run** (`farm/irrigation/tinkle/zoneN`, `"fault":"missed-cycle"`). A companion `distSummary` block on
+`/api/status` (present only when distributed + clock valid) feeds a Home-screen "Today · distributed"
+card: per zone, cycles completed vs planned-by-now + metered gallons delivered. The global SPA font
+drops 18px→15px (whole UI is `rem`-based) in the same change.
+
+**Why:** DEC-024 consciously accepted that a mid-window latching fault (or a power-out) silently
+skips the rest of the day's cycles until the operator opens the phone — on a finite catchment,
+water you can't get back and didn't know you lost. The operator wants to know *sooner*, through the
+same channel every other fault uses (the phone banner today, a Grafana email later). The existing
+telemetry only publishes faults **attached to a completed run** — a cycle that never fired has no
+message, so the miss is invisible. Modelling the miss as a RunLog entry closes that gap with **no
+new publish path**: it rides the run pipeline that already exists.
+
+**Why non-latching (note-not-raise, `logMissedCycle` not `raiseFault`):** a missed cycle is a
+*retrospective* observation, not a live hazard — the danger (a dry zone) already passed, and the box
+is often rebooting when it's detected. Latching would gate the pump and **withhold future water
+because a past cycle was missed**, compounding the loss. A log row commands no actuation, so it's
+loud (banner + history + telemetry) without ever stopping watering. Same spirit as DEC-014
+(`ValveRestMonitor` notes, never raises), pushed one step further: `MissedCycle` never touches
+`FaultManager` at all — it's purely a RunLog/telemetry label.
+
+**Substrate = completed cycles + metered gallons, never requested minutes:** the card counts
+`RunResult::Completed` runs and sums logged `centigallons`; the miss check keys on *any* logged entry
+in the slot. Both dodge bug #160 (`logRun` stores requested, not elapsed, duration) by never reading
+`durationSec`. A cycle that fired and flow-faulted has its own faulted entry in the slot, so it's
+**one fault, not two** — never re-reported as missed. Idempotency + reboot-safety are free: the
+logged entry occupies the slot, so a re-scan (or a reboot that rehydrates the ring) skips it — state
+lives only in the persisted log, nowhere it could drift. A latch that suppresses several later cycles
+yields one missed entry per suppressed cycle+zone (operator chose accurate accounting over quiet).
+
+**Scope / not-V1:** advisory and supply-side only. It never suppresses a fault, never touches the
+pump gate, never borrows against tomorrow, never reads a sensor. Detection is gated on
+`distributedActive()`, so fixed-schedule mode pays nothing. A "no telemetry in N hours" heartbeat —
+the only way to learn of an outage *while it's happening* (the box is off, it can't self-alert until
+it reboots) — is deliberately left to the Poop Deck / Grafana side, not the firmware.
+
+**Status:** Decided. Implemented (core `dist_summary` + host tests, `/api/status` block, SPA card +
+font, `MissedCycle` enum + publisher map, main-loop detector). Rides behind the DEC-024 E2 gate like
+the rest of Distributed Watering. Grafana alert rule (email on the `fault` field) is downstream
+poop-deck work, tracked separately.

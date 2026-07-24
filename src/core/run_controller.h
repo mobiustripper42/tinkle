@@ -31,8 +31,12 @@ enum class RunState : uint8_t {
 // §14 fault codes. None = no latched fault. Count is a sentinel (keep last) —
 // FaultManager sizes its condition table off it. ValveRest (DEC-014) is
 // log-only: it reaches the ring via FaultManager::note(), never raiseFault.
+// MissedCycle (#161) is log-only too, but even further out: it never touches
+// FaultManager at all — it's a faultCode stamped onto a RunLog entry for a
+// distributed cycle that never ran (see logMissedCycle), so it flows through the
+// run-history ring + Poop Deck publisher like any faulted run, never latches.
 enum class Fault : uint8_t {
-    None, NoFlow, UnexpectedFlow, Watchdog, CalRange, Clock, ValveRest, Count
+    None, NoFlow, UnexpectedFlow, Watchdog, CalRange, Clock, ValveRest, MissedCycle, Count
 };
 
 // A run request: which zone, how long, and whether to fertigate (diverter THROUGH).
@@ -138,6 +142,17 @@ public:
     // as a 1970 wall-clock (DEC-018).
     void noteRunStart(uint32_t startEpoch, bool clockValid);
     void noteRunVolume(uint16_t centigallons) { pendingCentigallons_ = centigallons; }
+
+    // Log an externally-detected missed distributed cycle (#161): a cycle whose window elapsed
+    // with no run — the box was off, or a latch suppressed the rest of the day. The caller
+    // (dist_summary detector, via main) hands in a fully-formed Faulted RunEntry with
+    // faultCode=MissedCycle; this pushes it onto the ring and marks it dirty, so it persists to
+    // NVS and telemeters through the Poop Deck publisher exactly like any faulted run — the
+    // whole point of #161 (missed runs reach Grafana without a new fault-publish path).
+    // Non-latching by construction: a log row commands no actuation and never gates the pump.
+    // Idempotency lives in the persisted log itself — the detector re-scans and skips any cycle
+    // that already has an entry, so a re-run or reboot never double-logs the same miss.
+    void logMissedCycle(const RunEntry& e) { runlog_.push(e); runLogDirty_ = true; }
 
     // Cooperative, non-blocking. Ticks the ValveDriver and advances at most one
     // state transition (gated by actuator timers / durations). Call every loop.
