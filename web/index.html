@@ -44,7 +44,7 @@ h2{font-size:1.05rem; margin:1rem 0 .4rem; color:var(--dim); text-transform:uppe
 
 button{font:inherit; font-weight:700; color:var(--ink); background:#fff;
        border:2px solid var(--ink); border-radius:.6rem;
-       padding:.8rem 1rem; min-height:3rem; width:100%; margin:.25rem 0; cursor:pointer}
+       padding:.8rem 1rem; min-height:3.2rem; width:100%; margin:.25rem 0; cursor:pointer}  /* ~48px at the 15px base — keeps the touch floor after the smaller font (#140) */
 /* #140: gate the press-scale behind reduced-motion; disabled needs a duller FILL (opacity
    alone flattens in sunlight); a visible focus ring since tap-highlight is off. */
 @media (prefers-reduced-motion: no-preference){ button:active{transform:scale(.985)} }
@@ -496,11 +496,9 @@ function nextScheduledRun() {
 }
 function renderNextRun() {
   const card = $('#st-next-card');
-  if (S && S.distSummary) {                                // Distributed is the running mode
-    card.style.display = ''; $('#st-next').textContent = 'Distributed watering active';
-    return;
-  }
-  const nr = nextScheduledRun();
+  // In Distributed mode the day-summary card already carries the signal — don't stack a redundant
+  // "Distributed active" line above it (#140). The Next-run preview is a fixed-schedule concept.
+  const nr = (S && S.distSummary) ? null : nextScheduledRun();
   if (!nr) { card.style.display = 'none'; return; }
   const rel = nr.delta < 60 ? 'in ' + nr.delta + 'm'
             : nr.delta < 1440 ? 'in ' + Math.round(nr.delta / 60) + 'h'
@@ -1054,11 +1052,16 @@ $('#fault-clear').addEventListener('click', async () => {
     : 'Refused — the underlying condition has not resolved.', !!r.cleared);
 });
 
+// Per-element timeout tracking (#140): a rapid re-flash of the same target (e.g. double-tapping
+// STOP) must not let the first call's 6 s timer blank the second message early. Clear the prior
+// timer before arming a new one, keyed to the element.
+const flashTimers = new WeakMap();
 function flash(sel, msg, ok) {
   const el = $(sel);
   el.textContent = msg;
   el.className = ok ? 'ok-flash' : 'err-flash';
-  setTimeout(() => { el.textContent = ''; el.className = 'muted'; }, 6000);
+  clearTimeout(flashTimers.get(el));
+  flashTimers.set(el, setTimeout(() => { el.textContent = ''; el.className = 'muted'; }, 6000));
 }
 
 /* ---- mock API for UI development (?mock=1 / file://) ---- */
