@@ -200,6 +200,7 @@ private:
     uint32_t effectiveDurationMs() const;              // min(duration, swMax) in ms
     void logRun(RunResult result, Fault fault);        // push the current run onto the ring
     void resetRunMetrics();                            // clear pending epoch/volume at run start
+    void freezeActualDuration(uint32_t nowMs);         // capture Running dwell on leaving RUNNING (#160)
 
     ValveDriver& valve_;
     RunConfig    cfg_;
@@ -209,6 +210,12 @@ private:
     RunRequest current_      = {};
     uint32_t   stateStartMs_ = 0;
     uint32_t   runStartMs_   = 0;
+    // Actual RUNNING dwell (pump-on seconds), frozen the instant the run leaves RUNNING by any
+    // path (#160). Logged as the run's durationSec instead of the *requested* duration, so a
+    // Stopped/Faulted run records how long water actually flowed — History + Grafana GPM then
+    // reflect real flow, not a requested time the run never reached. Reset to 0 at each run start,
+    // so a fault before RUNNING logs 0 (no phantom duration).
+    uint16_t   actualRunSec_ = 0;
     bool       stopping_     = false;     // this run was cancelled, not completed
     bool       watchdogTripped_ = false;  // §4 step-2 pre-open gate
     // #126: written from the async_tcp task (under the web mutex), read by the loop.

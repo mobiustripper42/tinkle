@@ -15,8 +15,7 @@ void RunController::logRun(RunResult result, Fault fault) {
     RunEntry e;
     e.startEpoch    = pendingStartEpoch_;
     e.zoneIndex     = current_.zoneIndex;
-    e.durationSec   = current_.durationSec > 0xFFFFu ? 0xFFFFu
-                                                     : (uint16_t)current_.durationSec;
+    e.durationSec   = actualRunSec_;                 // ACTUAL Running dwell, not requested (#160)
     e.centigallons  = pendingCentigallons_;
     e.fertigate     = current_.fertigate;
     e.result        = result;
@@ -30,7 +29,19 @@ void RunController::resetRunMetrics() {
     pendingStartEpoch_   = 0;
     pendingClockValid_   = false;
     pendingCentigallons_ = 0;
+    actualRunSec_        = 0;             // #160: a fault before RUNNING logs 0, not a stale dwell
     pendingRunFault_     = Fault::None;   // DEC-023: an abort never leaks across runs
+}
+
+// Freeze the actual RUNNING dwell the instant the run leaves RUNNING (#160). Called from every
+// exit path: normal completion + stop (via enter(StopPump)) and a mid-run raiseFault (which sets
+// state_ = Fault directly, bypassing enter()). A no-op unless we're actually in RUNNING, so a
+// fault during a transition state keeps whatever was frozen when RUNNING ended (or 0 if it never
+// began). Unsigned subtraction is millis()-wrap-safe; clamp to the u16 RunLog field.
+void RunController::freezeActualDuration(uint32_t nowMs) {
+    if (state_ != RunState::Running) return;
+    const uint32_t sec = (uint32_t)(nowMs - runStartMs_) / 1000u;
+    actualRunSec_ = sec > 0xFFFFu ? 0xFFFFu : (uint16_t)sec;
 }
 
 void RunController::noteRunStart(uint32_t startEpoch, bool clockValid) {
@@ -112,6 +123,7 @@ void RunController::raiseFault(Fault code, uint32_t nowMs) {
                                                     // pump; a latch here only costs watering.
     if (code >= Fault::Count) return;               // sentinel/garbage is a caller bug
     if (state_ == RunState::Fault) return;          // first fault wins
+    freezeActualDuration(nowMs);                    // #160: a mid-run fault bypasses enter() — freeze here
     valve_.safeState(nowMs);                        // pump off -> zones de-energized -> diverter plain
     fault_ = code;
     qHead_ = qCount_ = 0;
@@ -158,6 +170,7 @@ bool RunController::clearFault() {
 }
 
 void RunController::enter(RunState s, uint32_t nowMs) {
+    freezeActualDuration(nowMs);   // #160: capture the RUNNING dwell before we leave it
     state_ = s;
     stateStartMs_ = nowMs;
     switch (s) {
