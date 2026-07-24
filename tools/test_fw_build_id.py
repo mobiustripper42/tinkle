@@ -43,6 +43,16 @@ def test_archive_copy():
         assert dest_sim != dest and os.path.exists(dest_sim)
 
 
+def test_git_sha_and_dirty():
+    # Against this repo's own working tree: sha is 'dev' or hex chars, dirty is a bool.
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sha, dirty = fw.git_sha_and_dirty(repo_root)
+    assert isinstance(dirty, bool)
+    assert sha == "dev" or all(c in "0123456789abcdef" for c in sha), "unexpected sha %r" % sha
+    # A non-existent path is not a git repo -> the ('dev', False) fallback, never an exception.
+    assert fw.git_sha_and_dirty(os.path.join(repo_root, "definitely-not-a-dir-xyz")) == ("dev", False)
+
+
 def test_app_size_gate():
     with tempfile.TemporaryDirectory() as d:
         ok = os.path.join(d, "ok.bin")

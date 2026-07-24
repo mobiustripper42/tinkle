@@ -42,8 +42,9 @@ def compute_build_id(sha, dirty, dt):
 
 def git_sha_and_dirty(project_dir):
     """(short-sha, dirty) from git, or ('dev', False) outside a repo / on error.
-    `dirty` reflects tracked-tree changes; a gitignored build flag never dirties it
-    (that's exactly why the timestamp, not '-dirty', carries per-flash uniqueness)."""
+    `dirty` reflects any non-ignored working-tree change (tracked or untracked, via
+    `git status --porcelain`); a gitignored build flag never dirties it (that's exactly
+    why the timestamp, not '-dirty', carries per-flash uniqueness)."""
     try:
         sha = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], cwd=project_dir, text=True
@@ -98,11 +99,17 @@ if _under_scons:
 
     def _post_build(source, target, env):  # noqa: F811
         path = target[0].get_abspath()
-        check_app_size(path)  # prints size; raises if over the slot
-        dest = archive_firmware(
-            path, os.path.join(env["PROJECT_DIR"], "build_archive"),
-            env["PIOENV"], _build_id,
-        )
-        print("fw_build_id: archived build -> %s" % dest)
+        check_app_size(path)  # the real gate — SystemExit on an over-slot image
+        # Archiving is a convenience, not a gate: a copy failure (disk full, perms, a Windows
+        # path-length limit) must NOT fail a build whose firmware.bin already linked + passed the
+        # size check. Warn and move on; only check_app_size may fail the build.
+        try:
+            dest = archive_firmware(
+                path, os.path.join(env["PROJECT_DIR"], "build_archive"),
+                env["PIOENV"], _build_id,
+            )
+            print("fw_build_id: archived build -> %s" % dest)
+        except Exception as exc:  # noqa: BLE001 — deliberately broad; the build is already good
+            print("fw_build_id: WARNING — archive copy failed (%s); build unaffected" % exc)
 
     env.AddPostAction("$BUILD_DIR/firmware.bin", _post_build)  # noqa: F821
