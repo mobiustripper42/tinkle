@@ -15,8 +15,11 @@ git checkout main && git pull
 ```
 
 Output: `.pio/build/esp32/firmware.bin` (~900 KB; the build prints its % of the
-1280 KB OTA slot and fails loudly if it ever outgrows it). The build stamps the git
-short-sha in as `FW_BUILD` — note the sha, it's how you verify the flash took.
+1280 KB OTA slot and fails loudly if it ever outgrows it). The build stamps a
+`<sha>[-dirty]-<UTC timestamp>` identity in as `FW_BUILD` — note it, it's how you verify
+the flash took (the timestamp changes every build, so it's reliable even when the sha
+didn't change). Each build is also copied to `build_archive/tinkle-<env>-<FW_BUILD>.bin`
+(gitignored, #159) — a per-build history to clean up by hand whenever.
 
 ## 2. Pick the right address (they are NOT interchangeable)
 
