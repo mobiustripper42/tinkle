@@ -6,7 +6,7 @@ branch: claude/its-alive-issue-163-yt56a5
 started: 2026-07-24T11:19:39Z
 ended:
 points:
-pr_numbers: [166, 168]
+pr_numbers: [166, 168, 169]
 status: open
 transcript: /root/.claude/projects/-home-user-tinkle/f5b4c5ee-ffae-5178-9146-73ffa5ad5532.jsonl
 ---
@@ -70,6 +70,29 @@ confirmed the swMax-capped path (the case the old code got most wrong) now logs 
 **Points:** 3
 **Branch:** task/160-actual-elapsed-duration
 **Opened at:** 2026-07-24T14:35:04Z
+
+## Task 3: Firmware build versioning — sha+timestamp identity + per-build archive (#159)
+
+**Completed:**
+- `tools/fw_build_id.py` — `FW_BUILD` was the git short-sha alone, unchanged across reflashes
+  that differ only in a gitignored build flag (re-baked `poopdeck_secret.ini`), so an OTA looked
+  like it never took. Now `<sha>[-dirty]-<UTC yymmdd-HHMMSS>`: the timestamp changes it every
+  flash and makes each archived filename unique. Refactored into pure, import-safe helpers
+  (`compute_build_id` / `git_sha_and_dirty` / `archive_firmware` / `check_app_size`); post-build
+  action copies `firmware.bin` → `build_archive/tinkle-<env>-<FW_BUILD>.bin` (gitignored). OTA
+  slot-size gate preserved; archive-copy failures warn but never fail a good build.
+- `tools/test_fw_build_id.py` (new) — 5 host tests, plain `python3` (no toolchain). **5/5.**
+- `.gitignore` (`build_archive/`, `__pycache__/`); doc/comment sync across `platformio.ini`,
+  `src/esp32/web_server.h`, `docs/OTA.md`, `docs/tinkle_firmware_spec.md`, `docs/DECISIONS.md`,
+  `web/index.html` (all had said "git short-sha").
+
+**Code review:** 1 robustness bug + 3 cleanups, all fixed — archive failure no longer fails the
+build (try/except; SystemExit reserved for the size gate), stale platformio.ini comment, added
+`git_sha_and_dirty` coverage, reworded dirty-flag docstring.
+**PR:** [#169](https://github.com/mobiustripper42/tinkle/pull/169)
+**Points:** 3
+**Branch:** task/159-firmware-build-versioning
+**Opened at:** 2026-07-24T16:12:12Z
 
 **Next Steps:**
 - Confirm `pio run -e esp32` + SPA gzip gate on a toolchain machine before merging #166.
