@@ -19,7 +19,10 @@
 //      logged (any result). Returned as a ready-to-log Faulted RunEntry (faultCode=MissedCycle)
 //      that the caller pushes via RunController::logMissedCycle — so it telemeters to Grafana
 //      like any faulted run. Idempotency is free: once logged, the entry sits in the same slot
-//      window and a re-scan skips it, so reboots and re-runs never double-report a miss.
+//      window and a re-scan skips it, so reboots and re-runs never double-report a miss. (One
+//      accepted edge: if a same-day marker is evicted from the shared 32-deep RunLog ring — only
+//      possible past ~32 entries in one day — a re-scan re-logs it, one duplicate telemetry event.
+//      See DEC-025; deliberately not fixed with parallel state.)
 //
 // A cycle that FIRED and flow-faulted already has its own faulted RunEntry, so it matches its
 // slot and is never re-reported as missed — a flow fault is one fault, not two. Only a slot with

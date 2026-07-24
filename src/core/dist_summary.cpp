@@ -53,10 +53,18 @@ DistDaySummary computeDistSummary(const RunLog& log, const DistributedPlan& plan
         for (uint8_t c = 0; c < plan.cycles; ++c) {
             uint16_t start, end;
             slotWindow(plan, spanMin, c, start, end);
-            if (start <= nowMin) ++zs.plannedByNow;    // this cycle should have fired by now
 
-            // A cycle counts as completed for the card only on a Completed run — a flow-faulted
-            // run fired but didn't deliver, so it correctly reads as short, not done.
+            // Only judge a cycle once it has FULLY elapsed (nowMin >= end) — the same boundary
+            // nextMissedCycle uses. A cycle that has merely *started* may still be mid-execution
+            // (a zone waiting its back-to-back turn), so counting it "planned" while its run
+            // hasn't finished would show completed < plannedByNow and light a false "behind" ⚠ for
+            // most of every cycle's ~span. Gating both counts on `end` keeps "M/N" and the ⚠
+            // honest: N grows only as cycles close, and completed < planned means a genuine miss.
+            if (nowMin < end) continue;
+            ++zs.plannedByNow;
+
+            // A cycle counts as completed only on a Completed run — a flow-faulted run fired but
+            // didn't deliver, so it correctly reads as short (completed < planned), not done.
             for (uint8_t i = 0; i < entries; ++i) {
                 const RunEntry e = log.at(i);
                 if (e.result == RunResult::Completed && entryInSlot(e, z, dayOrdinal, start, end)) {

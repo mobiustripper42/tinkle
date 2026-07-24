@@ -171,6 +171,19 @@ public:
     uint8_t           queueDepth()   const { return qCount_; }
     // The "last run" is the ring head (DEC-018) — one source of truth, persisted with it.
     const RunEntry&   lastRun()      const { return runlog_.head(); }
+    // The last REAL run — skips MissedCycle advisory markers (#161 / DEC-025). Those are logged
+    // into the ring so they persist + telemeter like a faulted run, but they must NOT masquerade
+    // as the operator-facing "last run" (a phantom 0-min/0-gal row would hide the actual last
+    // watering). The status display + valve-rest attribution read this; the publisher's head-edge
+    // feed still reads lastRun() so the marker DOES telemeter. Returns by value (the ring's at()
+    // does too); falls back to the head when the ring is empty or all-missed.
+    RunEntry lastRealRun() const {
+        for (uint8_t i = 0; i < runlog_.count(); ++i) {
+            const RunEntry e = runlog_.at(i);
+            if (e.faultCode != (uint8_t)Fault::MissedCycle) return e;
+        }
+        return runlog_.head();
+    }
 
     // Run-history ring (DEC-018). runLog() is the read view (status head today, /api/history
     // next, #70); runLogRef() is the boot-only rehydrate seam — main fills it from the NVS

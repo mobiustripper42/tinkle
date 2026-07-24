@@ -1645,6 +1645,47 @@ void test_dist_missed_cycle_fault_code_maps() {
     TEST_ASSERT_EQUAL_STRING("missedCycle", tinkle::Api::faultName(Fault::MissedCycle));
 }
 
+// A cycle that has STARTED but not fully elapsed is neither counted nor flagged: completed keeps
+// pace with plannedByNow (no false "behind" ⚠), and it's never reported missed mid-execution.
+void test_dist_summary_inprogress_cycle_not_behind() {
+    const DistributedPlan p = computeDistributedPlan(mkDist(540, 930, 32, 1), 3);
+    RunLog log;
+    for (uint8_t z = 0; z < 3; ++z)   // cycle 0 completed for every zone
+        log.push(mkRun(z, DIST_DAY, 540, RunResult::Completed, 600));
+    // nowMin = 670: c0 [540,566) fully elapsed; c1 [661,687) has started but is still running.
+    const tinkle::DistDaySummary s = tinkle::computeDistSummary(log, p, 3, DIST_DAY, 670);
+    for (uint8_t z = 0; z < 3; ++z) {
+        TEST_ASSERT_EQUAL_UINT8(1, s.zones[z].plannedByNow);   // only c0 counts (c1 not elapsed)
+        TEST_ASSERT_EQUAL_UINT8(1, s.zones[z].completed);      // completed == planned -> not behind
+    }
+    RunEntry missed;   // and the in-progress c1 is not a false miss
+    TEST_ASSERT_FALSE(nextMissedCycle(log, p, 3, DIST_DAY, 670, (uint8_t)Fault::MissedCycle, missed));
+}
+
+// lastRealRun() skips a MissedCycle marker so the operator-facing "last run" shows the real last
+// watering, while lastRun() (the ring head the publisher reads) still surfaces the marker.
+void test_rc_lastrealrun_skips_missed_marker() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    RunEntry real;
+    real.zoneIndex = 1; real.durationSec = 600; real.centigallons = 1200;
+    real.result = RunResult::Completed; real.clockWasValid = true; real.startEpoch = 1750000000u;
+    rc.runLogRef().push(real);
+
+    RunEntry miss;
+    miss.zoneIndex = 0; miss.result = RunResult::Faulted;
+    miss.faultCode = (uint8_t)Fault::MissedCycle; miss.clockWasValid = true;
+    miss.startEpoch = 1750000000u - 3600u;
+    rc.logMissedCycle(miss);
+
+    // Head (publisher's view) is the miss; lastRealRun (operator's view) is the real completed run.
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::MissedCycle, rc.lastRun().faultCode);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::None, rc.lastRealRun().faultCode);
+    TEST_ASSERT_EQUAL_UINT8(1, rc.lastRealRun().zoneIndex);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)RunResult::Completed, (uint8_t)rc.lastRealRun().result);
+    TEST_ASSERT_TRUE(rc.runLogDirty());   // the marker marked the ring dirty for persist
+}
+
 // --- Fertigation end-to-end (firmware spec §6 / #28) -----------------------------
 // The §6 policy is decided in the Scheduler and actuated by RunController via the §4
 // diverter step. These tests exercise the REAL stack (Scheduler -> RunController ->
@@ -3864,6 +3905,8 @@ int main() {
     RUN_TEST(test_dist_summary_midwindow_ignores_unelapsed);
     RUN_TEST(test_dist_summary_inert_when_not_distributed);
     RUN_TEST(test_dist_missed_cycle_fault_code_maps);
+    RUN_TEST(test_dist_summary_inprogress_cycle_not_behind);
+    RUN_TEST(test_rc_lastrealrun_skips_missed_marker);
 
     RUN_TEST(test_sched_rc_fert_routing);
 

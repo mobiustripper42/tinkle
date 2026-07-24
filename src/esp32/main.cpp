@@ -482,7 +482,7 @@ void loop() {
     // Auto-return self-test (DEC-014 / #52): fresh state read — a fault latching
     // this pass must abort the rest window, not get measured by it.
     const int restFlagged = valveRest.tick(runController.state(),
-                                           runController.lastRun().zoneIndex,
+                                           runController.lastRealRun().zoneIndex,  // skip #161 miss markers
                                            flowSensor.pulses(), now);
     if (restFlagged >= 0) {
         faultManager.note(Fault::ValveRest, faultEpoch, faultClockValid);

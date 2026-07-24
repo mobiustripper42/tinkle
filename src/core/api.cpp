@@ -61,7 +61,7 @@ int Api::getStatus(JsonDocument& out, uint32_t nowMs) {
     flow["k"]              = d_.flow.k();
     flow["overrideActive"] = d_.store.flowOverride();      // DEC-015 status flag
 
-    const RunEntry& lr = d_.run.lastRun();              // the run-history ring head (DEC-018)
+    const RunEntry lr = d_.run.lastRealRun();           // last real run — skips MissedCycle markers (#161)
     JsonObject last = out["lastRun"].to<JsonObject>();
     last["result"]      = resultName(lr.result);
     last["zone"]        = lr.zoneIndex;

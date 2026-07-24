@@ -749,6 +749,16 @@ logged entry occupies the slot, so a re-scan (or a reboot that rehydrates the ri
 lives only in the persisted log, nowhere it could drift. A latch that suppresses several later cycles
 yields one missed entry per suppressed cycle+zone (operator chose accurate accounting over quiet).
 
+**Accepted edge (ring eviction):** dedup relies on the missed marker staying in the shared 32-deep
+RunLog ring (`RUNLOG_DEPTH`) for the rest of the day. A distributed day tops out at 3 zones × 6
+cycles = 18 entries, so a day's own markers never evict each other; only prior-day entries do, and
+those slots aren't scanned (their `dayOrdinal` differs). Eviction of a *same-day* marker needs >32
+entries dated today — 18 distributed **plus** ~14 manual/cal/faulted runs — an implausible debugging
+day. If it happened, the cost is exactly one duplicate `missed-cycle` telemetry event (non-actuating;
+Grafana already knows the slot missed). Deliberately not fixed with a separate per-day fired-mask:
+that reintroduces the drift-prone parallel state DEC-025 exists to avoid, and it would have to be
+persisted (and could then disagree with the log) to survive the reboot the marker already survives.
+
 **Scope / not-V1:** advisory and supply-side only. It never suppresses a fault, never touches the
 pump gate, never borrows against tomorrow, never reads a sensor. Detection is gated on
 `distributedActive()`, so fixed-schedule mode pays nothing. A "no telemetry in N hours" heartbeat —
