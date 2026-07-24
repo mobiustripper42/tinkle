@@ -155,15 +155,16 @@ void Scheduler::evaluateDistributed(const DistributedPlan& p, uint8_t hour, uint
         // fertCount cycles (whole-cycle — every zone in those cycles fertigates, so no
         // per-zone imbalance). RunController queues them (depth = zoneCount, under MAX_QUEUE).
         //
-        // DIAGNOSTIC (#147 session-23 / superseded by #151): fire the cycle Zone 3 -> 1 -> 2
-        // instead of 1 -> 2 -> 3, to test whether the first-run flow spike on Zones 1 & 2
-        // follows the zone or the firing position. Temporary hardcode; the configurable
-        // per-zone order lands in #151, which reverts this. kFireOrder is a permutation of
-        // 0..MAX_ZONES-1; indices >= the live zoneCount are skipped so each live zone still
+        // FIRE ORDER (#147 session-23): fire the cycle Zone 3 -> 1 -> 2 instead of 1 -> 2 -> 3,
+        // originally to test whether the first-run flow spike on Zones 1 & 2 follows the zone or
+        // the firing position. Kept as the intentional fixed order — #151 (operator-configurable
+        // order + per-zone enable) was closed won't-fix for complexity (see the firmware spec
+        // Distributed constants note); there's no benefit to reverting. kFireOrder is a permutation
+        // of 0..MAX_ZONES-1; indices >= the live zoneCount are skipped so each live zone still
         // fires exactly once, in this order.
         static constexpr uint8_t kFireOrder[ValveConfig::MAX_ZONES] = {2, 0, 1};
         static_assert(ValveConfig::MAX_ZONES == 3,
-                      "kFireOrder is the hardcoded 3-zone diagnostic order (#151 makes it configurable)");
+                      "kFireOrder is the fixed 3-zone fire order (#151 configurable version closed won't-fix)");
         const bool fert = (i < dist_.fertCount);
         for (uint8_t k = 0; k < ValveConfig::MAX_ZONES; ++k) {
             const uint8_t z = kFireOrder[k];
