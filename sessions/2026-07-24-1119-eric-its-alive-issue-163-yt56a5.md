@@ -6,7 +6,7 @@ branch: claude/its-alive-issue-163-yt56a5
 started: 2026-07-24T11:19:39Z
 ended:
 points:
-pr_numbers: [166]
+pr_numbers: [166, 168]
 status: open
 transcript: /root/.claude/projects/-home-user-tinkle/f5b4c5ee-ffae-5178-9146-73ffa5ad5532.jsonl
 ---
@@ -47,6 +47,29 @@ duplicate (documented as accepted), and a same-pass double-push (already fixed b
 **Points:** 5
 **Branch:** claude/its-alive-issue-163-yt56a5
 **Opened at:** 2026-07-24T14:12:01Z
+
+## Task 2: RunLog records actual elapsed run time, not requested duration (#160)
+
+**Completed:**
+- `src/core/run_controller.{h,cpp}` — `logRun()` stored the *requested* `current_.durationSec`, so
+  Stopped/Faulted runs (actual < requested) overstated flow time → skewed History + Grafana GPM low.
+  Now records the ACTUAL Running dwell: a new `actualRunSec_`, frozen the instant a run leaves
+  RUNNING via `freezeActualDuration()`, called from **both** exit paths — `enter()` (completion +
+  stop) and `raiseFault()` (mid-run fault, which sets `state_ = Fault` directly, bypassing enter()).
+  Zeroed in `resetRunMetrics()` so a fault-before-RUNNING logs 0 (no phantom). RunLog 11-byte format
+  + telemetry v1 contract unchanged — no schema bump.
+- `test/test_native/test_main.cpp` — two tests (Stopped + Faulted record actual < requested); the
+  existing completed-run test still logs == requested. Suite **170/170**.
+- History remediation left out per discussion: local ring self-purges at `RUNLOG_DEPTH=32`;
+  poop-deck store cleanup is a manual server-side step the operator will do.
+
+**Code review:** Clean bill of health — @code-review traced every run-exit path (completion, stop,
+mid-run fault, DEC-023 abort, transition-state fault, idle fault), found no stale-value case, and
+confirmed the swMax-capped path (the case the old code got most wrong) now logs correctly.
+**PR:** [#168](https://github.com/mobiustripper42/tinkle/pull/168)
+**Points:** 3
+**Branch:** task/160-actual-elapsed-duration
+**Opened at:** 2026-07-24T14:35:04Z
 
 **Next Steps:**
 - Confirm `pio run -e esp32` + SPA gzip gate on a toolchain machine before merging #166.
