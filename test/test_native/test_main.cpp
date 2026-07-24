@@ -3406,6 +3406,44 @@ static void test_rc_runlog_fault_pushes_entry() {
     TEST_ASSERT_TRUE(rc.runLogDirty());
 }
 
+// #160: a STOPPED run records the ACTUAL Running dwell, not the requested duration. Request 30 s,
+// run ~5 s, stop — the logged duration must reflect the ~5 s water actually flowed.
+static void test_rc_runlog_stopped_records_actual_duration() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 0; req.durationSec = 30; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    rc.noteRunStart(1750000000u, true);
+    for (uint32_t end = now + 5000; now < end; now += 50) rc.tick(now);   // run ~5 s of the 30
+    rc.stop(now);
+    now = pump(rc, now, 5, 4000, [&]{ return rc.state() == RunState::Idle; });
+    const RunEntry& e = rc.lastRun();
+    TEST_ASSERT_EQUAL(RunResult::Stopped, e.result);
+    TEST_ASSERT_LESS_THAN_UINT16(30, e.durationSec);          // actual << requested — the bug fix
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT16(4, e.durationSec);    // and it really ran a few seconds
+}
+
+// #160: a FAULTED run (mid-run raiseFault, which bypasses enter()) also records the actual dwell.
+static void test_rc_runlog_faulted_records_actual_duration() {
+    ValveDriver vd(g, cfg);
+    RunController rc(vd, makeRunCfg());
+    rc.begin(0);
+    RunRequest req; req.zoneIndex = 1; req.durationSec = 30; req.fertigate = false;
+    rc.requestRun(req, 0);
+    uint32_t now = pump(rc, 0, 5, 8000, [&]{ return rc.state() == RunState::Running; });
+    rc.noteRunStart(1750000000u, true);
+    rc.noteRunVolume(300);
+    for (uint32_t end = now + 5000; now < end; now += 50) rc.tick(now);   // run ~5 s
+    rc.raiseFault(Fault::NoFlow, now);
+    const RunEntry& e = rc.lastRun();
+    TEST_ASSERT_EQUAL(RunResult::Faulted, e.result);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)Fault::NoFlow, e.faultCode);
+    TEST_ASSERT_LESS_THAN_UINT16(30, e.durationSec);          // actual << requested (#160)
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT16(4, e.durationSec);
+}
+
 // lastRun() IS the ring head — the same object, and the most recent of several runs.
 static void test_rc_lastrun_is_ring_head() {
     ValveDriver vd(g, cfg);
@@ -3777,6 +3815,8 @@ int main() {
     RUN_TEST(test_rc_runlog_records_run);
     RUN_TEST(test_rc_runlog_clockvalid_and_epoch_guard);
     RUN_TEST(test_rc_runlog_fault_pushes_entry);
+    RUN_TEST(test_rc_runlog_stopped_records_actual_duration);
+    RUN_TEST(test_rc_runlog_faulted_records_actual_duration);
     RUN_TEST(test_rc_lastrun_is_ring_head);
 
     RUN_TEST(test_api_history_shape);
