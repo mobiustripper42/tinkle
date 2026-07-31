@@ -25,7 +25,7 @@
     [ "led_vz1:C", "esp:GND.3", "black", [] ],
     [ "led_vz2:A", "esp:14", "green",  [] ],
     [ "led_vz2:C", "esp:GND.3", "black", [] ],
-    [ "led_vz3:A", "esp:16", "green",  [] ],
+    [ "led_vz3:A", "esp:21", "green",  [] ],
     [ "led_vz3:C", "esp:GND.3", "black", [] ],
     [ "led_dc:A",  "esp:17", "white",  [] ],
     [ "led_dc:C",  "esp:GND.3", "black", [] ],

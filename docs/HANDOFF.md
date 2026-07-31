@@ -114,7 +114,7 @@ means no H-bridge, so the old GPIO12/15 boot-mode hazard is retired. All logic i
 |---|---|---|---|---|---|
 | 13 | Zone 1 valve FET gate | OUT | 100 Ω series + 100 k gate→GND | none | 3.3 V |
 | 14 | Zone 2 valve FET gate | OUT | 100 Ω + 100 k | none | 3.3 V |
-| 16 | Zone 3 valve FET gate | OUT | 100 Ω + 100 k | none | 3.3 V |
+| 21 | Zone 3 valve FET gate | OUT | 100 Ω + 100 k | none (moved off 16 — DEC-026) | 3.3 V |
 | 17 | Diverter clean-leg FET gate | OUT | 100 Ω + 100 k | none | 3.3 V |
 | 18 | Diverter fert-leg FET gate | OUT | 100 Ω + 100 k | none | 3.3 V |
 | 22 | Pump relay module IN | OUT | (10 k IN→GND advised) | none | 3.3 V |

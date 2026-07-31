@@ -22,7 +22,7 @@ steps:
   - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump never energizes
   - expect-pin: { part-id: esp, pin: 13, value: 0 }   # no zone opens
   - expect-pin: { part-id: esp, pin: 14, value: 0 }
-  - expect-pin: { part-id: esp, pin: 16, value: 0 }
+  - expect-pin: { part-id: esp, pin: 21, value: 0 }
   - expect-pin: { part-id: esp, pin: 17, value: 0 }   # diverter undisturbed (rest)
   - expect-pin: { part-id: esp, pin: 18, value: 0 }
   - set-control: { part-id: flow_sw, control: value, value: 0 }   # FLOW off
