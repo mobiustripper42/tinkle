@@ -770,3 +770,57 @@ it reboots) — is deliberately left to the Poop Deck / Grafana side, not the fi
 font, `MissedCycle` enum + publisher map, main-loop detector). Rides behind the DEC-024 E2 gate like
 the rest of Distributed Watering. Grafana alert rule (email on the `fault` field) is downstream
 poop-deck work, tracked separately.
+
+---
+
+## DEC-026: Zone 3 valve FET moves GPIO16 → GPIO21 (GPIO16 retired on this board)
+
+**Decision:** `Z3_FET` moves from **GPIO16 to GPIO21**. GPIO16 is retired for actuator use on this
+controller and is deliberately **not** returned to the free-pin bank.
+
+**Why:** GPIO16 stopped holding LOW. Measured at the header with the jumper lifted, it idles at
+**~1.5 V**; GPIO13, 14, 17 and 18 all read 0 V under the same conditions. 1.5 V sits inside the
+IRLZ44N's 1.0–2.0 V V_GS(th) window, so the Zone 3 FET was held **partially enhanced whenever the
+firmware believed the zone was off**. Threshold voltage falls with temperature (~−5 mV/°C), so
+conduction worsened through the afternoon — which is exactly when the symptom appeared.
+
+**What it caused.** Two failures that read as unrelated for weeks:
+
+1. **Phantom over-delivery on Zones 1 and 2.** With Zone 3's valve held open outside its own runs,
+   the single shared upstream flow meter summed Zone 3's flow into whichever zone was actually
+   running. In the fixed Zone 3 → 1 → 2 fire order (`scheduler.cpp` `kFireOrder`), that inflated
+   Zones 1 and 2 to ~2× nominal while Zone 3's own runs read perfectly normal — the signature that
+   made the meter look like it was lying about the wrong zones.
+2. **Two valves killed.** Continuous energization is outside the duty these auto-return valves are
+   built for (they hold open while energized, for the length of a run, not indefinitely). Two Zone 3
+   valves failed stuck-open in sequence, five days and three days after installation.
+
+**Why not chase it further.** A prior repair (2026-07-19) replaced Zone 3's pad, TVS, 100 Ω and
+100 kΩ and kept the original FET, and the fault returned. This time the gate pulldown measured a
+healthy 100 kΩ, all five FETs read alike drain-to-source, and the 1.5 V persisted with the ESP32
+jumper physically removed from pin 16 — so the defect is the MCU pin itself, not the channel. A
+pin move is one jumper and one constant; an ESP32 swap is the whole board back off the wall.
+
+**Consequences:**
+- GPIO21 was already banked as a spare (DEC-019 freed a surplus). It is non-strapping, output-capable,
+  and carries no boot obligation — the existing 100 kΩ gate-to-GND pulldown covers the boot window
+  exactly as it did on 16.
+- Requires **moving one jumper** on the board in addition to flashing. A flash alone leaves Zone 3
+  dead; a jumper move alone leaves it stuck on the bad pin. Both, or neither.
+- GPIO16 is struck from the free-pin list in `pins.h` and the wiring doc. It is not a spare — it is a
+  known-bad output on this specific ESP32, and silently reallocating it to a future zone would
+  reproduce this bug on a channel nobody suspects.
+- Does **not** touch the fail-dry chain. The ATtiny, the safety relay and the pump-power gate are
+  unchanged (DEC-003 / DEC-012); this was always an agronomic-correctness and hardware-attrition
+  failure, never a runaway-water one — the pump gate is why a held-open valve could only leak during
+  another zone's run and never at idle.
+
+**Detection gap this exposes (not fixed here):** nothing in the firmware flags a run at ~2× its
+normal rate. `FlowFaultDetector` bounds flow only from below during RUNNING (`minRunningGPM`) and
+only at IDLE (`idleFaultPulses`), and `ValveRestMonitor` aborts its check whenever a queued run
+chains off SETTLE — so in a three-zone distributed cycle only the **last** zone is ever rest-checked,
+and Zone 3, first in the fire order, structurally never was. Tracked in **#133** (per-zone learned
+GPM bands, note-only).
+
+**Status:** Decided. Firmware + docs updated. Requires a board-side jumper move (ESP32 pin 16 → 21,
+same 100 Ω into the same FET gate) and a flash before Zone 3 actuates again.

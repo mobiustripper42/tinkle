@@ -55,7 +55,7 @@ contortion is gone (DEC-011).
 
 ```
 // Zone valves — NC, one low-side FET each (energize = open, de-energize = cap-return closed)
-Z1_FET=13  Z2_FET=14  Z3_FET=16     // Z3 = hose outlet (build-for-three)
+Z1_FET=13  Z2_FET=14  Z3_FET=21     // Z3 = hose outlet (build-for-three); moved off 16, DEC-026
 // Diverter legs — one low-side FET each
 DIV_CLEAN_FET=17   // NO bypass leg  (de-energized = open  = plain water flows)
 DIV_FERT_FET=18    // NC Dosatron leg (de-energized = closed)

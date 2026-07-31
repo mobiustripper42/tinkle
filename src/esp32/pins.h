@@ -18,7 +18,13 @@
 // while energized; de-energize and a capacitor auto-returns it to rest.
 constexpr uint8_t Z1_FET = 13;   // Zone 1 (NC): high = open
 constexpr uint8_t Z2_FET = 14;   // Zone 2 (NC): high = open
-constexpr uint8_t Z3_FET = 16;   // Zone 3 (NC): general-purpose hose outlet (build-for-three)
+// Zone 3 moved 16 -> 21 (DEC-026). GPIO16 no longer holds LOW: it idles at ~1.5 V with
+// nothing attached, which sits inside the IRLZ44N's 1.0-2.0 V V_GS(th) band and partially
+// enhances the FET. That held the Zone 3 valve open outside its runs, which both leaked
+// water into other zones' runs (the shared meter read it as those zones over-delivering)
+// and cooked two valves in a row by energizing them continuously. Threshold falls with
+// temperature, so it bit hardest on hot afternoons. GPIO16 is retired, not respared.
+constexpr uint8_t Z3_FET = 21;   // Zone 3 (NC): general-purpose hose outlet (build-for-three)
 
 // Diverter — two 2-way legs driven together (DEC-013), replacing the v1.3 3-way.
 constexpr uint8_t DIV_CLEAN_FET = 17;  // NO bypass leg:  low (rest) = open  = plain water
@@ -51,8 +57,10 @@ constexpr uint8_t WD_TRIPPED_IN = 36;  // ATtiny "tripped" -> ESP32 (input-only)
                                        // watchdog reads "not tripped" (the relay is the safety).
 
 // Free for more zones (build-for-three). The original spares plus everything DEC-019
-// freed: 21, 5, 12, 15 (and 19, used only by the TINKLE_SIM flow loopback); 25, 26, 23,
+// freed: 5, 12, 15 (and 19, used only by the TINKLE_SIM flow loopback); 25, 26, 23,
 // 32, 33 (ex-display / ex-LED-ring outputs); 34, 35, 39 (ex-buttons, input-only).
+// 21 is now Zone 3 (DEC-026). GPIO16 is NOT in this list — it is retired on this board
+// for failing to hold LOW; do not reallocate it to a FET gate.
 
 // Zones modeled as a table so the count is data-driven (firmware spec §3). v1.5 drops
 // the per-zone LED/button columns (DEC-019) — a zone is now just its valve FET + name.
