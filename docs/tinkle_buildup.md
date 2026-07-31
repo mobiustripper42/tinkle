@@ -24,7 +24,7 @@ The ESP32 is the brain. Each job is one numbered pin on the board (silkscreen la
 | 2  | "Alive" heartbeat LED | output (external LED — see note below) |
 | 13 | Zone 1 valve | output |
 | 14 | Zone 2 valve | output |
-| 16 | Zone 3 valve (hose) | output |
+| 21 | Zone 3 valve (hose) | output (was 16 — retired, DEC-026) |
 | 17 | Diverter — clean leg | output |
 | 18 | Diverter — fert leg | output |
 | 22 | Pump relay | output |
@@ -133,7 +133,7 @@ Repeat Step 2 for each, same wiring (pin → LED long leg → 330Ω → GND):
 | LED for | ESP32 pin |
 |---|---|
 | Zone 2 | 14 |
-| Zone 3 | 16 |
+| Zone 3 | 21 |
 | Diverter clean | 17 |
 | Diverter fert | 18 |
 | Pump | 22 |
@@ -189,7 +189,7 @@ Repeat Step 6 for each, same FET wiring:
 | Valve | ESP32 pin |
 |---|---|
 | Zone 2 | 14 |
-| Zone 3 | 16 |
+| Zone 3 | 21 |
 | Diverter clean | 17 |
 | Diverter fert | 18 |
 
@@ -336,7 +336,7 @@ then the **protoboard**, then the **field** wires. One common ground everywhere 
 | 3V3 | 3.3V node (feeds the pin-36 pull-up + level-shifter LV) |
 | 13 | Zone 1 FET gate (via 100Ω) |
 | 14 | Zone 2 FET gate (via 100Ω) |
-| 16 | Zone 3 FET gate (via 100Ω) |
+| 21 | Zone 3 FET gate (via 100Ω) — was 16, retired under DEC-026 |
 | 17 | Diverter-clean FET gate (via 100Ω) |
 | 18 | Diverter-fert FET gate (via 100Ω) |
 | 22 | Pump relay module **IN** |

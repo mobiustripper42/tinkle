@@ -13,6 +13,6 @@ steps:
   - expect-pin: { part-id: esp, pin: 22, value: 0 }   # pump relay off (the source gate)
   - expect-pin: { part-id: esp, pin: 13, value: 0 }   # Zone 1 valve FET low -> NC closed
   - expect-pin: { part-id: esp, pin: 14, value: 0 }   # Zone 2 closed
-  - expect-pin: { part-id: esp, pin: 16, value: 0 }   # Zone 3 closed
+  - expect-pin: { part-id: esp, pin: 21, value: 0 }   # Zone 3 closed (moved off 16, DEC-026)
   - expect-pin: { part-id: esp, pin: 17, value: 0 }   # diverter clean leg low -> NO open (plain, rest)
   - expect-pin: { part-id: esp, pin: 18, value: 0 }   # diverter fert leg low -> NC closed (rest)

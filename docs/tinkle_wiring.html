@@ -201,11 +201,11 @@
     <tr class="grp"><td colspan="4">Valve FETs (low-side, one IRLZ44N per valve · energize = actuate)</td></tr>
     <tr><td class="pin">13</td><td class="io">OUT</td><td>Zone 1 valve — FET gate</td><td>NC: high = open. Gate pulldown → off (closed) at boot</td></tr>
     <tr><td class="pin">14</td><td class="io">OUT</td><td>Zone 2 valve — FET gate</td><td>NC: high = open</td></tr>
-    <tr><td class="pin">16</td><td class="io">OUT</td><td>Zone 3 valve — FET gate</td><td>NC: high = open. Hose outlet (build-for-three)</td></tr>
+    <tr><td class="pin">21</td><td class="io">OUT</td><td>Zone 3 valve — FET gate</td><td>NC: high = open. Hose outlet (build-for-three). <b>Moved off GPIO16 (DEC-026)</b> — 16 idles ~1.5 V, inside V<sub>GS(th)</sub>, and held the valve open</td></tr>
     <tr><td class="pin">17</td><td class="io">OUT</td><td>Diverter clean leg — FET gate</td><td>NO: low (rest) = open = plain water</td></tr>
     <tr><td class="pin">18</td><td class="io">OUT</td><td>Diverter fert leg — FET gate</td><td>NC: high = open (fertigate via Dosatron)</td></tr>
     <tr class="grp"><td colspan="4">Pump</td></tr>
-    <tr><td class="pin">22</td><td class="io">OUT</td><td>Pump relay — trigger</td><td>relay on the <b>armed 24V</b> (source gate); flyback on coil. (Free for more zones: 19/21/12/15 + DEC-019's freed 23/25/26/32/33/34/35/39.)</td></tr>
+    <tr><td class="pin">22</td><td class="io">OUT</td><td>Pump relay — trigger</td><td>relay on the <b>armed 24V</b> (source gate); flyback on coil. (Free for more zones: 19/12/15 + DEC-019's freed 23/25/26/32/33/34/35/39. <b>Not 16</b> — retired, DEC-026.)</td></tr>
     <tr class="grp"><td colspan="4">Sensing</td></tr>
     <tr><td class="pin">27</td><td class="io">IN ⚡</td><td>Flow sensor pulse</td><td>interrupt; <span class="warn">level-shift 5V→3.3V</span>; INPUT_PULLUP</td></tr>
     <tr class="grp"><td colspan="4">Status — alive LED (DEC-019: phone-only, no on-box panel)</td></tr>
