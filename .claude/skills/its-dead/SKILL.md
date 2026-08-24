@@ -9,12 +9,16 @@ You are closing the session. Under DEC-S013, this is a one-action skill: stamp `
 ## Step 0 — Locate the open session (on the sessions worktree)
 
 ```
-SESSION_FILE=$(grep -l "^status: open" .sessions-worktree/sessions/*.md 2>/dev/null | head -1)
+grep -l "^status: open" .sessions-worktree/sessions/*.md 2>/dev/null
 ```
 
-If found: NEW MODE. Continue.
+**Exactly one match:** that's `SESSION_FILE`. NEW MODE. Continue.
 
-If not: try legacy `session-log.md` on the current branch. If found: LEGACY MODE — Step 4 still applies; everything else simplifies. If neither: STOP and ask the user how to proceed.
+**No match:** try legacy `session-log.md` on the current branch. If found: LEGACY MODE — Step 4 still applies; everything else simplifies. If neither: STOP and ask the user how to proceed.
+
+**More than one match:** another window has a session open. Report the candidates — `session:`, `branch:`, `started:` — and ask which is yours. Do not sort and do not take the first: `... | head -1` returns the lexically-earliest filename, and session filenames start with a date, so it silently picks the *stale* file whenever that one opened earlier. Nothing errors.
+
+Leave the other file alone. Its `ended:` is not knowable from here, and a guess poisons `/retro`'s input more quietly than a blank does. Say in the closing summary that it is still open.
 
 ## Step 1 — Stamp `ended:`
 
@@ -70,6 +74,27 @@ Total points: <SUM>
 **Do not write this to the file.** The user verifies; `/retro` computes the persisted numbers at phase end.
 
 If the wall_clock looks wildly wrong (e.g. user expected 2h, sees 9h because of an overnight gap), the user can record a note in the Context section. The actual active time will be inferred at retro (wall_clock minus transcript break gaps); the displayed wall_clock is just the raw delta.
+
+## Step 4.5 — PRs opened outside `/kill-this` (the review that didn't run)
+
+A PR opened by hand-typed `gh pr create` never passed `/kill-this` Step 3, so `@code-review` never ran on it. Nothing else in the workflow notices: the code is on a branch, the PR looks normal, and the only missing artifact is a review that was never going to announce its own absence.
+
+List the PRs this session actually produced and compare against the frontmatter:
+
+```
+gh pr list --author @me --state all --limit 30 --json number,createdAt,headRefName
+```
+
+Keep the ones created at or after the session's `started:` stamp. Any of those **not** in `pr_numbers:` was shipped by hand.
+
+For each, display:
+
+```
+⚠ PR #N (<branch>) was opened outside /kill-this — @code-review never ran on it.
+  Review before merging: @code-review against `gh pr diff N`.
+```
+
+Report only. Don't open the review yourself and don't backfill a `## Task` block for it — the user decides whether the PR is worth a retrospective pass. If every session PR is in `pr_numbers:`, say nothing.
 
 ## Step 5 — Commit + push the sessions branch (from the worktree)
 

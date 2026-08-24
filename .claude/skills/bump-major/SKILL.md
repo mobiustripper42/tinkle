@@ -1,6 +1,6 @@
 ---
 name: bump-major
-description: Manually bump the project's major version. Use for breaking changes — new data model, removed feature, anything users would notice on upgrade. Dev projects only (requires `package.json`). Writes a CHANGELOG.md entry and tags on the active trunk (`main`).
+description: Manually bump the project's major version. Use for breaking changes — new data model, removed feature, anything users would notice on upgrade. Versioned projects only (requires a `package.json` with a `version` field). Writes a CHANGELOG.md entry and tags on the active trunk (`main`).
 tools: Read, Edit, Write, Bash, Grep
 ---
 
@@ -8,7 +8,9 @@ You are bumping the project's major version. Major bumps are manual because they
 
 ## Step 0 — Sanity gate
 
-Run `[ -f package.json ] || echo "missing"`. If `package.json` is missing at the repo root, STOP. Tell the user: "/bump-major requires `package.json` (DEC-S007 — dev projects only). This repo has none." Do not proceed.
+Run `node -e "process.exit(require('./package.json').version ? 0 : 1)" 2>/dev/null || echo "not versioned"`. If it prints `not versioned` — no `package.json`, or one with no `version` field — STOP. Tell the user: "/bump-major requires a `package.json` with a `version` field (DEC-S007 — versioned projects only). This repo has none." Do not proceed.
+
+**The gate is the `version` field, not the file.** It used to be `[ -f package.json ]`, which was always a proxy for "is this a versioned thing" and stopped being a good one the moment a repo wanted a test runner without a version. Seeds is that repo: it carries a `private`, version-less manifest so it can run `vitest`, and all three version skills must skip it exactly as they did when it had no manifest at all. A project that *is* versioned is unaffected — it has both.
 
 ## Step 1 — Resolve working branch
 

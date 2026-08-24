@@ -1,6 +1,6 @@
 ---
 name: start-phase
-description: Materialize a phase from PROJECT_PLAN.md into GitHub Issues. Reads the phase's task rows, creates one Issue per task (with phase:N and points:X labels), writes issue numbers back into PROJECT_PLAN.md, and adds them to the project board. Run at phase boundaries — paired with /retro at phase end.
+description: Materialize a phase from PROJECT_PLAN.md into GitHub Issues. Reads the phase's task rows, creates one Issue per task (with phase:N and points:X labels), and writes issue numbers back into PROJECT_PLAN.md. Run at phase boundaries — paired with /retro at phase end.
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
@@ -79,17 +79,7 @@ For each task row, replace the status cell (`TBD`, `[ ]`, etc.) with a link to t
 
 This is a one-time write at phase start. The file goes read-only until `/retro`.
 
-## Step 5 — Add to project board (optional)
-
-If the project has a GitHub Project board configured (check via `gh project list --owner <owner>`), add each new issue:
-
-```
-gh project item-add <project-number> --owner <owner> --url <issue-url>
-```
-
-If no project board exists, skip silently. The user can add the board later and bulk-add via the GitHub UI.
-
-## Step 6 — Commit and push
+## Step 5 — Commit and push
 
 ```
 git add docs/PROJECT_PLAN.md
@@ -97,14 +87,13 @@ git commit -m "Materialize Phase N — <count> issues created"
 git push origin <BRANCH>
 ```
 
-## Step 7 — Summary
+## Step 6 — Summary
 
 Print:
 ```
 Phase N materialized.
-Created issues: #N1, #N2, ... (count: X)
+Created issues: issue #N1, issue #N2, … (count: X)
 Total points: Y
-Project board: <link or "none configured">
 
 Next: pick the first issue and cut a branch — `git checkout -b task/N.X-description`
 At phase end, run `/retro`.

@@ -182,9 +182,17 @@ git commit -m "Phase <N> retro — <points> pts, throughput <pts/wk or burst>, d
 git push origin <BRANCH>
 ```
 
-## Step 8 — Version bumps (dev projects only — DEC-S013 moved patch bumps from `/its-dead` here)
+## Step 8 — Version bumps (versioned projects only — DEC-S013 moved patch bumps from `/its-dead` here)
 
-Run only if `package.json` exists at the repo root (dev-project signal — DEC-S007).
+Run only if the repo root has a `package.json` **with a `version` field** (versioned-project signal — DEC-S007):
+
+```
+node -e "process.exit(require('./package.json').version ? 0 : 1)" 2>/dev/null || echo "not versioned"
+```
+
+If it prints `not versioned`, skip Step 8 entirely. The gate is the field, not the file: a repo can carry a `private`, version-less manifest purely to get a test runner, and bumping it would be inventing a version for something that has none.
+
+**`2>/dev/null` is deliberate and it does swallow one real error.** A `package.json` that is malformed JSON makes `require()` throw, which exits non-zero and reads here as "not versioned" — indistinguishable from a repo that simply has no version. That is the right default for a gate whose job is to decide whether to proceed, and a broken manifest will announce itself the moment anything else npm-shaped runs. Stated so the redirect isn't mistaken for carelessness.
 
 Resolve working branch — always the active trunk (DEC-S022):
 ```
@@ -271,7 +279,7 @@ Points: <P> | Throughput: <pts/wk or burst> | Calibration: <K> re-est'd, <±D> d
 Span: <days>d | Sessions: <count> | PRs merged: <count>
 Issues: <closed>/<created> closed; <moved> moved to Phase <N+1>
 Retro: docs/RETROSPECTIVES.md
-Version: v<NEW_VERSION>  (dev projects only; skipped if no package.json)
+Version: v<NEW_VERSION>  (versioned projects only; skipped per Step 8's gate)
 ```
 
 ## Notes

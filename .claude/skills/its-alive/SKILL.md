@@ -9,8 +9,10 @@ You are executing the session start ritual.
 ## Step 0 — Branch check
 
 **Worktree check first:** run `git rev-parse --git-dir`.
-- If the output contains `/worktrees/`: this is a **linked worktree session** (concurrent with another session). Skip the rest of Step 0 — the branch here is intentional. Note "Linked worktree" in the briefing output and continue to Step 0.6.
+- If the output contains `/worktrees/`: this is a **linked worktree session** — the normal shape of concurrent work under DEC-S048, created before this session started. Skip the rest of Step 0; the branch here is intentional. Note "Linked worktree" in the briefing and continue to Step 0.6.
 - Otherwise: continue.
+
+This is a **report**, not a decision. Nothing downstream branches on it: the session's shell, checkout and branch are the same thing either way, which is what lets every other skill use plain `git`.
 
 Run `git fetch origin` to refresh remote state. Capture `BRANCH=$(git branch --show-current)`.
 
@@ -59,13 +61,13 @@ For each Scan-A candidate, find the most recent PR whose `headRefName` matches t
 
 The session file lives on an orphan `sessions` branch checked out at `.sessions-worktree/`. Skills commit there; the user's main checkout never moves.
 
-**Check for worktree.** `[ -d .sessions-worktree/.git ] && echo present || echo missing`.
+**Check for worktree.** `[ -e .sessions-worktree/.git ] && echo present || echo missing`. (`-e`, not `-d`: in a linked worktree `.git` is a *file* — a `gitdir:` pointer — so `-d` reports `missing` on a worktree that is present, and sends the session into sub-case (a) below to fail on `already exists`.)
 
-**If present:** `cd .sessions-worktree && git fetch origin sessions && git reset --hard origin/sessions && cd ..`. Continue to Step 1.
+**If present:** `git -C .sessions-worktree fetch origin sessions && git -C .sessions-worktree reset --hard origin/sessions`. Continue to Step 1. (`git -C`, not `cd` — shell state doesn't persist between Bash calls, and a stray `cd` that fails leaves the next command running in the wrong tree. The `&&` chain here made it safer than the unchained version but not correct.)
 
 **If missing — three sub-cases:**
 
-a. **`origin/sessions` exists on remote** (fresh clone / accidental delete): `git worktree add .sessions-worktree sessions origin/sessions`. Continue.
+a. **`origin/sessions` exists on remote** (fresh clone / accidental delete): `git fetch origin sessions` then `git worktree add .sessions-worktree sessions`. Continue. (`git worktree add <path> [<commit-ish>]` takes **one** ref — the two-ref form `… sessions origin/sessions` is a usage error, and git answers it with a fragment of its own `--help` output rather than anything that reads like a failure.)
 
 b. **`origin/sessions` does NOT exist** (first run on this project — migration path): bootstrap the orphan branch.
 ```
@@ -122,9 +124,18 @@ esac
 
 Sanitize: lowercase, replace any non-`[a-z0-9.-]` with `-`, collapse repeats.
 
-**Concurrent session check** (now reads from the worktree, not main): `grep -l "^status: open" .sessions-worktree/sessions/*.md 2>/dev/null`. If a session is already open, ask:
-- **(a) concurrent** → set up a linked git worktree for the new task as before (separate from `.sessions-worktree/`, which is for the sessions branch — the linked worktree is for the new task's code branch).
-- **(b) stale** → mark `status: abandoned` in the open file and continue.
+**Concurrent session check:** `grep -l "^status: open" .sessions-worktree/sessions/*.md 2>/dev/null`. If a session is already open, report it — session number, branch, started — and ask whether it is **live** (another window is working right now: say so and continue, nothing to resolve) or **stale** (mark `status: abandoned` in that file and continue).
+
+**This skill creates exactly one worktree, `.sessions-worktree/`, and never another** (DEC-S048). A concurrent session's code worktree is made **before** the session exists, by the user, in a terminal:
+
+```
+git worktree add ../<repo>-<slug> -b task/<slug> main
+cd ../<repo>-<slug> && claude
+```
+
+Do not offer to create it here, and do not create it if asked. A worktree made mid-session cannot capture the shell — the harness pins the working directory where `claude` launched and resets any `cd`. The session would end up with its code in one checkout and its shell in another, which is the split every downstream skill then has to detect and work around. Creating the worktree first makes the session's shell, checkout and branch the same thing, which is what every skill already assumes.
+
+If the user asks for a concurrent worktree here, give them those two lines and stop. Starting the session is their next move, not this one's.
 
 ## Step 4 — Determine session number
 
@@ -215,6 +226,53 @@ When a recommendation *is* wanted (cold open), grep `docs/PROJECT_PLAN.md`:
 - Velocity: `grep "Velocity baseline" docs/PROJECT_PLAN.md -A 1`
 
 If the project uses phase-rituals: `gh issue list --label "phase:current" --state open --json number,title,labels --limit 50`.
+
+## Step 8.5 — Drift against seeds
+
+Resolve the seeds checkout (skill arg → `../seeds` sibling → `$SEEDS_REPO`; the same order `/read-the-tape` uses), then:
+
+```
+node <seeds>/dev/claude/scripts/drift.mjs .
+```
+
+Read-only. It prints which `logic`-class files differ from the templates, which are absent, and whether this project owes a schema migration.
+
+**Report it in the briefing only when there is something to report** — a `DRIFT` count, or a `seeds-version` gap. Silence when clean; a line every session that always says "nothing differs" is a line nobody reads by the third one.
+
+**Why this check lives here rather than in seeds.** A repo's drift only matters when you are about to work in it, and that is exactly when this runs. A dormant project can sit twelve template changes behind for months at no cost — the day you open it for a one-line bugfix, the briefing says so and you decide whether to sync first or ignore it. That also means there is no fleet list to maintain, and no report enumerating repos nobody has touched since spring.
+
+**It reports; it does not act.** Do not sync, do not copy, do not offer to. Deciding what should cross is the part that needs a person (DEC-S040), and this exists so that person is not guessing at the state.
+
+If seeds doesn't resolve, skip silently and say so in Context. A session must never be blocked by a checkout not being on this machine.
+
+### Step 8.6 — Permission policy (DEC-S051)
+
+Same resolved seeds checkout, one more read-only command:
+
+```
+node <seeds>/dev/claude/scripts/settings-policy.mjs --all .
+```
+
+It compares against `dev/claude/settings.json` — the master (DEC-S023) — in the two places that govern this session: `~/.claude/settings.json` (**user settings**, this machine, every project) and `<repo>/.claude/settings.json` (**shared project**, committed, and the only policy that travels with the repo).
+
+| checked | where | repairable by `--write` |
+|---|---|---|
+| `permissions` | both levels | yes |
+| `outputStyle`, `theme`, `effortLevel`, `tui`, `agentPushNotifEnabled`, `enabledPlugins` | user settings only — machine preferences | yes |
+| `SessionEnd` capture hook + its script | user settings only (DEC-S045) | **no** — install by hand |
+| `~/.claude/devname` | the machine | **no** |
+
+A deliberate per-repo override in `.claude/settings.local.json` — `Explanatory` while designing, say — is **not** reported: those keys are read at the user level only.
+
+**Report only when something is not current.** Silence on `Current.`, same reason as Step 8.5.
+
+**On a `STALE` or `ABSENT` result, surface the fix and stop there** — `node <seeds>/dev/claude/scripts/settings-policy.mjs --write <path>`. Do not run it. It writes the file that carries this machine's hooks, and it is the user's call whether a policy change lands now or after the task in hand.
+
+**Two things worth knowing when you report it.** Permissions are read once at launch, so a repair applies at the *next* session, not this one — say so rather than implying the session just got safer. And the shared-project file is the one that covers a machine whose user settings are not installed yet — it travels with the repo, so an absent one there is no seatbelt at all rather than a stale one.
+
+**Why this is here and not a fleet report.** Nothing can enumerate a machine you are not sitting at (DEC-S044) — but the box you *are* on is readable, and it is the only one you can fix. Checking at session start means every machine checks itself, every session, with no list to maintain and nothing to remember.
+
+If seeds doesn't resolve, skip silently — same rule as Step 8.5.
 
 ## Step 9 — Present briefing
 

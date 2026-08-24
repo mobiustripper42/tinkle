@@ -22,7 +22,7 @@ If non-empty, STOP. Tell the user: "Uncommitted changes — commit, stash, or di
 
 ## Step 0.5 — Run the project's pre-promote checks
 
-Projects define their own pre-promote gates — a staging/preview QA confirmation, a "no unapplied migrations on prod" check, whatever must be true before shipping. These are project-specific, so they live project-side: read `.claude/CLAUDE-context.md` (`## Migration Protocol (project)`, plus any `## Pre-promote checks` section) and `docs/DEPLOYMENT.md`, then run or confirm every gate listed there before continuing.
+Projects define their own pre-promote gates — a staging/preview QA confirmation, a "no unapplied migrations on prod" check, whatever must be true before shipping. These are project-specific, so they live project-side: **use the Read tool** on `.claude/CLAUDE-context.md` (`## Migration Protocol (project)`, plus any `## Pre-promote checks` section) and `docs/DEPLOYMENT.md` — never a `sed`/`grep` one-liner — then run or confirm every gate listed there before continuing.
 
 The common gate — **QA confirmation:** if the project deploys the trunk to a shared staging/preview environment, confirm it was actually QA'd against **this** release since the last merge. Ask the user: **"Has the staging/preview environment been QA'd against this release? (yes/no)"**
 
@@ -57,7 +57,9 @@ Each promotion is a production release. First, is there anything new to ship?
 ```
 If equal, STOP: "production is already at `main` HEAD — nothing to ship."
 
-**Non-dev project** (no `package.json` at repo root, DEC-S007): skip the bump. `SHIP_TAG=$(git tag --points-at origin/main | grep '^v' | sort -V | tail -1)` — promote whatever tag is there, or none. Go to Step 4.
+**Unversioned project** — no `package.json` at the repo root, **or one with no `version` field** (DEC-S007). Check with `node -e "process.exit(require('./package.json').version ? 0 : 1)" 2>/dev/null || echo "not versioned"`. Skip the bump: `SHIP_TAG=$(git tag --points-at origin/main | grep '^v' | sort -V | tail -1)` — promote whatever tag is there, or none. Go to Step 4.
+
+The gate is the `version` field rather than the file, because a repo can carry a `private`, version-less manifest solely to get a test runner and still have nothing to version.
 
 **Ship-as-is:** if `main` HEAD already carries a `v*` tag (e.g. `/retro`'s minor or `/bump-major`, and nothing merged since), don't double-bump:
 ```

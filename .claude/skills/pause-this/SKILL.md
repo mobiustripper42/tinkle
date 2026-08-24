@@ -9,15 +9,18 @@ You are executing a mid-session pause.
 ## Step 0 — Locate the open session
 
 ```
-SESSION_FILE=$(grep -l "^status: open" .sessions-worktree/sessions/*.md 2>/dev/null | head -1)
+grep -l "^status: open" .sessions-worktree/sessions/*.md 2>/dev/null
 ```
 
-If found: NEW MODE — pause note goes in the session file's Context section (on the sessions branch).
-Otherwise check `session-log.md` for `[open]`: LEGACY MODE — pause note goes there.
+**Exactly one match:** that's `SESSION_FILE`. NEW MODE — pause note goes in its Context section (on the sessions branch).
+
+**No match:** check `session-log.md` for `[open]` — LEGACY MODE, pause note goes there.
+
+**More than one match:** another window has a session open. Report the candidates — `session:`, `branch:`, `started:` — and ask which is yours. Do not sort and do not take the first: `... | head -1` returns the lexically-earliest filename, and session filenames start with a date, so it silently picks the *stale* file whenever that one opened earlier. Nothing errors.
 
 ## Step 1 — Build check (conditional)
 
-Look up the project's build check in `CLAUDE.md §Commands`. Run whatever is defined (e.g. `npm run build`, `cargo build`, `make`). If `CLAUDE.md §Commands` defines no build step, skip silently.
+Look up the project's build check in `.claude/CLAUDE-context.md §Commands`, **with the Read tool** — never a `sed`/`grep` one-liner. Run whatever is defined (e.g. `npm run build`, `cargo build`, `make`). If `.claude/CLAUDE-context.md §Commands` defines no build step, skip silently.
 
 If the build fails: do NOT commit broken code. If you can't fix quickly, note the errors in the pause entry so the next sitting knows where to start.
 
@@ -28,7 +31,11 @@ git add -A
 git commit -m "WIP [phase/task] — [brief description of where things stand]"
 ```
 
-Prefix with `WIP`. If nothing to commit, skip and say so. This commit goes to the **current task branch** — NOT to the sessions branch.
+Prefix with `WIP`. This commit goes to the **current task branch** — NOT to the sessions branch.
+
+**Name the files being staged**, one line from `git diff --cached --name-only`. `git add -A` sweeps whatever is in the tree, so a file list that doesn't look like the task you just did is the signal — an unrelated edit riding along is caught here or not at all.
+
+If nothing to commit, skip and say so.
 
 ## Step 3 — Note the pause in the session file (sessions branch)
 
@@ -38,13 +45,12 @@ Append a pause line to the session file's `**Context:**` section:
 **[PAUSED HH:MM UTC]** Working on: [task]. Left off at: [specific file/function/step]. Next: [exactly what to do when resuming].
 ```
 
-Commit + push from inside the worktree:
+Commit + push with `git -C` targeting the worktree — **no `cd`**. Shell state doesn't persist between Bash calls, and a stray `cd` that fails leaves the next command running in the wrong tree. `/kill-this` and `/its-dead` were both moved off this pattern after downstream projects hit it; those backports never reached here.
+
 ```
-cd .sessions-worktree
-git add sessions/$(basename "$SESSION_FILE")
-git commit -m "Pause note for Session <N>"
-git push origin sessions
-cd ..
+git -C .sessions-worktree add sessions/$(basename "$SESSION_FILE")
+git -C .sessions-worktree commit -m "Pause note for Session <N>"
+git -C .sessions-worktree push origin sessions
 ```
 
 Do not close the session. Do not fill `ended:` / `points:`. Status remains `open`.
