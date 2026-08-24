@@ -4,10 +4,10 @@ dev: eric
 slug: its-alive-issue-163-yt56a5
 branch: claude/its-alive-issue-163-yt56a5
 started: 2026-07-24T11:19:39Z
-ended:
-points:
+ended: 2026-07-24T17:51:52Z
+points: 17
 pr_numbers: [166, 168, 169, 170, 171]
-status: open
+status: closed
 transcript: /root/.claude/projects/-home-user-tinkle/f5b4c5ee-ffae-5178-9146-73ffa5ad5532.jsonl
 ---
 
@@ -157,3 +157,9 @@ line when the day-summary card is shown. Weekday/next-run math + no-injection co
 - Design converged over the session: missed cycle = a fault reported like any fault, modelled as
   a RunLog entry (not a FaultManager note, not a separate "summary" MQTT message) so it rides the
   existing run-telemetry path to Grafana. Non-latching so it never withholds future water.
+- **Closed retroactively on 2026-08-24 by Session 27, at eric's instruction** — this session never
+  ran `/its-dead` and sat `status: open` for a month. All five PRs merged, so the work shipped; the
+  17 points are the sum of the task blocks above. **`ended:` is the last *evidenced* activity**
+  (Task 5's `Opened at:`), not an observed close — the window's real end time is unrecorded, so no
+  duration derived from this file is trustworthy. Recorded here rather than silently, because a
+  fabricated-looking timestamp with no explanation is worse than a gap.
